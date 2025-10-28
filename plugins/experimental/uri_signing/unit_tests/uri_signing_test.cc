@@ -765,3 +765,265 @@ TEST_CASE("8", "[TestsWithConfig]")
   config_delete(cfg);
   fprintf(stderr, "\n");
 }
+
+// ============================================================================
+// TEST SUITE: Token Auth Level 1 - Configurable Token Name (access_token_name)
+// ============================================================================
+
+TEST_CASE("Config parses access_token_name from JSON", "[TokenAuthLevel1][Config]")
+{
+  INFO("TEST: Config should parse access_token_name field");
+
+  SECTION("Parse custom token name")
+  {
+    const char *config_json = R"({
+      "Test Issuer": {
+        "access_token_name": "cr-access-token",
+        "renewal_kid": "test-key",
+        "keys": [{
+          "alg": "HS256",
+          "kid": "test-key",
+          "k": "dGVzdC1rZXktc2VjcmV0MTIzNDU2Nzg5MA",
+          "kty": "oct"
+        }]
+      }
+    })";
+
+    struct config *cfg = read_config_from_string(config_json);
+    REQUIRE(cfg != NULL);
+
+    const char *token_name = config_get_token_name(cfg);
+    REQUIRE(token_name != NULL);
+    REQUIRE(strcmp(token_name, "cr-access-token") == 0);
+
+    config_delete(cfg);
+    fprintf(stderr, "✓ Custom token name parsed successfully\n");
+  }
+
+  SECTION("Use default when access_token_name missing")
+  {
+    const char *config_json = R"({
+      "Test Issuer": {
+        "id": "test-aud",
+        "renewal_kid": "test-key",
+        "keys": [{
+          "alg": "HS256",
+          "kid": "test-key",
+          "k": "dGVzdC1rZXktc2VjcmV0MTIzNDU2Nzg5MA",
+          "kty": "oct"
+        }]
+      }
+    })";
+
+    struct config *cfg = read_config_from_string(config_json);
+    REQUIRE(cfg != NULL);
+
+    const char *token_name = config_get_token_name(cfg);
+    REQUIRE(token_name != NULL);
+    REQUIRE(strcmp(token_name, "cr-access-token") == 0); // Default value
+
+    config_delete(cfg);
+    fprintf(stderr, "✓ Default token name used when not configured\n");
+  }
+
+  SECTION("Use default when access_token_name is empty string")
+  {
+    const char *config_json = R"({
+      "Test Issuer": {
+        "access_token_name": "",
+        "renewal_kid": "test-key",
+        "keys": [{
+          "alg": "HS256",
+          "kid": "test-key",
+          "k": "dGVzdC1rZXktc2VjcmV0MTIzNDU2Nzg5MA",
+          "kty": "oct"
+        }]
+      }
+    })";
+
+    struct config *cfg = read_config_from_string(config_json);
+    REQUIRE(cfg != NULL);
+
+    const char *token_name = config_get_token_name(cfg);
+    REQUIRE(token_name != NULL);
+    REQUIRE(strcmp(token_name, "cr-access-token") == 0); // Default value
+
+    config_delete(cfg);
+    fprintf(stderr, "✓ Default token name used when empty string\n");
+  }
+
+  SECTION("Multiple issuers with different token names")
+  {
+    const char *config_json = R"({
+      "Issuer A": {
+        "access_token_name": "token-a",
+        "renewal_kid": "key-a",
+        "keys": [{
+          "alg": "HS256",
+          "kid": "key-a",
+          "k": "dGVzdC1rZXktc2VjcmV0MTIzNDU2Nzg5MA",
+          "kty": "oct"
+        }]
+      },
+      "Issuer B": {
+        "access_token_name": "token-b",
+        "keys": [{
+          "alg": "HS256",
+          "kid": "key-b",
+          "k": "YW5vdGhlci1rZXktc2VjcmV0MTIzNDU2Nzg",
+          "kty": "oct"
+        }]
+      }
+    })";
+
+    struct config *cfg = read_config_from_string(config_json);
+    REQUIRE(cfg != NULL);
+
+    // With single token name, uses token name from first issuer processed
+    const char *token_name = config_get_token_name(cfg);
+    REQUIRE(token_name != NULL);
+    // Note: JSON object iteration order may vary, but one of the configured names will be used
+    bool valid_name = (strcmp(token_name, "token-a") == 0) || (strcmp(token_name, "token-b") == 0);
+    REQUIRE(valid_name);
+
+    config_delete(cfg);
+    fprintf(stderr, "✓ Multiple issuers with different token names (uses first issuer's token name)\n");
+  }
+
+  SECTION("Single issuer config works correctly")
+  {
+    const char *config_json = R"({
+      "Single Issuer": {
+        "access_token_name": "my-token",
+        "renewal_kid": "test-key",
+        "strip_token": true,
+        "id": "test-audience",
+        "keys": [{
+          "alg": "HS256",
+          "kid": "test-key",
+          "k": "dGVzdC1rZXktc2VjcmV0MTIzNDU2Nzg5MA",
+          "kty": "oct"
+        }]
+      }
+    })";
+
+    struct config *cfg = read_config_from_string(config_json);
+    REQUIRE(cfg != NULL);
+
+    const char *token_name = config_get_token_name(cfg);
+    REQUIRE(token_name != NULL);
+    REQUIRE(strcmp(token_name, "my-token") == 0);
+
+    // Verify other config fields still work
+    const char *id = config_get_id(cfg);
+    REQUIRE(id != NULL);
+    REQUIRE(strcmp(id, "test-audience") == 0);
+
+    REQUIRE(config_strip_token(cfg) == true);
+
+    config_delete(cfg);
+    fprintf(stderr, "✓ Single issuer config with all fields\n");
+  }
+
+  fprintf(stderr, "\n");
+}
+
+TEST_CASE("Token extraction with custom token name", "[TokenAuthLevel1][Parsing]")
+{
+  INFO("TEST: Token extraction should use custom token name");
+
+  SECTION("Extract token from URL with custom name")
+  {
+    const char *uri = "http://cdn.com/video.mp4?cr-access-token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+                      "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ."
+                      "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
+
+    REQUIRE(jws_parsing_helper(uri, "cr-access-token", "http://cdn.com/video.mp4"));
+    fprintf(stderr, "✓ Token extracted with custom name from URL\n");
+  }
+
+  SECTION("Token not found when wrong name used")
+  {
+    const char *uri = "http://cdn.com/video.mp4?wrong-token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+                      "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ."
+                      "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
+
+    // Looking for "cr-access-token" but it's "wrong-token"
+    REQUIRE(!jws_parsing_helper(uri, "cr-access-token", NULL));
+    fprintf(stderr, "✓ Token not found with wrong name\n");
+  }
+
+  SECTION("Custom token name with multiple query parameters")
+  {
+    const char *uri = "http://cdn.com/video.mp4?foo=bar&cr-access-token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+                      "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ."
+                      "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c&baz=qux";
+
+    REQUIRE(jws_parsing_helper(uri, "cr-access-token", "http://cdn.com/video.mp4?foo=bar&baz=qux"));
+    fprintf(stderr, "✓ Token extracted with custom name from URL with multiple params\n");
+  }
+
+  SECTION("Different custom token names")
+  {
+    // Test with "my-token"
+    const char *uri1 = "http://cdn.com/video.mp4?my-token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+                       "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ."
+                       "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
+    REQUIRE(jws_parsing_helper(uri1, "my-token", "http://cdn.com/video.mp4"));
+
+    // Test with "auth-token"
+    const char *uri2 = "http://cdn.com/video.mp4?auth-token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+                       "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ."
+                       "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
+    REQUIRE(jws_parsing_helper(uri2, "auth-token", "http://cdn.com/video.mp4"));
+
+    fprintf(stderr, "✓ Different custom token names work correctly\n");
+  }
+
+  fprintf(stderr, "\n");
+}
+
+TEST_CASE("Token name validation and edge cases", "[TokenAuthLevel1][Validation]")
+{
+  INFO("TEST: Token name validation and edge cases");
+
+  SECTION("Token name with special characters (allowed)")
+  {
+    const char *config_json = R"({
+      "Test Issuer": {
+        "access_token_name": "my-token_v2",
+        "renewal_kid": "test-key",
+        "keys": [{
+          "alg": "HS256",
+          "kid": "test-key",
+          "k": "dGVzdC1rZXktc2VjcmV0MTIzNDU2Nzg5MA",
+          "kty": "oct"
+        }]
+      }
+    })";
+
+    struct config *cfg = read_config_from_string(config_json);
+    REQUIRE(cfg != NULL);
+
+    const char *token_name = config_get_token_name(cfg);
+    REQUIRE(token_name != NULL);
+    REQUIRE(strcmp(token_name, "my-token_v2") == 0);
+
+    config_delete(cfg);
+    fprintf(stderr, "✓ Token name with hyphens and underscores\n");
+  }
+
+  SECTION("Config loads successfully with NULL check")
+  {
+    struct config *cfg      = NULL;
+    const char *token_name = config_get_token_name(cfg);
+
+    // Should return default even if cfg is NULL (defensive)
+    REQUIRE(token_name != NULL);
+    REQUIRE(strcmp(token_name, "cr-access-token") == 0);
+
+    fprintf(stderr, "✓ NULL config returns default token name\n");
+  }
+
+  fprintf(stderr, "\n");
+}
