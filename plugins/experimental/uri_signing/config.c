@@ -45,6 +45,7 @@ struct config {
   struct auth_directive *auth_directives;
   char *id;
   bool strip_token;
+  char *token_name; /* Token parameter name (default: "cr-access-token") */
 };
 
 cjose_jwk_t **
@@ -92,6 +93,16 @@ config_strip_token(struct config *cfg)
   return cfg->strip_token;
 }
 
+const char *
+config_get_token_name(struct config *cfg)
+{
+  if (!cfg || !cfg->token_name) {
+    /* Return default token name if config is NULL or not initialized */
+    return "cr-access-token";
+  }
+  return cfg->token_name;
+}
+
 struct config *
 config_new(size_t n)
 {
@@ -120,6 +131,7 @@ config_new(size_t n)
   cfg->id              = NULL;
 
   cfg->strip_token = false;
+  cfg->token_name  = NULL;
 
   PluginDebug("New config object created at %p", cfg);
   return cfg;
@@ -144,6 +156,10 @@ config_delete(struct config *cfg)
 
   if (cfg->id) {
     free(cfg->id);
+  }
+
+  if (cfg->token_name) {
+    free(cfg->token_name);
   }
 
   for (char **name = cfg->issuer_names; *name; ++name) {
@@ -177,6 +193,7 @@ load_jwk(json_t *obj, cjose_err *err)
   free(s);
   return jwk;
 }
+
 
 static struct config *
 read_config_from_json(json_t *const issuer_json)
@@ -288,6 +305,21 @@ read_config_from_json(json_t *const issuer_json)
       cfg->strip_token = json_boolean_value(strip_json);
     }
 
+    /* Get token parameter name from config */
+    if (!cfg->token_name) {
+      json_t *token_name_json = json_object_get(jwks, "access_token_name");
+      const char *token_name  = NULL;
+      if (token_name_json) {
+        token_name = json_string_value(token_name_json);
+      }
+      /* Use default if not specified or empty */
+      if (!token_name || strlen(token_name) == 0) {
+        token_name = "cr-access-token";
+      }
+      cfg->token_name = strdup(token_name);
+      PluginDebug("Token parameter name: %s", cfg->token_name);
+    }
+
     size_t jwks_ct     = json_array_size(key_ary);
     cjose_jwk_t **jwks = (*jwkis++ = malloc((jwks_ct + 1) * sizeof *jwks));
     PluginDebug("Created table with size %d", cfg->issuers->size);
@@ -333,6 +365,13 @@ read_config_from_json(json_t *const issuer_json)
     PluginError("Cannot load remap without signing key.");
     goto cfg_fail;
   }
+
+  /* Ensure token_name is set (use default if not configured) */
+  if (!cfg->token_name) {
+    cfg->token_name = strdup("cr-access-token");
+    PluginDebug("Using default token parameter name: cr-access-token");
+  }
+
   json_decref(issuer_json);
   PluginDebug("Loaded config file successfully.");
   return cfg;

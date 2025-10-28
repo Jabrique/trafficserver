@@ -174,7 +174,8 @@ TSRemapDoRemap(void *ih, TSHttpTxn txnp, TSRemapRequestInfo *rri)
   TSRemapStatus status    = TSREMAP_NO_REMAP;
   bool checked_auth       = false;
 
-  static char const *const package = "URISigningPackage";
+  struct config *cfg      = (struct config *)ih;
+  const char *token_name = config_get_token_name(cfg);
 
   TSMBuffer mbuf;
   TSMLoc ul;
@@ -194,8 +195,12 @@ TSRemapDoRemap(void *ih, TSHttpTxn txnp, TSRemapRequestInfo *rri)
   strip_uri      = (char *)TSmalloc(strip_size);
   memset(strip_uri, 0, strip_size);
 
+  /* Try to extract JWT from URI */
   size_t strip_ct;
-  cjose_jws_t *jws = get_jws_from_uri(url, url_ct, package, strip_uri, strip_size, &strip_ct);
+  cjose_jws_t *jws = get_jws_from_uri(url, url_ct, token_name, strip_uri, strip_size, &strip_ct);
+  if (jws) {
+    PluginDebug("Found token with parameter name: %s", token_name);
+  }
 
   checkpoints[cpi++] = mark_timer(&t);
 
@@ -244,7 +249,12 @@ TSRemapDoRemap(void *ih, TSHttpTxn txnp, TSRemapRequestInfo *rri)
     if (cpi < max_cpi) {
       checkpoints[cpi++] = mark_timer(&t);
     }
-    jws = get_jws_from_cookie(&client_cookie, &client_cookie_sz_ct, package);
+
+    /* Try to extract JWT from cookie */
+    jws = get_jws_from_cookie(&client_cookie, &client_cookie_sz_ct, token_name);
+    if (jws) {
+      PluginDebug("Found token in cookie with name: %s", token_name);
+    }
   } else {
     /* There has been a JWS found in the url */
     /* Strip the token from the URL for upstream if configured to do so */
@@ -262,8 +272,11 @@ TSRemapDoRemap(void *ih, TSHttpTxn txnp, TSRemapRequestInfo *rri)
         memset(map_strip_uri, 0, map_strip_size);
         size_t map_strip_ct = 0;
 
-        cjose_jws_t *map_jws = get_jws_from_uri(map_url, map_url_ct, package, map_strip_uri, map_strip_size, &map_strip_ct);
-        cjose_jws_release(map_jws);
+        /* Re-extract token from mapped URL to get stripped version */
+        cjose_jws_t *map_jws = get_jws_from_uri(map_url, map_url_ct, token_name, map_strip_uri, map_strip_size, &map_strip_ct);
+        if (map_jws) {
+          cjose_jws_release(map_jws);
+        }
 
         char const *strip_uri_start = map_strip_uri;
 
@@ -328,7 +341,7 @@ check_auth:
   /* There has been a validated JWT found in either the cookie or url */
 
   struct signer *signer = config_signer((struct config *)ih);
-  char *cookie          = renew(jwt, signer->issuer, signer->jwk, signer->alg, package, strip_uri, strip_ct);
+  char *cookie          = renew(jwt, signer->issuer, signer->jwk, signer->alg, token_name, strip_uri, strip_ct);
   jwt_delete(jwt);
 
   if (cpi < max_cpi) {
