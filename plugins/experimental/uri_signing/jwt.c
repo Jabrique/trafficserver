@@ -67,6 +67,7 @@ parse_jwt(json_t *raw)
   jwt->cdniets    = json_integer_value(json_object_get(raw, "cdniets"));
   jwt->cdnistt    = json_integer_value(json_object_get(raw, "cdnistt"));
   jwt->cdnistd    = parse_integer_default(json_object_get(raw, "cdnistd"), 0);
+  jwt->cdnisalt   = json_string_value(json_object_get(raw, "cdnisalt"));
   return jwt;
 }
 
@@ -288,7 +289,8 @@ renew_copy_integer(json_t *new_json, const char *name, double old)
 }
 
 char *
-renew(struct jwt *jwt, const char *iss, cjose_jwk_t *jwk, const char *alg, const char *package, const char *uri, size_t uri_ct)
+renew(struct jwt *jwt, const char *iss, cjose_jwk_t *jwk, const char *alg, const char *package, const char *uri, size_t uri_ct,
+      const char *salt)
 {
   char *s = NULL;
   if (jwt->cdnistt != 1) {
@@ -301,9 +303,19 @@ renew(struct jwt *jwt, const char *iss, cjose_jwk_t *jwk, const char *alg, const
     return NULL;
   }
 
+  /* Security: Prevent integer overflow in buffer size calculation */
+  if (uri_ct > SIZE_MAX - 2) {
+    PluginError("URI too long for renewal: %zu bytes", uri_ct);
+    return NULL;
+  }
+
   int buff_ct = uri_ct + 2;
   int normal_err;
   char *normal_uri = (char *)TSmalloc(buff_ct);
+  if (!normal_uri) {
+    PluginError("Failed to allocate %d bytes for normalized URI", buff_ct);
+    return NULL;
+  }
   memset(normal_uri, 0, buff_ct);
 
   normal_err = normalize_uri(uri, uri_ct, normal_uri, buff_ct);
@@ -321,6 +333,10 @@ renew(struct jwt *jwt, const char *iss, cjose_jwk_t *jwk, const char *alg, const
   size_t path_size       = normal_size + 1;
 
   path_string = (char *)TSmalloc(path_size);
+  if (!path_string) {
+    PluginError("Failed to allocate %zu bytes for path string", path_size);
+    goto fail_normal;
+  }
   memset(path_string, 0, path_size);
   PluginDebug("Renewing JWT. Stripped URI: %s", uri);
 
@@ -361,6 +377,11 @@ renew(struct jwt *jwt, const char *iss, cjose_jwk_t *jwk, const char *alg, const
   }
 
   json_t *new_json = json_object();
+  if (!new_json) {
+    PluginError("Failed to create JSON object for renewal token");
+    goto fail_path;
+  }
+
   renew_copy_string(new_json, "iss", iss); /* use issuer of new signing key */
   renew_copy_string(new_json, "sub", jwt->sub);
   renew_copy_raw(new_json, "aud", jwt->aud);
@@ -373,9 +394,14 @@ renew(struct jwt *jwt, const char *iss, cjose_jwk_t *jwk, const char *alg, const
   renew_copy_integer(new_json, "cdniets", jwt->cdniets);
   renew_copy_integer(new_json, "cdnistt", jwt->cdnistt);
   renew_copy_integer(new_json, "cdnistd", jwt->cdnistd);
+  renew_copy_string(new_json, "cdnisalt", salt); /* add salt for device binding */
 
   char *pt = json_dumps(new_json, JSON_COMPACT);
   json_decref(new_json);
+  if (!pt) {
+    PluginError("Failed to serialize JSON for renewal token");
+    goto fail_path;
+  }
 
   cjose_header_t *hdr = cjose_header_new(NULL);
   if (!hdr) {
@@ -401,8 +427,12 @@ renew(struct jwt *jwt, const char *iss, cjose_jwk_t *jwk, const char *alg, const
   cjose_jws_t *jws = cjose_jws_sign(jwk, hdr, (uint8_t *)pt, strlen(pt), &err);
   if (!jws) {
     char *hdr_str = json_dumps((json_t *)hdr, JSON_COMPACT);
-    PluginDebug("Unable to sign new key: %s. {%p(%s), \"%s\", \"%s\"}", err.message, jwk, kid, hdr_str, pt);
-    free(hdr_str);
+    if (hdr_str) {
+      PluginDebug("Unable to sign new key: %s. {%p(%s), \"%s\", \"%s\"}", err.message, jwk, kid, hdr_str, pt);
+      free(hdr_str);
+    } else {
+      PluginDebug("Unable to sign new key: %s", err.message);
+    }
     goto fail_hdr;
   }
 
@@ -415,6 +445,10 @@ renew(struct jwt *jwt, const char *iss, cjose_jwk_t *jwk, const char *alg, const
   const char *fmt = "%s=%s; Path=%s";
   size_t s_ct;
   s = malloc(s_ct = (1 + snprintf(NULL, 0, fmt, package, jws_str, path_string)));
+  if (!s) {
+    PluginError("Failed to allocate %zu bytes for Set-Cookie header", s_ct);
+    goto fail_jws;
+  }
   snprintf(s, s_ct, fmt, package, jws_str, path_string);
   PluginDebug("Cookie returned from renew function: %s", s);
 fail_jws:

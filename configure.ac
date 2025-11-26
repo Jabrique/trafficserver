@@ -1480,7 +1480,14 @@ AC_CHECK_LIB([crypto],[HMAC],[has_libcrypto=1],[has_libcrypto=0])
 #### Check for optional cjose library (uri_signing)
 TS_CHECK_CJOSE
 
-AM_CONDITIONAL([BUILD_URI_SIGNING_PLUGIN], [test ! -z "${LIBCJOSE}" -a ! -z "${LIBJANSSON}" -a "x${enable_pcre}" = "xyes" -a "x${has_libcrypto}" = "x1"])
+#### Check for optional libxml2 library (uri_signing DASH support)
+PKG_CHECK_MODULES([LIBXML2], [libxml-2.0 >= 2.9], [
+  AC_SUBST([LIBXML2_CFLAGS])
+  AC_SUBST([LIBXML2_LIBS])
+  has_libxml2=yes
+], [has_libxml2=no])
+
+AM_CONDITIONAL([BUILD_URI_SIGNING_PLUGIN], [test ! -z "${LIBCJOSE}" -a ! -z "${LIBJANSSON}" -a "x${enable_pcre}" = "xyes" -a "x${has_libcrypto}" = "x1" -a "x${has_libxml2}" = "xyes"])
 AC_SUBST([LIBCJOSE])
 AC_SUBST([LIBJANSSON])
 

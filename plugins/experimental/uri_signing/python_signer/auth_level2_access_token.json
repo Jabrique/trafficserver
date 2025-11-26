@@ -1,0 +1,22 @@
+{
+	"iss": "CDN Provider",
+	"token_lifetime": 300,
+	"aud": "Apache Traffic Server",
+	"cdnistt": true,
+	"cdniets": 3600,
+	"cdnistd": 2,
+	"keys": [
+		{
+			"alg": "HS256",
+			"kid": "access-key-1",
+			"kty": "oct",
+			"k": "YourBase64EncodedAccessTokenSecretKey1"
+		},
+		{
+			"alg": "HS256",
+			"kid": "access-key-2",
+			"kty": "oct",
+			"k": "YourBase64EncodedAccessTokenSecretKey2"
+		}
+	]
+}

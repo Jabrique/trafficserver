@@ -33,12 +33,15 @@ def main():
     # helpers
     parser.add_argument('--key_index', type=int, nargs=1)
     parser.add_argument('--token_lifetime', type=int, nargs=1)
+    parser.add_argument('--package_name', nargs=1, help='Token parameter name (default: URISigningPackage)')
 
     # override arguments -- claims
     parser.add_argument('--aud', nargs=1)
     parser.add_argument('--cdniets', type=int, nargs=1)
     parser.add_argument('--cdnistd', type=int, nargs=1)
     parser.add_argument('--cdnistt', type=int, nargs=1)
+    parser.add_argument('--cdnisalt', nargs=1, help='Device binding salt (SHA256 hex string)')
+    parser.add_argument('--cdniuc', nargs=1, help='URI Container pattern (e.g., "uri-regex:https://cdn.example.com/*")')
     parser.add_argument('--exp', type=int, nargs=1)
     parser.add_argument('--iss', nargs=1)
 
@@ -102,6 +105,10 @@ def main():
         claimset["aud"] = args.aud[0]
     if args.cdnistd:
         claimset["cdnistd"] = args.cdnistd[0]
+    if args.cdnisalt:
+        claimset["cdnisalt"] = args.cdnisalt[0]
+    if args.cdniuc:
+        claimset["cdniuc"] = args.cdniuc[0]
 
     # process override args - complex
     if args.cdnistt:
@@ -126,7 +133,15 @@ def main():
 
     Token = jwt.encode(claimset, key, algorithm=key["alg"])
 
-    print("Signed URL: " + args.uri + "?URISigningPackage=" + Token)
+    # Determine package name
+    package_name = "URISigningPackage"
+    if args.package_name:
+        package_name = args.package_name[0]
+
+    # Determine separator based on whether URI already has query string
+    separator = "&" if "?" in args.uri else "?"
+
+    print("Signed URL: " + args.uri + separator + package_name + "=" + Token)
 
 
 if __name__ == "__main__":

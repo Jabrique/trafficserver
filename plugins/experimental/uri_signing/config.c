@@ -45,7 +45,8 @@ struct config {
   struct auth_directive *auth_directives;
   char *id;
   bool strip_token;
-  char *token_name; /* Token parameter name (default: "cr-access-token") */
+  char *token_name;                           /* Access token parameter name (default: "cr-access-token") */
+  struct renewal_token_config *renewal_token; /* Renewal token configuration (Auth Level 2) */
 };
 
 cjose_jwk_t **
@@ -103,24 +104,69 @@ config_get_token_name(struct config *cfg)
   return cfg->token_name;
 }
 
+struct renewal_token_config *
+config_get_renewal_token(struct config *cfg)
+{
+  if (!cfg) {
+    return NULL;
+  }
+  return cfg->renewal_token;
+}
+
+const char *
+config_get_renewal_token_name(struct config *cfg)
+{
+  if (!cfg || !cfg->renewal_token || !cfg->renewal_token->token_name) {
+    /* Return default session token name for cookies */
+    return "cr-session-token";
+  }
+  return cfg->renewal_token->token_name;
+}
+
 struct config *
 config_new(size_t n)
 {
   PluginDebug("Creating new config object with size %ld", n);
   struct config *cfg = malloc(sizeof *cfg);
+  if (!cfg) {
+    PluginError("Failed to allocate config structure (%zu bytes)", sizeof *cfg);
+    return NULL;
+  }
 
   cfg->issuers = calloc(1, sizeof *cfg->issuers);
+  if (!cfg->issuers) {
+    PluginError("Failed to allocate issuers hash table");
+    free(cfg);
+    return NULL;
+  }
+
   if (!hcreate_r(n * 2, cfg->issuers)) {
     PluginError("Unable to create config table (%d)!", errno);
+    free(cfg->issuers);
     free(cfg);
     return NULL;
   }
   PluginDebug("Created table with size %d", cfg->issuers->size);
 
-  cfg->jwkis    = malloc((n + 1) * sizeof *cfg->jwkis);
+  cfg->jwkis = malloc((n + 1) * sizeof *cfg->jwkis);
+  if (!cfg->jwkis) {
+    PluginError("Failed to allocate jwkis array (%zu bytes)", (n + 1) * sizeof *cfg->jwkis);
+    hdestroy_r(cfg->issuers);
+    free(cfg->issuers);
+    free(cfg);
+    return NULL;
+  }
   cfg->jwkis[n] = NULL;
 
-  cfg->issuer_names    = malloc((n + 1) * sizeof *cfg->issuer_names);
+  cfg->issuer_names = malloc((n + 1) * sizeof *cfg->issuer_names);
+  if (!cfg->issuer_names) {
+    PluginError("Failed to allocate issuer_names array (%zu bytes)", (n + 1) * sizeof *cfg->issuer_names);
+    free(cfg->jwkis);
+    hdestroy_r(cfg->issuers);
+    free(cfg->issuers);
+    free(cfg);
+    return NULL;
+  }
   cfg->issuer_names[n] = NULL;
 
   cfg->signer.issuer = NULL;
@@ -132,6 +178,8 @@ config_new(size_t n)
 
   cfg->strip_token = false;
   cfg->token_name  = NULL;
+
+  cfg->renewal_token = NULL;
 
   PluginDebug("New config object created at %p", cfg);
   return cfg;
@@ -160,6 +208,13 @@ config_delete(struct config *cfg)
 
   if (cfg->token_name) {
     free(cfg->token_name);
+  }
+
+  if (cfg->renewal_token) {
+    if (cfg->renewal_token->token_name) {
+      free(cfg->renewal_token->token_name);
+    }
+    free(cfg->renewal_token);
   }
 
   for (char **name = cfg->issuer_names; *name; ++name) {
@@ -193,7 +248,6 @@ load_jwk(json_t *obj, cjose_err *err)
   free(s);
   return jwk;
 }
-
 
 static struct config *
 read_config_from_json(json_t *const issuer_json)
@@ -294,7 +348,17 @@ read_config_from_json(json_t *const issuer_json)
     if (id_json) {
       id = json_string_value(id_json);
       if (id) {
-        cfg->id = malloc(strlen(id) + 1);
+        /* Security: Limit ID length to prevent DoS via memory exhaustion */
+        size_t id_len = strlen(id);
+        if (id_len > 1024) {
+          PluginError("Config ID too long: %zu bytes (max 1024)", id_len);
+          goto cfg_fail;
+        }
+        cfg->id = malloc(id_len + 1);
+        if (!cfg->id) {
+          PluginError("Failed to allocate %zu bytes for config ID", id_len + 1);
+          goto cfg_fail;
+        }
         strcpy(cfg->id, id);
         PluginDebug("Found Id in the config: %s", cfg->id);
       }
@@ -317,7 +381,146 @@ read_config_from_json(json_t *const issuer_json)
         token_name = "cr-access-token";
       }
       cfg->token_name = strdup(token_name);
+      if (!cfg->token_name) {
+        PluginError("Failed to allocate memory for token_name");
+        goto cfg_fail;
+      }
       PluginDebug("Token parameter name: %s", cfg->token_name);
+    }
+
+    /* Parse renewal_token configuration (Auth Level 2) */
+    json_t *renewal_token_json = json_object_get(jwks, "renewal_token");
+    if (renewal_token_json && !cfg->renewal_token) {
+      PluginDebug("Parsing renewal_token configuration");
+      cfg->renewal_token = malloc(sizeof *cfg->renewal_token);
+      if (!cfg->renewal_token) {
+        PluginError("Failed to allocate renewal_token config");
+        goto cfg_fail;
+      }
+
+      /* Initialize with defaults */
+      cfg->renewal_token->token_name                                 = NULL;
+      cfg->renewal_token->salt.enabled                               = false;
+      cfg->renewal_token->salt.bind_session_id                       = true; /* Default: bind session ID */
+      cfg->renewal_token->salt.bind_user_agent                       = false;
+      cfg->renewal_token->salt.bind_client_ip                        = false;
+      cfg->renewal_token->manifest_injection.enabled                 = false;
+      cfg->renewal_token->manifest_injection.inject_to_segments      = true;
+      cfg->renewal_token->manifest_injection.inject_to_init_segments = false;
+      cfg->renewal_token->manifest_injection.replace_access_token    = true; /* Default: replace access token (recommended) */
+      cfg->renewal_token->manifest_injection.hls_support             = true;
+      cfg->renewal_token->manifest_injection.dash_support            = true;
+      cfg->renewal_token->manifest_injection.cache_untransformed     = true; /* Default: cache clean manifest (recommended) */
+
+      /* Parse renewal token name */
+      json_t *rt_token_name_json = json_object_get(renewal_token_json, "token_name");
+      if (rt_token_name_json) {
+        const char *rt_token_name = json_string_value(rt_token_name_json);
+        if (rt_token_name && strlen(rt_token_name) > 0) {
+          cfg->renewal_token->token_name = strdup(rt_token_name);
+          if (!cfg->renewal_token->token_name) {
+            PluginError("Failed to allocate memory for renewal_token token_name");
+            free(cfg->renewal_token);
+            cfg->renewal_token = NULL;
+            goto cfg_fail;
+          }
+        }
+      }
+
+      /* Parse salt configuration */
+      json_t *salt_json = json_object_get(renewal_token_json, "salt");
+      if (salt_json) {
+        json_t *salt_enabled = json_object_get(salt_json, "enabled");
+        if (salt_enabled) {
+          cfg->renewal_token->salt.enabled = json_boolean_value(salt_enabled);
+        }
+
+        json_t *bind_session_id = json_object_get(salt_json, "bind_session_id");
+        if (bind_session_id) {
+          cfg->renewal_token->salt.bind_session_id = json_boolean_value(bind_session_id);
+        }
+
+        json_t *bind_user_agent = json_object_get(salt_json, "bind_user_agent");
+        if (bind_user_agent) {
+          cfg->renewal_token->salt.bind_user_agent = json_boolean_value(bind_user_agent);
+        }
+
+        json_t *bind_client_ip = json_object_get(salt_json, "bind_client_ip");
+        if (bind_client_ip) {
+          cfg->renewal_token->salt.bind_client_ip = json_boolean_value(bind_client_ip);
+        }
+
+        /* Set default token name if salt is enabled and name not specified */
+        if (cfg->renewal_token->salt.enabled && !cfg->renewal_token->token_name) {
+          cfg->renewal_token->token_name = strdup("cr-session-token");
+          if (!cfg->renewal_token->token_name) {
+            PluginError("Failed to allocate memory for default renewal_token token_name");
+            free(cfg->renewal_token);
+            cfg->renewal_token = NULL;
+            goto cfg_fail;
+          }
+        }
+
+        PluginDebug("Salt config: enabled=%d, session_id=%d, user_agent=%d, client_ip=%d", cfg->renewal_token->salt.enabled,
+                    cfg->renewal_token->salt.bind_session_id, cfg->renewal_token->salt.bind_user_agent,
+                    cfg->renewal_token->salt.bind_client_ip);
+      }
+
+      /* Parse manifest_injection configuration */
+      json_t *manifest_json = json_object_get(renewal_token_json, "manifest_injection");
+      if (manifest_json) {
+        json_t *mi_enabled = json_object_get(manifest_json, "enabled");
+        if (mi_enabled) {
+          cfg->renewal_token->manifest_injection.enabled = json_boolean_value(mi_enabled);
+        }
+
+        json_t *inject_segments = json_object_get(manifest_json, "inject_to_segments");
+        if (inject_segments) {
+          cfg->renewal_token->manifest_injection.inject_to_segments = json_boolean_value(inject_segments);
+        }
+
+        json_t *inject_init = json_object_get(manifest_json, "inject_to_init_segments");
+        if (inject_init) {
+          cfg->renewal_token->manifest_injection.inject_to_init_segments = json_boolean_value(inject_init);
+        }
+
+        /* Support both new name (replace_access_token) and old name (strip_access_token_from_upstream) for backward compatibility
+         */
+        json_t *replace_token = json_object_get(manifest_json, "replace_access_token");
+        if (replace_token) {
+          cfg->renewal_token->manifest_injection.replace_access_token = json_boolean_value(replace_token);
+        } else {
+          /* Fallback to old name for backward compatibility */
+          json_t *strip_access = json_object_get(manifest_json, "strip_access_token_from_upstream");
+          if (strip_access) {
+            cfg->renewal_token->manifest_injection.replace_access_token = json_boolean_value(strip_access);
+            PluginDebug("Warning: 'strip_access_token_from_upstream' is deprecated, use 'replace_access_token' instead");
+          }
+        }
+
+        json_t *hls_support = json_object_get(manifest_json, "hls_support");
+        if (hls_support) {
+          cfg->renewal_token->manifest_injection.hls_support = json_boolean_value(hls_support);
+        }
+
+        json_t *dash_support = json_object_get(manifest_json, "dash_support");
+        if (dash_support) {
+          cfg->renewal_token->manifest_injection.dash_support = json_boolean_value(dash_support);
+        }
+
+        json_t *cache_untransformed = json_object_get(manifest_json, "cache_untransformed");
+        if (cache_untransformed) {
+          cfg->renewal_token->manifest_injection.cache_untransformed = json_boolean_value(cache_untransformed);
+        }
+
+        PluginDebug("Manifest injection config: enabled=%d, hls=%d, dash=%d, cache_untransformed=%d",
+                    cfg->renewal_token->manifest_injection.enabled, cfg->renewal_token->manifest_injection.hls_support,
+                    cfg->renewal_token->manifest_injection.dash_support,
+                    cfg->renewal_token->manifest_injection.cache_untransformed);
+      }
+
+      PluginDebug("Renewal token configuration loaded: %s",
+                  cfg->renewal_token->token_name ? cfg->renewal_token->token_name : "(use access token name)");
     }
 
     size_t jwks_ct     = json_array_size(key_ary);

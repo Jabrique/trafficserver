@@ -29,6 +29,32 @@ struct signer {
   char *alg;
 };
 
+struct salt_config {
+  bool enabled;
+  bool bind_session_id;
+  bool bind_user_agent;
+  bool bind_client_ip;
+};
+
+struct manifest_injection_config {
+  bool enabled;
+  bool inject_to_segments;
+  bool inject_to_init_segments;
+  bool replace_access_token; /* Replace access token with session token in manifest URLs.
+                              * true = clean URLs with only session token (recommended)
+                              * false = keep both access and session tokens */
+  bool hls_support;
+  bool dash_support;
+  bool cache_untransformed; /* Cache clean manifest from origin, not transformed output.
+                             * true = shared cache (recommended), false = per-token cache */
+};
+
+struct renewal_token_config {
+  char *token_name;
+  struct salt_config salt;
+  struct manifest_injection_config manifest_injection;
+};
+
 struct config *read_config_from_path(const char *const path);
 struct config *read_config_from_string(const char *const buffer);
 void config_delete(struct config *g);
@@ -39,3 +65,5 @@ bool uri_matches_auth_directive(struct config *cfg, const char *uri, size_t uri_
 const char *config_get_id(struct config *cfg);
 bool config_strip_token(struct config *cfg);
 const char *config_get_token_name(struct config *cfg);
+struct renewal_token_config *config_get_renewal_token(struct config *cfg);
+const char *config_get_renewal_token_name(struct config *cfg);

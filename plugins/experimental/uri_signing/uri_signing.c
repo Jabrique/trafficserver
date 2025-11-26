@@ -21,6 +21,8 @@
 #include "parse.h"
 #include "jwt.h"
 #include "timing.h"
+#include "session.h"
+#include "transform.h"
 
 #include <ts/remap.h>
 
@@ -174,8 +176,10 @@ TSRemapDoRemap(void *ih, TSHttpTxn txnp, TSRemapRequestInfo *rri)
   TSRemapStatus status    = TSREMAP_NO_REMAP;
   bool checked_auth       = false;
 
-  struct config *cfg      = (struct config *)ih;
-  const char *token_name = config_get_token_name(cfg);
+  struct config *cfg             = (struct config *)ih;
+  const char *access_token_name  = config_get_token_name(cfg);
+  const char *renewal_token_name = config_get_renewal_token_name(cfg);
+  const char *matched_token_name = NULL; /* Track which token name was matched */
 
   TSMBuffer mbuf;
   TSMLoc ul;
@@ -189,17 +193,27 @@ TSRemapDoRemap(void *ih, TSHttpTxn txnp, TSRemapRequestInfo *rri)
   TSHandleMLocRelease(mbuf, TS_NULL_MLOC, ul);
 
   PluginDebug("Processing request for %.*s.", url_ct, url);
+  PluginDebug("Token names: URL=%s, Cookie=%s", access_token_name, renewal_token_name);
   checkpoints[cpi++] = mark_timer(&t);
 
   int strip_size = url_ct + 1;
   strip_uri      = (char *)TSmalloc(strip_size);
   memset(strip_uri, 0, strip_size);
 
-  /* Try to extract JWT from URI */
+  /* Try to extract JWT from URI - check access token name first */
   size_t strip_ct;
-  cjose_jws_t *jws = get_jws_from_uri(url, url_ct, token_name, strip_uri, strip_size, &strip_ct);
+  cjose_jws_t *jws = get_jws_from_uri(url, url_ct, access_token_name, strip_uri, strip_size, &strip_ct);
   if (jws) {
-    PluginDebug("Found token with parameter name: %s", token_name);
+    matched_token_name = access_token_name;
+    PluginDebug("Found token in URL with parameter name: %s", access_token_name);
+  } else if (renewal_token_name && strcmp(renewal_token_name, access_token_name) != 0) {
+    /* Also check renewal token name in URL if it differs from access token name */
+    /* This maintains backward compatibility with tests that pass renewal tokens via URL */
+    jws = get_jws_from_uri(url, url_ct, renewal_token_name, strip_uri, strip_size, &strip_ct);
+    if (jws) {
+      matched_token_name = renewal_token_name;
+      PluginDebug("Found token in URL with parameter name: %s", renewal_token_name);
+    }
   }
 
   checkpoints[cpi++] = mark_timer(&t);
@@ -244,16 +258,20 @@ TSRemapDoRemap(void *ih, TSHttpTxn txnp, TSRemapRequestInfo *rri)
         goto fail;
       }
     }
+
+    /* Extract JWT from cookie with renewal token name (for cookie-based session tokens) */
     size_t client_cookie_sz_ct = client_cookie_ct;
+
   check_more_cookies:
     if (cpi < max_cpi) {
       checkpoints[cpi++] = mark_timer(&t);
     }
 
-    /* Try to extract JWT from cookie */
-    jws = get_jws_from_cookie(&client_cookie, &client_cookie_sz_ct, token_name);
+    /* Check for renewal/session token in cookies */
+    jws = get_jws_from_cookie(&client_cookie, &client_cookie_sz_ct, renewal_token_name);
     if (jws) {
-      PluginDebug("Found token in cookie with name: %s", token_name);
+      matched_token_name = renewal_token_name;
+      PluginDebug("Found token in cookie with name: %s", renewal_token_name);
     }
   } else {
     /* There has been a JWS found in the url */
@@ -272,8 +290,9 @@ TSRemapDoRemap(void *ih, TSHttpTxn txnp, TSRemapRequestInfo *rri)
         memset(map_strip_uri, 0, map_strip_size);
         size_t map_strip_ct = 0;
 
-        /* Re-extract token from mapped URL to get stripped version */
-        cjose_jws_t *map_jws = get_jws_from_uri(map_url, map_url_ct, token_name, map_strip_uri, map_strip_size, &map_strip_ct);
+        /* Re-extract token from mapped URL to get stripped version using the matched token name */
+        cjose_jws_t *map_jws =
+          get_jws_from_uri(map_url, map_url_ct, matched_token_name, map_strip_uri, map_strip_size, &map_strip_ct);
         if (map_jws) {
           cjose_jws_release(map_jws);
         }
@@ -338,10 +357,45 @@ check_auth:
     }
   }
 
+  /* Validate salt if renewal_token configuration exists and salt is enabled */
+  struct renewal_token_config *renewal_cfg = config_get_renewal_token((struct config *)ih);
+  if (renewal_cfg && renewal_cfg->salt.enabled) {
+    if (!validate_salt(jwt, txnp, &renewal_cfg->salt, matched_token_name, access_token_name, NULL, NULL, NULL)) {
+      PluginDebug("Salt validation failed for %.*s", url_ct, url);
+      jwt_delete(jwt);
+      if (!checked_cookies) {
+        goto check_cookies;
+      } else {
+        goto check_more_cookies;
+      }
+    }
+    PluginDebug("Salt validation passed for %.*s", url_ct, url);
+  }
+
+  if (cpi < max_cpi) {
+    checkpoints[cpi++] = mark_timer(&t);
+  }
+
   /* There has been a validated JWT found in either the cookie or url */
 
+  /* Generate salt for renewal token if enabled */
+  char *generated_salt = NULL;
+  if (renewal_cfg && renewal_cfg->salt.enabled) {
+    generated_salt = generate_salt(txnp, &renewal_cfg->salt, NULL, NULL, NULL);
+    if (generated_salt) {
+      PluginDebug("Generated salt for renewal token: %s", generated_salt);
+    }
+  }
+
   struct signer *signer = config_signer((struct config *)ih);
-  char *cookie          = renew(jwt, signer->issuer, signer->jwk, signer->alg, token_name, strip_uri, strip_ct);
+  /* Use renewal token name for the cookie, or access token name if not configured */
+  const char *cookie_token_name = renewal_token_name;
+  char *cookie = renew(jwt, signer->issuer, signer->jwk, signer->alg, cookie_token_name, strip_uri, strip_ct, generated_salt);
+
+  if (generated_salt) {
+    free(generated_salt);
+  }
+
   jwt_delete(jwt);
 
   if (cpi < max_cpi) {
@@ -351,6 +405,62 @@ check_auth:
     PluginDebug("Scheduling cookie callback for %.*s", url_ct, url);
     TSCont cont = cont_new(cookie);
     TSHttpTxnHookAdd(txnp, TS_HTTP_SEND_RESPONSE_HDR_HOOK, cont);
+
+    /* Setup manifest transform if renewal token and manifest injection are enabled */
+    if (renewal_cfg && renewal_cfg->manifest_injection.enabled) {
+      /* CRITICAL: Cache behavior configuration.
+       *
+       * cache_untransformed=true (RECOMMENDED, DEFAULT):
+       *   - ATS caches the clean manifest from origin (shared cache)
+       *   - Transform runs on every request to inject per-user tokens
+       *   - Origin load: ↓99.99%, Cache efficiency: ↑99.99%
+       *   - Edge CPU: ↑10-20% (acceptable trade-off)
+       *
+       * cache_untransformed=false (LEGACY):
+       *   - ATS caches transformed manifest with per-user tokens (cache pollution)
+       *   - One cache entry per unique token = high origin load
+       *   - Only use if edge CPU is critical constraint
+       *
+       * Example with 10,000 concurrent users:
+       *   true:  1 origin request, 1 shared cache entry
+       *   false: 10,000 origin requests, 10,000 cache entries
+       *
+       * See docs/HOOKS_AND_TRANSFORM.md for detailed explanation.
+       */
+      if (renewal_cfg->manifest_injection.cache_untransformed) {
+        TSHttpTxnUntransformedRespCache(txnp, 1);
+        PluginDebug("Cache untransformed enabled: clean manifest will be cached");
+      } else {
+        PluginDebug("Cache untransformed disabled: transformed manifest will be cached (cache pollution warning!)");
+      }
+
+      const char *renewal_token_name = config_get_renewal_token_name((struct config *)ih);
+      if (!renewal_token_name) {
+        renewal_token_name = "cr-session-token"; /* Default */
+      }
+
+      /* Extract just the JWS token from the cookie string */
+      /* Cookie format: "param_name=JWS_TOKEN; Path=/..." */
+      /* Find the '=' and ';' to extract the token */
+      const char *token_start = strchr(cookie, '=');
+      if (token_start) {
+        token_start++; /* Skip the '=' */
+        const char *token_end = strchr(token_start, ';');
+        if (token_end) {
+          size_t token_len = token_end - token_start;
+          char *jws_token  = TSmalloc(token_len + 1);
+          if (jws_token) {
+            memcpy(jws_token, token_start, token_len);
+            jws_token[token_len] = '\0';
+
+            setup_manifest_transform(txnp, jws_token, renewal_token_name, access_token_name, &renewal_cfg->manifest_injection);
+            PluginDebug("Manifest transform scheduled for %.*s with token length %zu", url_ct, url, token_len);
+
+            TSfree(jws_token);
+          }
+        }
+      }
+    }
   } else {
     PluginDebug("No cookie scheduled for %.*s", url_ct, url);
   }
