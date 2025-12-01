@@ -23,9 +23,75 @@
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
+#include <stdlib.h>
 #include <libxml/parser.h>
 #include <libxml/tree.h>
 #include <libxml/xpath.h>
+
+/**
+ * Extract JWS token from Set-Cookie header.
+ *
+ * BUG #4 FIX: Refactored extraction logic into reusable helper function.
+ * This allows us to extract tokens from both Set-Cookie (renewal) and
+ * original validated tokens for manifest injection.
+ *
+ * Set-Cookie format: "param_name=JWS_TOKEN; Path=/; HttpOnly; Secure"
+ * Extracts only the JWS_TOKEN part (between '=' and ';').
+ *
+ * @param set_cookie_header Full Set-Cookie header value
+ * @return Allocated JWS token string (caller must free()), or NULL on error
+ */
+char *
+extract_jws_from_set_cookie(const char *set_cookie_header)
+{
+  /* Defensive: Check NULL input */
+  if (!set_cookie_header) {
+    return NULL;
+  }
+
+  /* Defensive: Check empty string */
+  if (set_cookie_header[0] == '\0') {
+    return NULL;
+  }
+
+  /* Find the '=' sign (separates param_name from token) */
+  const char *token_start = strchr(set_cookie_header, '=');
+  if (!token_start) {
+    /* Invalid format: no '=' sign */
+    return NULL;
+  }
+
+  /* Skip the '=' to get to token start */
+  token_start++;
+
+  /* Find the ';' sign (separates token from cookie attributes) */
+  const char *token_end = strchr(token_start, ';');
+  if (!token_end) {
+    /* No semicolon found - token extends to end of string */
+    token_end = set_cookie_header + strlen(set_cookie_header);
+  }
+
+  /* Calculate token length */
+  size_t token_len = token_end - token_start;
+
+  /* Defensive: Empty token */
+  if (token_len == 0) {
+    return NULL;
+  }
+
+  /* Allocate memory for token (+1 for null terminator) */
+  char *jws_token = (char *)malloc(token_len + 1);
+  if (!jws_token) {
+    /* Memory allocation failed */
+    return NULL;
+  }
+
+  /* Copy token to new buffer */
+  memcpy(jws_token, token_start, token_len);
+  jws_token[token_len] = '\0';
+
+  return jws_token;
+}
 
 manifest_type_t
 detect_manifest_type(const char *uri, const char *content_type)

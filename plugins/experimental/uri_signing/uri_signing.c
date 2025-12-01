@@ -23,6 +23,7 @@
 #include "timing.h"
 #include "session.h"
 #include "transform.h"
+#include "manifest.h"
 
 #include <ts/remap.h>
 
@@ -89,6 +90,21 @@ TSRemapNewInstance(int argc, char *argv[], void **ih, char *errbuf, int errbuf_s
     return TS_ERROR;
   }
   free(config_file);
+
+  /* BUG #6 FIX (Part 1): Validate signer configuration at plugin load time */
+  struct renewal_token_config *renewal_cfg = config_get_renewal_token(cfg);
+  if (renewal_cfg && (renewal_cfg->salt.enabled || renewal_cfg->manifest_injection.enabled)) {
+    /* Renewal features enabled, signer REQUIRED */
+    struct signer *signer = config_signer(cfg);
+    if (!signer || !signer->issuer || !signer->jwk || !signer->alg) {
+      snprintf(errbuf, errbuf_size,
+               "renewal_token enabled but signer not fully configured "
+               "(missing renewal_kid, issuer, or keys)");
+      config_delete(cfg);
+      return TS_ERROR; /* Refuse to load plugin */
+    }
+  }
+
   *ih = cfg;
 
   return TS_SUCCESS;
@@ -175,6 +191,7 @@ TSRemapDoRemap(void *ih, TSHttpTxn txnp, TSRemapRequestInfo *rri)
   char *strip_uri         = NULL;
   TSRemapStatus status    = TSREMAP_NO_REMAP;
   bool checked_auth       = false;
+  char *original_jws_str  = NULL; /* BUG #4 FIX: Save original JWT for manifest injection */
 
   struct config *cfg             = (struct config *)ih;
   const char *access_token_name  = config_get_token_name(cfg);
@@ -202,14 +219,14 @@ TSRemapDoRemap(void *ih, TSHttpTxn txnp, TSRemapRequestInfo *rri)
 
   /* Try to extract JWT from URI - check access token name first */
   size_t strip_ct;
-  cjose_jws_t *jws = get_jws_from_uri(url, url_ct, access_token_name, strip_uri, strip_size, &strip_ct);
+  cjose_jws_t *jws = get_jws_from_uri(url, url_ct, access_token_name, strip_uri, strip_size, &strip_ct, &original_jws_str);
   if (jws) {
     matched_token_name = access_token_name;
     PluginDebug("Found token in URL with parameter name: %s", access_token_name);
   } else if (renewal_token_name && strcmp(renewal_token_name, access_token_name) != 0) {
     /* Also check renewal token name in URL if it differs from access token name */
     /* This maintains backward compatibility with tests that pass renewal tokens via URL */
-    jws = get_jws_from_uri(url, url_ct, renewal_token_name, strip_uri, strip_size, &strip_ct);
+    jws = get_jws_from_uri(url, url_ct, renewal_token_name, strip_uri, strip_size, &strip_ct, &original_jws_str);
     if (jws) {
       matched_token_name = renewal_token_name;
       PluginDebug("Found token in URL with parameter name: %s", renewal_token_name);
@@ -268,7 +285,7 @@ TSRemapDoRemap(void *ih, TSHttpTxn txnp, TSRemapRequestInfo *rri)
     }
 
     /* Check for renewal/session token in cookies */
-    jws = get_jws_from_cookie(&client_cookie, &client_cookie_sz_ct, renewal_token_name);
+    jws = get_jws_from_cookie(&client_cookie, &client_cookie_sz_ct, renewal_token_name, &original_jws_str);
     if (jws) {
       matched_token_name = renewal_token_name;
       PluginDebug("Found token in cookie with name: %s", renewal_token_name);
@@ -292,7 +309,7 @@ TSRemapDoRemap(void *ih, TSHttpTxn txnp, TSRemapRequestInfo *rri)
 
         /* Re-extract token from mapped URL to get stripped version using the matched token name */
         cjose_jws_t *map_jws =
-          get_jws_from_uri(map_url, map_url_ct, matched_token_name, map_strip_uri, map_strip_size, &map_strip_ct);
+          get_jws_from_uri(map_url, map_url_ct, matched_token_name, map_strip_uri, map_strip_size, &map_strip_ct, NULL);
         if (map_jws) {
           cjose_jws_release(map_jws);
         }
@@ -343,6 +360,9 @@ check_auth:
     checkpoints[cpi++] = mark_timer(&t);
   }
 
+  /* BUG #4 FIX: original_jws_str is now saved by get_jws_from_uri/cookie */
+  PluginDebug("Original JWT string saved for manifest injection (length=%zu)", original_jws_str ? strlen(original_jws_str) : 0);
+
   struct jwt *jwt = validate_jws(jws, (struct config *)ih, strip_uri, strip_ct);
   cjose_jws_release(jws);
 
@@ -390,7 +410,27 @@ check_auth:
   struct signer *signer = config_signer((struct config *)ih);
   /* Use renewal token name for the cookie, or access token name if not configured */
   const char *cookie_token_name = renewal_token_name;
-  char *cookie = renew(jwt, signer->issuer, signer->jwk, signer->alg, cookie_token_name, strip_uri, strip_ct, generated_salt);
+  char *cookie                  = NULL;
+
+  /* BUG #6 FIX (Part 2): Runtime NULL check for defense in depth */
+  if (!signer || !signer->issuer || !signer->jwk || !signer->alg) {
+    PluginError("CRITICAL: Signer not configured for renewal (issuer: %s)", jwt->iss ? jwt->iss : "unknown");
+    /* Do NOT renew, but continue serving (use existing token) */
+  } else {
+    /* BUG #9 FIX: Access tokens always renew to create session token.
+     * Threshold optimization only applies to session tokens. */
+    double current_time  = (double)time(NULL);
+    double time_to_exp   = jwt->exp - current_time;
+    double threshold     = renewal_cfg ? renewal_cfg->renewal_threshold : 0.0;
+    bool is_access_token = (matched_token_name == access_token_name);
+
+    if (should_renew_token(is_access_token, threshold, time_to_exp)) {
+      PluginDebug("Renewing token: is_access=%d, threshold=%.0f, exp in %.0f sec", is_access_token, threshold, time_to_exp);
+      cookie = renew(jwt, signer->issuer, signer->jwk, signer->alg, cookie_token_name, strip_uri, strip_ct, generated_salt);
+    } else {
+      PluginDebug("Skipping renewal: session token still fresh (exp in %.0f sec > threshold %.0f sec)", time_to_exp, threshold);
+    }
+  }
 
   if (generated_salt) {
     free(generated_salt);
@@ -405,64 +445,78 @@ check_auth:
     PluginDebug("Scheduling cookie callback for %.*s", url_ct, url);
     TSCont cont = cont_new(cookie);
     TSHttpTxnHookAdd(txnp, TS_HTTP_SEND_RESPONSE_HDR_HOOK, cont);
+  }
 
-    /* Setup manifest transform if renewal token and manifest injection are enabled */
-    if (renewal_cfg && renewal_cfg->manifest_injection.enabled) {
-      /* CRITICAL: Cache behavior configuration.
-       *
-       * cache_untransformed=true (RECOMMENDED, DEFAULT):
-       *   - ATS caches the clean manifest from origin (shared cache)
-       *   - Transform runs on every request to inject per-user tokens
-       *   - Origin load: ↓99.99%, Cache efficiency: ↑99.99%
-       *   - Edge CPU: ↑10-20% (acceptable trade-off)
-       *
-       * cache_untransformed=false (LEGACY):
-       *   - ATS caches transformed manifest with per-user tokens (cache pollution)
-       *   - One cache entry per unique token = high origin load
-       *   - Only use if edge CPU is critical constraint
-       *
-       * Example with 10,000 concurrent users:
-       *   true:  1 origin request, 1 shared cache entry
-       *   false: 10,000 origin requests, 10,000 cache entries
-       *
-       * See docs/HOOKS_AND_TRANSFORM.md for detailed explanation.
-       */
-      if (renewal_cfg->manifest_injection.cache_untransformed) {
-        TSHttpTxnUntransformedRespCache(txnp, 1);
-        PluginDebug("Cache untransformed enabled: clean manifest will be cached");
-      } else {
-        PluginDebug("Cache untransformed disabled: transformed manifest will be cached (cache pollution warning!)");
-      }
+  /* BUG #4 FIX: Manifest injection decoupled from renewal */
+  /* Works for both renewable and non-renewable tokens */
+  if (renewal_cfg && renewal_cfg->manifest_injection.enabled) {
+    /* CRITICAL: Cache behavior configuration.
+     *
+     * cache_untransformed=true (RECOMMENDED, DEFAULT):
+     *   - ATS caches the clean manifest from origin (shared cache)
+     *   - Transform runs on every request to inject per-user tokens
+     *   - Origin load: ↓99.99%, Cache efficiency: ↑99.99%
+     *   - Edge CPU: ↑10-20% (acceptable trade-off)
+     *
+     * cache_untransformed=false (LEGACY):
+     *   - ATS caches transformed manifest with per-user tokens (cache pollution)
+     *   - One cache entry per unique token = high origin load
+     *   - Only use if edge CPU is critical constraint
+     *
+     * Example with 10,000 concurrent users:
+     *   true:  1 origin request, 1 shared cache entry
+     *   false: 10,000 origin requests, 10,000 cache entries
+     *
+     * See docs/HOOKS_AND_TRANSFORM.md for detailed explanation.
+     */
+    if (renewal_cfg->manifest_injection.cache_untransformed) {
+      TSHttpTxnUntransformedRespCache(txnp, 1);
+      PluginDebug("Cache untransformed enabled: clean manifest will be cached");
+    } else {
+      PluginDebug("Cache untransformed disabled: transformed manifest will be cached (cache pollution warning!)");
+    }
 
-      const char *renewal_token_name = config_get_renewal_token_name((struct config *)ih);
-      if (!renewal_token_name) {
-        renewal_token_name = "cr-session-token"; /* Default */
-      }
+    const char *renewal_token_name = config_get_renewal_token_name((struct config *)ih);
+    if (!renewal_token_name) {
+      renewal_token_name = "cr-session-token"; /* Default */
+    }
 
-      /* Extract just the JWS token from the cookie string */
-      /* Cookie format: "param_name=JWS_TOKEN; Path=/..." */
-      /* Find the '=' and ';' to extract the token */
-      const char *token_start = strchr(cookie, '=');
-      if (token_start) {
-        token_start++; /* Skip the '=' */
-        const char *token_end = strchr(token_start, ';');
-        if (token_end) {
-          size_t token_len = token_end - token_start;
-          char *jws_token  = TSmalloc(token_len + 1);
-          if (jws_token) {
-            memcpy(jws_token, token_start, token_len);
-            jws_token[token_len] = '\0';
+    /* BUG #4 FIX: Priority logic for token selection */
+    char *renewal_jws_token        = NULL;
+    const char *token_for_manifest = NULL;
 
-            setup_manifest_transform(txnp, jws_token, renewal_token_name, access_token_name, &renewal_cfg->manifest_injection);
-            PluginDebug("Manifest transform scheduled for %.*s with token length %zu", url_ct, url, token_len);
-
-            TSfree(jws_token);
-          }
-        }
+    if (cookie) {
+      /* Priority 1: Extract renewal token from Set-Cookie header using helper function */
+      renewal_jws_token = extract_jws_from_set_cookie(cookie);
+      if (renewal_jws_token) {
+        token_for_manifest = renewal_jws_token;
+        PluginDebug("Using renewal token for manifest injection (token length %zu)", strlen(renewal_jws_token));
       }
     }
-  } else {
-    PluginDebug("No cookie scheduled for %.*s", url_ct, url);
+
+    if (!token_for_manifest && original_jws_str) {
+      /* Priority 2: Use original validated token from request */
+      /* This fixes BUG #4: Non-renewable tokens (cdnistt=0) now get manifest injection */
+      token_for_manifest = original_jws_str;
+      PluginDebug("Using original validated token for manifest injection (no renewal, token length %zu)", strlen(original_jws_str));
+    }
+
+    if (token_for_manifest) {
+      setup_manifest_transform(txnp, token_for_manifest, renewal_token_name, access_token_name, &renewal_cfg->manifest_injection);
+      PluginDebug("Manifest transform scheduled for %.*s", url_ct, url);
+    } else {
+      /* This should not happen - we always have either renewal or original token */
+      PluginDebug("WARNING: No token available for manifest injection (this should not happen)");
+    }
+
+    /* Clean up allocated tokens - transform has made its own copy */
+    if (renewal_jws_token) {
+      free(renewal_jws_token); /* From extract_jws_from_set_cookie() - uses malloc */
+    }
+    if (original_jws_str) {
+      TSfree(original_jws_str); /* From get_jws_from_uri/cookie() - uses TSmalloc */
+      original_jws_str = NULL;
+    }
   }
 
   int64_t last_mark = 0;
@@ -486,6 +540,9 @@ fail:
   }
   if (strip_uri != NULL) {
     TSfree(strip_uri);
+  }
+  if (original_jws_str != NULL) {
+    TSfree(original_jws_str);
   }
 
   return TSREMAP_DID_REMAP;

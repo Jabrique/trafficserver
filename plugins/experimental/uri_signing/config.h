@@ -51,6 +51,9 @@ struct manifest_injection_config {
 
 struct renewal_token_config {
   char *token_name;
+  double renewal_threshold; /* Minimum seconds before exp to issue renewal token.
+                             * If (exp - now) < renewal_threshold, renew token.
+                             * Default: 0.0 (always renew if cdnistt=1) */
   struct salt_config salt;
   struct manifest_injection_config manifest_injection;
 };
@@ -67,3 +70,6 @@ bool config_strip_token(struct config *cfg);
 const char *config_get_token_name(struct config *cfg);
 struct renewal_token_config *config_get_renewal_token(struct config *cfg);
 const char *config_get_renewal_token_name(struct config *cfg);
+
+/* Renewal decision: access tokens always renew, session tokens respect threshold */
+bool should_renew_token(bool is_access_token, double threshold, double time_to_exp);

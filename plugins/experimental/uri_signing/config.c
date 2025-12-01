@@ -123,6 +123,23 @@ config_get_renewal_token_name(struct config *cfg)
   return cfg->renewal_token->token_name;
 }
 
+bool
+should_renew_token(bool is_access_token, double threshold, double time_to_exp)
+{
+  /* Access tokens always renew — first contact must create a session token */
+  if (is_access_token) {
+    return true;
+  }
+
+  /* Session token: threshold=0.0 means "always renew" (backward compatible) */
+  if (threshold <= 0.0) {
+    return true;
+  }
+
+  /* Session token: only renew when approaching expiry */
+  return time_to_exp <= threshold;
+}
+
 struct config *
 config_new(size_t n)
 {
@@ -400,6 +417,7 @@ read_config_from_json(json_t *const issuer_json)
 
       /* Initialize with defaults */
       cfg->renewal_token->token_name                                 = NULL;
+      cfg->renewal_token->renewal_threshold                          = 0.0; /* Default: always renew if cdnistt=1 */
       cfg->renewal_token->salt.enabled                               = false;
       cfg->renewal_token->salt.bind_session_id                       = true; /* Default: bind session ID */
       cfg->renewal_token->salt.bind_user_agent                       = false;
@@ -424,6 +442,22 @@ read_config_from_json(json_t *const issuer_json)
             cfg->renewal_token = NULL;
             goto cfg_fail;
           }
+        }
+      }
+
+      /* Parse renewal threshold */
+      json_t *rt_threshold_json = json_object_get(renewal_token_json, "renewal_threshold");
+      if (rt_threshold_json) {
+        if (json_is_number(rt_threshold_json)) {
+          double threshold = json_number_value(rt_threshold_json);
+          if (threshold >= 0.0) {
+            cfg->renewal_token->renewal_threshold = threshold;
+            PluginDebug("Renewal threshold: %.2f seconds", threshold);
+          } else {
+            PluginError("Invalid renewal_threshold: %.2f (must be >= 0.0), using default 0.0", threshold);
+          }
+        } else {
+          PluginError("renewal_threshold must be a number, using default 0.0");
         }
       }
 
@@ -564,8 +598,9 @@ read_config_from_json(json_t *const issuer_json)
     *jwks = NULL;
     ++issuer;
   }
-  if (!cfg->signer.issuer) {
-    PluginError("Cannot load remap without signing key.");
+  /* Only require signer if renewal_token is configured */
+  if (cfg->renewal_token && !cfg->signer.issuer) {
+    PluginError("Cannot load remap with renewal_token configured but no signing key (renewal_kid not found).");
     goto cfg_fail;
   }
 

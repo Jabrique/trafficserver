@@ -673,3 +673,103 @@ ps9c.ReturnCode = 0
 ps9c.Streams.stderr = Testers.ContainsExpression("< HTTP/1.1 403", "renewal token with wrong salt should return 403")
 tr9c.StillRunningAfter = server
 tr9c.StillRunningAfter = ts9
+
+# ==============================================================================
+# BUG #4 Integration Tests - Non-renewable token manifest injection
+# ==============================================================================
+
+# ==============================================================================
+# Test 10: Non-renewable token (cdnistt=0) with manifest injection
+# BUG #4 FIX: Manifest injection should work even when renewal is skipped
+# ==============================================================================
+
+ts10 = Test.MakeATSProcess("ts10", enable_cache=False)
+ts10.Disk.records_config.update({
+    'proxy.config.diags.debug.enabled': 1,
+    'proxy.config.diags.debug.tags': 'uri_signing|transform',
+})
+
+config10 = create_config("bug4_nonrenewable",
+    salt_config={"enabled": False},
+    manifest_config={
+        "enabled": True,
+        "inject_to_segments": True,
+        "inject_to_init_segments": False,
+        "replace_access_token": False,
+        "hls_support": True,
+        "dash_support": False,
+        "cache_untransformed": True
+    }
+)
+
+ts10.Disk.remap_config.AddLine(
+    f'map http://videohost10/ http://127.0.0.1:{server.Variables.Port}/' +
+    f' @plugin=uri_signing.so @pparam={config10}'
+)
+
+# BUG #4: Non-renewable token (cdnistt=0)
+# Before fix: Manifest injection would be skipped (no renewal = no token for injection)
+# After fix: Uses original validated token for manifest injection
+token_nonrenewable = "eyJhbGciOiJIUzI1NiIsImtpZCI6InByaW1hcnkta2V5LTIwMjQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJpc3N1ZXIiLCJleHAiOjE3OTU3NDIzMjEsImNkbmlzdHQiOjAsImNkbmlldHMiOjM2MDB9.tm3GrchWfO_cfzgz8OWicbKG-OpK4NrBirr1QjhoxJ4"
+
+tr10 = Test.AddTestRun("Test 10 (BUG #4): Non-renewable token with manifest injection")
+ps10 = tr10.Processes.Default
+ps10.StartBefore(ts10)
+ps10.Command = f'curl -s -v -x localhost:{ts10.Variables.port} "http://videohost10/video/init.m3u8?cr-access-token={token_nonrenewable}"'
+ps10.ReturnCode = 0
+ps10.Streams.stderr = Testers.ContainsExpression("< HTTP/1.1 200", "non-renewable token should return 200 OK")
+# BUG #4 FIX: Manifest injection should work using ORIGINAL validated token
+ps10.Streams.stdout = Testers.ContainsExpression("segment0.ts\\?cr-session-token=", "BUG #4: segments should have token injected (using original token)")
+ps10.Streams.stdout += Testers.ContainsExpression("segment1.ts\\?cr-session-token=", "BUG #4: all segments should have tokens")
+# Non-renewable token should NOT set renewal cookie (cdnistt=0)
+ps10.Streams.stderr += Testers.ExcludesExpression("< Set-Cookie: cr-session-token=", "non-renewable token should NOT set renewal cookie")
+tr10.StillRunningAfter = server
+tr10.StillRunningAfter = ts10
+
+# ==============================================================================
+# Test 11: Renewal skipped (cdniets=0) with manifest injection
+# BUG #4 FIX: Manifest injection should use original token when renewal skipped
+# ==============================================================================
+
+ts11 = Test.MakeATSProcess("ts11", enable_cache=False)
+ts11.Disk.records_config.update({
+    'proxy.config.diags.debug.enabled': 1,
+    'proxy.config.diags.debug.tags': 'uri_signing|transform',
+})
+
+config11 = create_config("bug4_skip_renewal",
+    salt_config={"enabled": False},
+    manifest_config={
+        "enabled": True,
+        "inject_to_segments": True,
+        "inject_to_init_segments": True,
+        "replace_access_token": False,
+        "hls_support": True,
+        "dash_support": False,
+        "cache_untransformed": True
+    }
+)
+
+ts11.Disk.remap_config.AddLine(
+    f'map http://videohost11/ http://127.0.0.1:{server.Variables.Port}/' +
+    f' @plugin=uri_signing.so @pparam={config11}'
+)
+
+# BUG #4: Token with cdniets=0 (renewal expires immediately = skip renewal)
+# Before fix: No renewal cookie = no manifest injection
+# After fix: Uses original validated token for manifest injection
+token_skip_renewal = "eyJhbGciOiJIUzI1NiIsImtpZCI6InByaW1hcnkta2V5LTIwMjQiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJpc3N1ZXIiLCJleHAiOjE3OTU3NDIzMjEsImNkbmlzdHQiOjEsImNkbmlldHMiOjB9.S1Wod8GHb5wMGwS2XySaxN_ey8NWP3zs_vm4LnwvYS8"
+
+tr11 = Test.AddTestRun("Test 11 (BUG #4): Renewal skipped (cdniets=0) with manifest injection")
+ps11 = tr11.Processes.Default
+ps11.StartBefore(ts11)
+ps11.Command = f'curl -s -v -x localhost:{ts11.Variables.port} "http://videohost11/video/init.m3u8?cr-access-token={token_skip_renewal}"'
+ps11.ReturnCode = 0
+ps11.Streams.stderr = Testers.ContainsExpression("< HTTP/1.1 200", "token with cdniets=0 should return 200 OK")
+# BUG #4 FIX: Manifest injection should work even when cdniets=0 (renewal skipped)
+ps11.Streams.stdout = Testers.ContainsExpression("segment0.ts\\?cr-session-token=", "BUG #4: segments should have token (using original, not renewal)")
+ps11.Streams.stdout += Testers.ContainsExpression('URI="init.mp4\\?cr-session-token=', "BUG #4: init segment should also have token")
+# cdniets=0 means no renewal cookie (renewal expires immediately)
+ps11.Streams.stderr += Testers.ExcludesExpression("< Set-Cookie: cr-session-token=", "cdniets=0 should NOT set renewal cookie")
+tr11.StillRunningAfter = server
+tr11.StillRunningAfter = ts11

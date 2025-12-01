@@ -117,6 +117,15 @@ jwt_validate(struct jwt *jwt)
     return false;
   }
 
+  /* BUG #8 FIX: Validate exp claim is finite and positive
+   * SECURITY: Reject NaN (missing exp), Infinity, negative, zero
+   * IMPACT: Prevents authentication bypass via malformed tokens
+   */
+  if (!isfinite(jwt->exp) || jwt->exp <= 0.0) {
+    PluginDebug("Initial JWT Failure: invalid exp claim (exp=%f)", jwt->exp);
+    return false;
+  }
+
   if (now() > jwt->exp) {
     PluginDebug("Initial JWT Failure: expired token");
     return false;
@@ -149,6 +158,12 @@ jwt_validate(struct jwt *jwt)
 
   if (jwt->cdnistd < 0) {
     PluginDebug("Initial JWT Failure: unsupported value for cdnistd: %d", jwt->cdnistd);
+    return false;
+  }
+
+  /* BUG #5 FIX: Validate cdniets is non-negative to prevent DoS attack */
+  if (jwt->cdniets < 0) {
+    PluginDebug("Initial JWT Failure: negative cdniets: %d", jwt->cdniets);
     return false;
   }
 

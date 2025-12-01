@@ -28,7 +28,8 @@
 #include <inttypes.h>
 
 cjose_jws_t *
-get_jws_from_uri(const char *uri, size_t uri_ct, const char *paramName, char *strip_uri, size_t buff_ct, size_t *strip_ct)
+get_jws_from_uri(const char *uri, size_t uri_ct, const char *paramName, char *strip_uri, size_t buff_ct, size_t *strip_ct,
+                 char **original_jwt)
 {
   /* Reserved characters as defined by the URI Generic Syntax RFC: https://tools.ietf.org/html/rfc3986#section-2.2 */
   static char const *const reserved_string  = ":/?#[]@!$&\'()*+,;=";
@@ -90,9 +91,26 @@ get_jws_from_uri(const char *uri, size_t uri_ct, const char *paramName, char *st
       PluginDebug("Decoding JWS: %.*s", (int)(key_end - key), key);
       cjose_err err;
       memset(&err, 0, sizeof(cjose_err));
+
+      /* BUG #4 FIX: Save original JWT string for manifest injection before parsing */
+      if (original_jwt) {
+        size_t jwt_len = (size_t)(value_end - value);
+        *original_jwt  = (char *)TSmalloc(jwt_len + 1);
+        if (*original_jwt) {
+          memcpy(*original_jwt, value, jwt_len);
+          (*original_jwt)[jwt_len] = '\0';
+          PluginDebug("Saved original JWT string (length=%zu)", jwt_len);
+        }
+      }
+
       cjose_jws_t *jws = cjose_jws_import(value, (size_t)(value_end - value), &err);
       if (!jws) {
         PluginDebug("Unable to read JWS: %.*s, %s", (int)(key_end - key), key, err.message ? err.message : "");
+        /* Clean up saved JWT if parsing failed */
+        if (original_jwt && *original_jwt) {
+          TSfree(*original_jwt);
+          *original_jwt = NULL;
+        }
       } else {
         PluginDebug("Parsed JWS: %.*s (%16p)", (int)(key_end - key), key, jws);
 
@@ -101,6 +119,12 @@ get_jws_from_uri(const char *uri, size_t uri_ct, const char *paramName, char *st
         *strip_ct = ((key - uri) + (end - value_end));
         if (buff_ct <= *strip_ct) {
           PluginDebug("Strip URI buffer is not large enough");
+          /* Clean up allocated JWT string on error */
+          if (original_jwt && *original_jwt) {
+            TSfree(*original_jwt);
+            *original_jwt = NULL;
+          }
+          cjose_jws_release(jws);
           return NULL;
         }
 
@@ -127,7 +151,7 @@ get_jws_from_uri(const char *uri, size_t uri_ct, const char *paramName, char *st
 }
 
 cjose_jws_t *
-get_jws_from_cookie(const char **cookie, size_t *cookie_ct, const char *paramName)
+get_jws_from_cookie(const char **cookie, size_t *cookie_ct, const char *paramName, char **original_jwt)
 {
   PluginDebug("Parsing JWS from cookie: %.*s", (int)*cookie_ct, *cookie);
   size_t value_ct;
@@ -136,11 +160,27 @@ get_jws_from_cookie(const char **cookie, size_t *cookie_ct, const char *paramNam
   if (!value || !value_ct) {
     return NULL;
   }
+
+  /* BUG #4 FIX: Save original JWT string for manifest injection before parsing */
+  if (original_jwt) {
+    *original_jwt = (char *)TSmalloc(value_ct + 1);
+    if (*original_jwt) {
+      memcpy(*original_jwt, value, value_ct);
+      (*original_jwt)[value_ct] = '\0';
+      PluginDebug("Saved original JWT string from cookie (length=%zu)", value_ct);
+    }
+  }
+
   cjose_err err;
   memset(&err, 0, sizeof(cjose_err));
   cjose_jws_t *jws = cjose_jws_import(value, value_ct, &err);
   if (!jws) {
     PluginDebug("Unable to read JWS: %.*s, %s", (int)value_ct, value, err.message ? err.message : "");
+    /* Clean up saved JWT if parsing failed */
+    if (original_jwt && *original_jwt) {
+      TSfree(*original_jwt);
+      *original_jwt = NULL;
+    }
   } else {
     PluginDebug("Parsed JWS: %.*s (%16p)", (int)value_ct, value, jws);
   }

@@ -26,6 +26,17 @@ typedef enum { MANIFEST_TYPE_UNKNOWN = 0, MANIFEST_TYPE_HLS_M3U8, MANIFEST_TYPE_
 struct manifest_injection_config;
 
 /**
+ * Extract JWS token from Set-Cookie header.
+ *
+ * BUG #4 FIX: Helper function to extract token from Set-Cookie format.
+ * Format: "param_name=JWS_TOKEN; Path=/; HttpOnly"
+ *
+ * @param set_cookie_header Full Set-Cookie header value
+ * @return Allocated JWS token string (caller must free()), or NULL on error
+ */
+char *extract_jws_from_set_cookie(const char *set_cookie_header);
+
+/**
  * Detect manifest type from URI and Content-Type.
  *
  * @param uri Request URI
