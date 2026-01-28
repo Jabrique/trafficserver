@@ -46,13 +46,15 @@ namespace
 {
 GlobalPlugin *plugin;
 
-enum class ImageEncoding { webp, jpeg, png, unknown };
+enum class ImageEncoding { webp, jpeg, png, avif, unknown };
 
 bool config_convert_to_webp = false;
 bool config_convert_to_jpeg = false;
+bool config_convert_to_avif = false;
 
 Stat stat_convert_to_webp;
 Stat stat_convert_to_jpeg;
+Stat stat_convert_to_avif;
 } // namespace
 
 class ImageTransform : public TransformationPlugin
@@ -72,6 +74,9 @@ public:
     switch (_transform_image_type) {
     case ImageEncoding::webp:
       transaction.getServerResponse().getHeaders()["Content-Type"] = "image/webp";
+      break;
+    case ImageEncoding::avif:
+      transaction.getServerResponse().getHeaders()["Content-Type"] = "image/avif";
       break;
     case ImageEncoding::jpeg:
       transaction.getServerResponse().getHeaders()["Content-Type"] = "image/jpeg";
@@ -111,6 +116,10 @@ public:
         stat_convert_to_webp.increment(1);
         TSDebug(TAG, "Transforming jpeg or png to webp");
         image.magick("WEBP");
+      } else if (_transform_image_type == ImageEncoding::avif) {
+        stat_convert_to_avif.increment(1);
+        TSDebug(TAG, "Transforming to AVIF");
+        image.magick("AVIF");
       } else {
         stat_convert_to_jpeg.increment(1);
         TSDebug(TAG, "Transforming webp to jpeg");
@@ -154,43 +163,55 @@ public:
 
     std::string ctype = transaction.getServerResponse().getHeaders().values("Content-Type");
 
-    // Test to if in this transaction we might want to convert jpeg or png to webp
-    bool transaction_convert_to_webp = false;
-    if (config_convert_to_webp == true) {
-      if (ctype.find("image/jpeg") != std::string::npos) {
-        input_image_type            = ImageEncoding::jpeg;
-        transaction_convert_to_webp = true;
-      }
-      if (ctype.find("image/png") != std::string::npos) {
-        input_image_type            = ImageEncoding::png;
-        transaction_convert_to_webp = true;
-      }
+    bool input_is_jpeg = ctype.find("image/jpeg") != std::string::npos;
+    bool input_is_png  = ctype.find("image/png") != std::string::npos;
+    bool input_is_webp = ctype.find("image/webp") != std::string::npos;
+    bool input_is_avif = ctype.find("image/avif") != std::string::npos;
+
+    if (input_is_jpeg) {
+      input_image_type = ImageEncoding::jpeg;
+    } else if (input_is_png) {
+      input_image_type = ImageEncoding::png;
+    } else if (input_is_webp) {
+      input_image_type = ImageEncoding::webp;
+    } else if (input_is_avif) {
+      input_image_type = ImageEncoding::avif;
     }
 
-    // Test to if in this transaction we might want to convert webp to jpeg
-    bool transaction_convert_to_jpeg = false;
-    if (config_convert_to_jpeg == true && transaction_convert_to_webp == false) {
-      transaction_convert_to_jpeg = ctype.find("image/webp") != std::string::npos;
-      if (transaction_convert_to_jpeg) {
-        input_image_type = ImageEncoding::webp;
-      }
-    }
+    TSDebug(TAG, "Content-Type: %s input_image_type: %d", ctype.c_str(), (int)input_image_type);
 
-    TSDebug(TAG, "User-Agent: %s transaction_convert_to_webp: %d transaction_convert_to_jpeg: %d", ctype.c_str(),
-            transaction_convert_to_webp, transaction_convert_to_jpeg);
-
-    // If we might need to convert check to see if what the browser supports
-    if (transaction_convert_to_webp == true || transaction_convert_to_jpeg == true) {
+    if (input_image_type != ImageEncoding::unknown) {
       std::string accept  = transaction.getServerRequest().getHeaders().values("Accept");
+      bool avif_supported = accept.find("image/avif") != std::string::npos;
       bool webp_supported = accept.find("image/webp") != std::string::npos;
-      TSDebug(TAG, "Accept: %s webp_suppported: %d", accept.c_str(), webp_supported);
 
-      if (webp_supported == true && transaction_convert_to_webp == true) {
-        TSDebug(TAG, "Content type is either jpeg or png. Converting to webp");
-        transaction.addPlugin(new ImageTransform(transaction, input_image_type, ImageEncoding::webp));
-      } else if (webp_supported == false && transaction_convert_to_jpeg == true) {
-        TSDebug(TAG, "Content type is webp. Converting to jpeg");
-        transaction.addPlugin(new ImageTransform(transaction, input_image_type, ImageEncoding::jpeg));
+      TSDebug(TAG, "Accept: %s avif: %d webp: %d", accept.c_str(), avif_supported, webp_supported);
+
+      ImageEncoding target_type = ImageEncoding::unknown;
+
+      // Logic Matrix: Determine Target Format based on Support and Config
+      if (config_convert_to_avif && avif_supported) {
+        // Upgrade to AVIF if input is not already AVIF
+        if (input_image_type != ImageEncoding::avif) {
+          target_type = ImageEncoding::avif;
+        }
+      } else if (config_convert_to_webp && webp_supported) {
+        // Fallback/Upgrade to WebP if AVIF is not an option
+        // Prevent degrading AVIF to WebP unless necessary (e.g. browser doesn't support AVIF)
+        if (input_image_type != ImageEncoding::webp) {
+          target_type = ImageEncoding::webp;
+        }
+      } else if (config_convert_to_jpeg) {
+        // Ultimate Fallback to JPEG for legacy browsers
+        // Only if input is modern (WebP/AVIF) and browser supports neither
+        if (input_image_type == ImageEncoding::webp || input_image_type == ImageEncoding::avif) {
+          target_type = ImageEncoding::jpeg;
+        }
+      }
+
+      if (target_type != ImageEncoding::unknown) {
+        TSDebug(TAG, "Transcoding from type %d to %d", (int)input_image_type, (int)target_type);
+        transaction.addPlugin(new ImageTransform(transaction, input_image_type, target_type));
       } else {
         TSDebug(TAG, "Nothing to convert");
       }
@@ -208,27 +229,36 @@ TSPluginInit(int argc, const char *argv[])
   }
 
   if (argc >= 2) {
-    std::string option(argv[1]);
-    if (option.find("convert_to_webp") != std::string::npos) {
-      TSDebug(TAG, "Configured to convert to webp");
-      config_convert_to_webp = true;
+    for (int i = 1; i < argc; ++i) {
+      std::string option(argv[i]);
+      if (option.find("convert_to_webp") != std::string::npos) {
+        TSDebug(TAG, "Configured to convert to webp");
+        config_convert_to_webp = true;
+      }
+      if (option.find("convert_to_jpeg") != std::string::npos) {
+        TSDebug(TAG, "Configured to convert to jpeg");
+        config_convert_to_jpeg = true;
+      }
+      if (option.find("convert_to_avif") != std::string::npos) {
+        TSDebug(TAG, "Configured to convert to avif");
+        config_convert_to_avif = true;
+      }
     }
-    if (option.find("convert_to_jpeg") != std::string::npos) {
-      TSDebug(TAG, "Configured to convert to jpeg");
-      config_convert_to_jpeg = true;
-    }
-    if (config_convert_to_webp == false && config_convert_to_jpeg == false) {
-      TSDebug(TAG, "Unknown option: %s", option.c_str());
-      TSError("Unknown option: %s", option.c_str());
+
+    if (config_convert_to_webp == false && config_convert_to_jpeg == false && config_convert_to_avif == false) {
+      TSDebug(TAG, "Unknown option: %s", argv[1]);
+      TSError("Unknown option: %s", argv[1]);
     }
   } else {
-    TSDebug(TAG, "Default configuration is to convert both webp and jpeg");
+    TSDebug(TAG, "Default configuration is to convert webp, jpeg and avif");
     config_convert_to_webp = true;
     config_convert_to_jpeg = true;
+    config_convert_to_avif = true;
   }
 
   stat_convert_to_webp.init("plugin." TAG ".convert_to_webp", Stat::SYNC_SUM, false);
   stat_convert_to_jpeg.init("plugin." TAG ".convert_to_jpeg", Stat::SYNC_SUM, false);
+  stat_convert_to_avif.init("plugin." TAG ".convert_to_avif", Stat::SYNC_SUM, false);
 
   InitializeMagick("");
   plugin = new GlobalHookPlugin();
