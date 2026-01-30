@@ -48,9 +48,17 @@ GlobalPlugin *plugin;
 
 enum class ImageEncoding { webp, jpeg, png, avif, unknown };
 
+const int DEFAULT_WEBP_QUALITY = 75;
+const int DEFAULT_JPEG_QUALITY = 85;
+const int DEFAULT_AVIF_QUALITY = 50;
+
 bool config_convert_to_webp = false;
 bool config_convert_to_jpeg = false;
 bool config_convert_to_avif = false;
+
+int config_webp_quality = DEFAULT_WEBP_QUALITY;
+int config_jpeg_quality = DEFAULT_JPEG_QUALITY;
+int config_avif_quality = DEFAULT_AVIF_QUALITY;
 
 Stat stat_convert_to_webp;
 Stat stat_convert_to_jpeg;
@@ -115,14 +123,17 @@ public:
       if (_transform_image_type == ImageEncoding::webp) {
         stat_convert_to_webp.increment(1);
         TSDebug(TAG, "Transforming jpeg or png to webp");
+        image.quality(config_webp_quality);
         image.magick("WEBP");
       } else if (_transform_image_type == ImageEncoding::avif) {
         stat_convert_to_avif.increment(1);
         TSDebug(TAG, "Transforming to AVIF");
+        image.quality(config_avif_quality);
         image.magick("AVIF");
       } else {
         stat_convert_to_jpeg.increment(1);
         TSDebug(TAG, "Transforming webp to jpeg");
+        image.quality(config_jpeg_quality);
         image.magick("JPEG");
       }
       image.write(&output_blob);
@@ -234,14 +245,32 @@ TSPluginInit(int argc, const char *argv[])
       if (option.find("convert_to_webp") != std::string::npos) {
         TSDebug(TAG, "Configured to convert to webp");
         config_convert_to_webp = true;
-      }
-      if (option.find("convert_to_jpeg") != std::string::npos) {
+      } else if (option.find("convert_to_jpeg") != std::string::npos) {
         TSDebug(TAG, "Configured to convert to jpeg");
         config_convert_to_jpeg = true;
-      }
-      if (option.find("convert_to_avif") != std::string::npos) {
+      } else if (option.find("convert_to_avif") != std::string::npos) {
         TSDebug(TAG, "Configured to convert to avif");
         config_convert_to_avif = true;
+      } else if (option.find("webp_quality=") != std::string::npos) {
+        int val = std::stoi(option.substr(option.find("=") + 1));
+        if (val > 0 && val <= 100) {
+          config_webp_quality = val;
+          TSDebug(TAG, "Configured webp_quality to %d", val);
+        }
+      } else if (option.find("jpeg_quality=") != std::string::npos) {
+        int val = std::stoi(option.substr(option.find("=") + 1));
+        if (val > 0 && val <= 100) {
+          config_jpeg_quality = val;
+          TSDebug(TAG, "Configured jpeg_quality to %d", val);
+        }
+      } else if (option.find("avif_quality=") != std::string::npos) {
+        int val = std::stoi(option.substr(option.find("=") + 1));
+        if (val > 0 && val <= 100) {
+          config_avif_quality = val;
+          TSDebug(TAG, "Configured avif_quality to %d", val);
+        }
+      } else {
+        TSDebug(TAG, "Unknown option: %s", option.c_str());
       }
     }
 

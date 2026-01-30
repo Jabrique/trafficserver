@@ -10,7 +10,9 @@ Benchmark webp_transform plugin compression for multiple formats
 Test.SkipUnless(Condition.PluginExists('webp_transform.so'),)
 
 ts = Test.MakeATSProcess("ts")
-ts.Disk.plugin_config.AddLine('webp_transform.so convert_to_avif convert_to_webp')
+# Aktifkan semua konversi dengan explicit defaults
+ts.Disk.plugin_config.AddLine(
+    'webp_transform.so convert_to_avif convert_to_webp convert_to_jpeg avif_quality=50 webp_quality=75 jpeg_quality=85')
 ts.Disk.records_config.update(
     {
         'proxy.config.diags.debug.enabled': 1,
@@ -65,12 +67,8 @@ tr.Processes.Default.Command = 'curl -v -o out_logo.avif --header "Host: www.exa
     ts.Variables.port)
 tr.Processes.Default.ReturnCode = 0
 
-# 4. Compare Sizes (Removed automated ls check to ensure clean pass, results verified manually)
-
-# tr = Test.AddTestRun("Compare Sizes")
-
-# tr.Processes.Default.Command = 'ls -l out.png out.webp out.avif'
-
-# tr.Processes.Default.ReturnCode = 0
-
-# tr.Processes.Default.Streams.stdout = Testers.ContainsExpression("out", "List output files")
+# --- COMPARE RESULTS ---
+tr = Test.AddTestRun("Compare Sizes Report")
+tr.Processes.Default.Command = 'echo "--- REPORT ---" && ls -lh out_fractal.* out_logo.*'
+tr.Processes.Default.ReturnCode = 0
+tr.Processes.Default.Streams.stdout = Testers.ContainsExpression("out", "List output files")

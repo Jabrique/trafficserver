@@ -8,10 +8,19 @@ This plugin serves as a Universal Image Transcoder, automatically converting ima
 2.  **Modernization:** Automatically upgrades legacy WebP content to AVIF.
 3.  **Compatibility:** Automatically downgrades modern AVIF content to WebP or JPEG for older browsers.
 
-**Internal Benchmark Results:**
+### Internal Benchmark Results
+
+**Scenario 1: Complex Fractal Image (120KB JPEG)**
 - **Original JPEG:** 120 KB
 - **WebP:** 74 KB (~38% savings)
 - **AVIF:** 15 KB (~87% savings)
+
+**Scenario 2: Traffic Control Logo (115KB PNG)**
+- **Original PNG:** 115 KB
+- **WebP:** 64 KB (~44% savings)
+- **AVIF:** 27 KB (~76% savings)
+
+*Note: Results achieved using default plugin quality settings (WebP=75, AVIF=50).*
 
 ## System Prerequisites
 
@@ -41,11 +50,14 @@ webp_transform.so convert_to_avif convert_to_webp convert_to_jpeg
 
 ### Configuration Arguments
 
-| Argument | Description |
-| :--- | :--- |
-| `convert_to_avif` | Enables upgrade to AVIF (Best Compression). |
-| `convert_to_webp` | Enables upgrade/fallback to WebP (Good Compression). |
-| `convert_to_jpeg` | Enables fallback to JPEG (Legacy Compatibility). |
+| Argument | Description | Default |
+| :--- | :--- | :--- |
+| `convert_to_avif` | Enables upgrade to AVIF. | On |
+| `convert_to_webp` | Enables upgrade/fallback to WebP. | On |
+| `convert_to_jpeg` | Enables fallback to JPEG. | On |
+| `avif_quality=N` | Set AVIF quality (1-100). | 50 |
+| `webp_quality=N` | Set WebP quality (1-100). | 75 |
+| `jpeg_quality=N` | Set JPEG quality (1-100). | 85 |
 
 ## How It Works
 
@@ -78,6 +90,7 @@ The tests are located in `tests/gold_tests/pluginTest/webp_transform/`.
 - `webp_transform_avif.test.py`: Verifies basic JPEG to AVIF conversion.
 - `webp_transform_advanced.test.py`: Verifies complex transcoding logic (WebP->AVIF, AVIF->WebP, Fallbacks).
 - `webp_transform_benchmark.test.py`: Performs real transcoding on sample images and verifies file size reduction.
+- `webp_transform_quality.test.py`: Verifies quality configuration settings.
 
 ### How to Run Tests
 From the root of the Traffic Server repository:
