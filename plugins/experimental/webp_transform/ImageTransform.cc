@@ -50,19 +50,21 @@ using namespace atscppapi;
 namespace
 {
 enum class ImageEncoding { webp, jpeg, png, avif, unknown };
+enum class MetadataMode { none, icc, all };
 
 const int DEFAULT_WEBP_QUALITY = 75;
 const int DEFAULT_JPEG_QUALITY = 85;
 const int DEFAULT_AVIF_QUALITY = 50;
 
 struct PluginConfig {
-  bool convert_to_webp = true; // Default to TRUE
-  bool convert_to_jpeg = true; // Default to TRUE
-  bool convert_to_avif = true; // Default to TRUE
-  bool progressive     = false;
-  int webp_quality     = DEFAULT_WEBP_QUALITY;
-  int jpeg_quality     = DEFAULT_JPEG_QUALITY;
-  int avif_quality     = DEFAULT_AVIF_QUALITY;
+  bool convert_to_webp  = true; // Default to TRUE for global/legacy behavior
+  bool convert_to_jpeg  = true; // Default to TRUE
+  bool convert_to_avif  = true; // Default to TRUE
+  bool progressive      = false;
+  int webp_quality      = DEFAULT_WEBP_QUALITY;
+  int jpeg_quality      = DEFAULT_JPEG_QUALITY;
+  int avif_quality      = DEFAULT_AVIF_QUALITY;
+  MetadataMode metadata = MetadataMode::all;
 };
 
 Stat stat_convert_to_webp;
@@ -92,6 +94,15 @@ parse_config(int argc, const char *argv[], PluginConfig &config)
       } else if (option.find("progressive") != std::string::npos) {
         TSDebug(TAG, "Configured to use progressive rendering");
         config.progressive = true;
+      } else if (option.find("metadata=none") != std::string::npos) {
+        config.metadata = MetadataMode::none;
+        TSDebug(TAG, "Configured metadata mode: none");
+      } else if (option.find("metadata=icc") != std::string::npos) {
+        config.metadata = MetadataMode::icc;
+        TSDebug(TAG, "Configured metadata mode: icc");
+      } else if (option.find("metadata=all") != std::string::npos) {
+        config.metadata = MetadataMode::all;
+        TSDebug(TAG, "Configured metadata mode: all");
       } else if (option.find("webp_quality=") != std::string::npos) {
         int val = std::stoi(option.substr(option.find("=") + 1));
         if (val > 0 && val <= 100) {
@@ -116,8 +127,8 @@ parse_config(int argc, const char *argv[], PluginConfig &config)
     }
   }
 
-  TSDebug(TAG, "Configuration: WebP=%d JPEG=%d AVIF=%d Progressive=%d", config.convert_to_webp, config.convert_to_jpeg,
-          config.convert_to_avif, config.progressive);
+  TSDebug(TAG, "Configuration: WebP=%d JPEG=%d AVIF=%d Progressive=%d Metadata=%d", config.convert_to_webp, config.convert_to_jpeg,
+          config.convert_to_avif, config.progressive, (int)config.metadata);
 }
 } // namespace
 
@@ -149,6 +160,25 @@ public:
     try {
       image.read(input_blob);
 
+      // Handle Metadata Stripping
+      if (_config.metadata != MetadataMode::all) {
+        Blob icc_profile;
+
+        // 1. Backup ICC profile if needed
+        if (_config.metadata == MetadataMode::icc) {
+          icc_profile = image.iccColorProfile();
+        }
+
+        // 2. Strip everything (EXIF, XMP, IPTC, etc.)
+        image.strip();
+
+        // 3. Restore ICC profile
+        if (icc_profile.length() > 0) {
+          image.iccColorProfile(icc_profile);
+        }
+      }
+
+      // Handle Interlacing
       if (_config.progressive) {
         image.interlaceType(Magick::PlaneInterlace);
       }
@@ -241,6 +271,9 @@ public:
       if (target_type == ImageEncoding::unknown && input_image_type != ImageEncoding::unknown) {
         if (_config.progressive && input_image_type == ImageEncoding::jpeg) {
           target_type = ImageEncoding::jpeg;
+        } else if (_config.metadata != MetadataMode::all) {
+          // If metadata stripping is requested, re-encode to apply it
+          target_type = input_image_type;
         }
       }
 
