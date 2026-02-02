@@ -58,6 +58,7 @@ struct PluginConfig {
   bool convert_to_webp = false;
   bool convert_to_jpeg = false;
   bool convert_to_avif = false;
+  bool progressive     = false;
   int webp_quality     = DEFAULT_WEBP_QUALITY;
   int jpeg_quality     = DEFAULT_JPEG_QUALITY;
   int avif_quality     = DEFAULT_AVIF_QUALITY;
@@ -82,6 +83,9 @@ parse_config(int argc, const char *argv[], PluginConfig &config)
       } else if (option.find("convert_to_avif") != std::string::npos) {
         TSDebug(TAG, "Configured to convert to avif");
         config.convert_to_avif = true;
+      } else if (option.find("progressive") != std::string::npos) {
+        TSDebug(TAG, "Configured to use progressive rendering");
+        config.progressive = true;
       } else if (option.find("webp_quality=") != std::string::npos) {
         int val = std::stoi(option.substr(option.find("=") + 1));
         if (val > 0 && val <= 100) {
@@ -169,10 +173,14 @@ public:
     try {
       image.read(input_blob);
 
+      if (_config.progressive) {
+        image.interlaceType(Magick::PlaneInterlace);
+      }
+
       Blob output_blob;
       if (_transform_image_type == ImageEncoding::webp) {
         stat_convert_to_webp.increment(1);
-        TSDebug(TAG, "Transforming jpeg or png to webp");
+        TSDebug(TAG, "Transforming to webp");
         image.quality(_config.webp_quality);
         image.magick("WEBP");
       } else if (_transform_image_type == ImageEncoding::avif) {
@@ -182,7 +190,7 @@ public:
         image.magick("AVIF");
       } else {
         stat_convert_to_jpeg.increment(1);
-        TSDebug(TAG, "Transforming webp to jpeg");
+        TSDebug(TAG, "Transforming to jpeg");
         image.quality(_config.jpeg_quality);
         image.magick("JPEG");
       }
@@ -267,6 +275,11 @@ public:
         if (input_image_type == ImageEncoding::webp || input_image_type == ImageEncoding::avif) {
           target_type = ImageEncoding::jpeg;
         }
+      }
+
+      // Special Case: Force transformation if progressive is enabled, even if formats match
+      if (target_type == ImageEncoding::unknown && _config.progressive && input_image_type == ImageEncoding::jpeg) {
+        target_type = ImageEncoding::jpeg;
       }
 
       if (target_type != ImageEncoding::unknown) {
