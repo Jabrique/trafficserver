@@ -21,6 +21,7 @@
 #include <string_view>
 #include <string>
 #include <vector>
+#include <cstring>
 
 #include "tscpp/api/PluginInit.h"
 #include "tscpp/api/GlobalPlugin.h"
@@ -55,9 +56,9 @@ const int DEFAULT_JPEG_QUALITY = 85;
 const int DEFAULT_AVIF_QUALITY = 50;
 
 struct PluginConfig {
-  bool convert_to_webp = false;
-  bool convert_to_jpeg = false;
-  bool convert_to_avif = false;
+  bool convert_to_webp = true; // Default to TRUE
+  bool convert_to_jpeg = true; // Default to TRUE
+  bool convert_to_avif = true; // Default to TRUE
   bool progressive     = false;
   int webp_quality     = DEFAULT_WEBP_QUALITY;
   int jpeg_quality     = DEFAULT_JPEG_QUALITY;
@@ -71,7 +72,12 @@ Stat stat_convert_to_avif;
 void
 parse_config(int argc, const char *argv[], PluginConfig &config)
 {
-  if (argc >= 1) {
+  if (argc > 0) {
+    // If arguments are provided, reset defaults to FALSE and only enable what's specified
+    config.convert_to_webp = false;
+    config.convert_to_jpeg = false;
+    config.convert_to_avif = false;
+
     for (int i = 0; i < argc; ++i) {
       std::string option(argv[i]);
       if (option.find("convert_to_webp") != std::string::npos) {
@@ -108,12 +114,10 @@ parse_config(int argc, const char *argv[], PluginConfig &config)
         TSDebug(TAG, "Unknown option: %s", option.c_str());
       }
     }
-  } else {
-    TSDebug(TAG, "Default configuration is to convert webp, jpeg and avif");
-    config.convert_to_webp = true;
-    config.convert_to_jpeg = true;
-    config.convert_to_avif = true;
   }
+
+  TSDebug(TAG, "Configuration: WebP=%d JPEG=%d AVIF=%d Progressive=%d", config.convert_to_webp, config.convert_to_jpeg,
+          config.convert_to_avif, config.progressive);
 }
 } // namespace
 
@@ -127,34 +131,6 @@ public:
       _transform_image_type(transform_image_type),
       _config(config)
   {
-    TransformationPlugin::registerHook(HOOK_READ_RESPONSE_HEADERS);
-  }
-
-  void
-  handleReadResponseHeaders(Transaction &transaction) override
-  {
-    switch (_transform_image_type) {
-    case ImageEncoding::webp:
-      transaction.getServerResponse().getHeaders()["Content-Type"] = "image/webp";
-      break;
-    case ImageEncoding::avif:
-      transaction.getServerResponse().getHeaders()["Content-Type"] = "image/avif";
-      break;
-    case ImageEncoding::jpeg:
-      transaction.getServerResponse().getHeaders()["Content-Type"] = "image/jpeg";
-      break;
-    case ImageEncoding::png:
-      transaction.getServerResponse().getHeaders()["Content-Type"] = "image/png";
-      break;
-    case ImageEncoding::unknown:
-      // do nothing
-      break;
-    }
-
-    transaction.getServerResponse().getHeaders()["Vary"] = "Accept"; // to have a separate cache entry
-
-    TSDebug(TAG, "url %s", transaction.getServerRequest().getUrl().getUrlString().c_str());
-    transaction.resume();
   }
 
   void
@@ -199,12 +175,9 @@ public:
     } catch (Magick::Warning &warning) {
       TSError("ImageMagick++ warning: %s", warning.what());
       produce(std::string_view(reinterpret_cast<const char *>(input_blob.data()), input_blob.length()));
-      _transform_image_type = _input_image_type; // Revert to original encoding on error
     } catch (Magick::Error &error) {
-      TSError("ImageMagick++ error: %s _image_type: %d input_data.length(): %zd", error.what(), (int)_transform_image_type,
-              input_data.length());
+      TSError("ImageMagick++ error: %s input_data.length(): %zd", error.what(), input_data.length());
       produce(std::string_view(reinterpret_cast<const char *>(input_blob.data()), input_blob.length()));
-      _transform_image_type = _input_image_type; // Revert to original encoding on error
     }
 
     setOutputComplete();
@@ -219,9 +192,6 @@ private:
   const PluginConfig _config;
 };
 
-/**
- * TransactionPlugin to handle detection and attachment of TransformationPlugin
- */
 class WebpTransformTransactionPlugin : public TransactionPlugin
 {
 public:
@@ -237,29 +207,20 @@ public:
     ImageEncoding input_image_type = ImageEncoding::unknown;
     std::string ctype              = transaction.getServerResponse().getHeaders().values("Content-Type");
 
-    bool input_is_jpeg = ctype.find("image/jpeg") != std::string::npos;
-    bool input_is_png  = ctype.find("image/png") != std::string::npos;
-    bool input_is_webp = ctype.find("image/webp") != std::string::npos;
-    bool input_is_avif = ctype.find("image/avif") != std::string::npos;
-
-    if (input_is_jpeg) {
+    if (ctype.find("image/jpeg") != std::string::npos) {
       input_image_type = ImageEncoding::jpeg;
-    } else if (input_is_png) {
+    } else if (ctype.find("image/png") != std::string::npos) {
       input_image_type = ImageEncoding::png;
-    } else if (input_is_webp) {
+    } else if (ctype.find("image/webp") != std::string::npos) {
       input_image_type = ImageEncoding::webp;
-    } else if (input_is_avif) {
+    } else if (ctype.find("image/avif") != std::string::npos) {
       input_image_type = ImageEncoding::avif;
     }
-
-    TSDebug(TAG, "Content-Type: %s input_image_type: %d", ctype.c_str(), (int)input_image_type);
 
     if (input_image_type != ImageEncoding::unknown) {
       std::string accept  = transaction.getServerRequest().getHeaders().values("Accept");
       bool avif_supported = accept.find("image/avif") != std::string::npos;
       bool webp_supported = accept.find("image/webp") != std::string::npos;
-
-      TSDebug(TAG, "Accept: %s avif: %d webp: %d", accept.c_str(), avif_supported, webp_supported);
 
       ImageEncoding target_type = ImageEncoding::unknown;
 
@@ -277,16 +238,36 @@ public:
         }
       }
 
-      // Special Case: Force transformation if progressive is enabled, even if formats match
-      if (target_type == ImageEncoding::unknown && _config.progressive && input_image_type == ImageEncoding::jpeg) {
-        target_type = ImageEncoding::jpeg;
+      if (target_type == ImageEncoding::unknown && input_image_type != ImageEncoding::unknown) {
+        if (_config.progressive && input_image_type == ImageEncoding::jpeg) {
+          target_type = ImageEncoding::jpeg;
+        }
       }
 
       if (target_type != ImageEncoding::unknown) {
         TSDebug(TAG, "Transcoding from type %d to %d", (int)input_image_type, (int)target_type);
+
+        // UPDATE HEADERS HERE
+        Headers &resp_headers = transaction.getServerResponse().getHeaders();
+        switch (target_type) {
+        case ImageEncoding::webp:
+          resp_headers["Content-Type"] = "image/webp";
+          break;
+        case ImageEncoding::avif:
+          resp_headers["Content-Type"] = "image/avif";
+          break;
+        case ImageEncoding::jpeg:
+          resp_headers["Content-Type"] = "image/jpeg";
+          break;
+        case ImageEncoding::png:
+          resp_headers["Content-Type"] = "image/png";
+          break;
+        default:
+          break;
+        }
+        resp_headers["Vary"] = "Accept";
+
         transaction.addPlugin(new ImageTransform(transaction, input_image_type, target_type, _config));
-      } else {
-        TSDebug(TAG, "Nothing to convert");
       }
     }
 
@@ -297,9 +278,6 @@ private:
   const PluginConfig _config;
 };
 
-/**
- * GlobalPlugin to attach TransactionPlugin to all transactions
- */
 class WebpTransformGlobalPlugin : public GlobalPlugin
 {
 public:
@@ -316,9 +294,6 @@ private:
   const PluginConfig _config;
 };
 
-/**
- * RemapPlugin to attach TransactionPlugin to specific remap rules
- */
 class WebpTransformRemapPlugin : public RemapPlugin
 {
 public:
@@ -354,20 +329,25 @@ TSPluginInit(int argc, const char *argv[])
 }
 
 TSReturnCode
+TSRemapInit(TSRemapInterface *api_info, char *errbuf, int errbuf_size)
+{
+  if (!api_info) {
+    strncpy(errbuf, "[TSRemapInit] - Invalid TSRemapInterface argument", errbuf_size - 1);
+    return TS_ERROR;
+  }
+  InitializeMagick("");
+  TSDebug(TAG, "Remap Plugin Initialized");
+  return TS_SUCCESS;
+}
+
+TSReturnCode
 TSRemapNewInstance(int argc, char *argv[], void **instance_handle, char *errbuf, int errbuf_size)
 {
   TSDebug(TAG, "New Remap Instance");
   PluginConfig *remap_config = new PluginConfig();
-  // argv[0] is from_url, argv[1] is to_url, params start from argv[2]
   if (argc > 2) {
     parse_config(argc - 2, (const char **)&argv[2], *remap_config);
-  } else {
-    // Default for remap if no params provided
-    remap_config->convert_to_webp = true;
-    remap_config->convert_to_jpeg = true;
-    remap_config->convert_to_avif = true;
   }
-
   new WebpTransformRemapPlugin(instance_handle, *remap_config);
   return TS_SUCCESS;
 }

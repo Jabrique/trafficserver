@@ -16,6 +16,7 @@ It supports both **Global** and **Per-Remap** configurations.
 - **Original JPEG:** 120 KB
 - **WebP (Q=75):** 40 KB (~66% savings)
 - **AVIF (Q=50):** 15 KB (~87% savings)
+- **AVIF (Q=10):** 1.7 KB (Maximum compression)
 
 ## System Prerequisites
 
@@ -33,19 +34,22 @@ sudo dnf --enablerepo=remi install ImageMagick7 ImageMagick7-heic ImageMagick7-c
 Add the following line to `plugin.config` to apply the plugin to **all** traffic:
 
 ```
-# Global activation with custom defaults and progressive enabled
-webp_transform.so convert_to_avif convert_to_webp progressive
+# Basic activation
+webp_transform.so convert_to_avif convert_to_webp convert_to_jpeg
+
+# High performance with custom quality and progressive enabled
+webp_transform.so convert_to_avif convert_to_webp progressive avif_quality=40 webp_quality=60
 ```
 
 ### 2. Per-Remap Configuration
-Add the plugin to specific rules in `remap.config`:
+Add the plugin to specific rules in `remap.config` using `@pparam`:
 
 ```
-# High quality for photography site
-map http://photo.com/ http://origin-photo/ @plugin=webp_transform.so @pparam=convert_to_avif @pparam=avif_quality=90
+# High quality photography site
+map http://photo.com/ http://origin/ @plugin=webp_transform.so @pparam=convert_to_avif @pparam=avif_quality=90
 
-# High performance with progressive rendering
-map http://site.com/ http://origin/ @plugin=webp_transform.so @pparam=convert_to_jpeg @pparam=progressive
+# High performance for thumbnails
+map http://img.com/thumbs/ http://origin/ @plugin=webp_transform.so @pparam=convert_to_avif @pparam=progressive @pparam=avif_quality=20
 ```
 
 ### Configuration Arguments
@@ -69,8 +73,9 @@ The plugin uses a smart logic matrix to determine the best output format:
     - If `image/avif` supported -> Targets **AVIF**.
     - If not, but `image/webp` supported -> Targets **WebP**.
     - If neither supported -> Targets **JPEG** (if input was modern).
-    - If input is already the best format, it may still transform if `progressive` is enabled.
-3.  **Transformation:** ImageMagick performs the actual conversion and applies optimization flags like interlacing and quality levels.
+3.  **Transformation Logic (Self-Transformation):**
+    - The plugin only re-encodes if the **Format Changes** (e.g., JPEG to AVIF).
+    - **Exception:** If `progressive` is enabled, the plugin will force a re-encoding even if the format remains the same (e.g., JPEG to Progressive JPEG), applying the configured quality in the process.
 
 ## Testing & Verification
 
@@ -85,8 +90,11 @@ The tests are located in `tests/gold_tests/pluginTest/webp_transform/`.
 - `webp_transform_advanced.test.py`: Verifies complex transcoding logic.
 - `webp_transform_avif.test.py`: Verifies basic AVIF support.
 
-### Running All Tests
+### Running Tests
 ```bash
 cd tests
 pipenv run autest -D gold_tests --ats-bin /opt/trafficserver/bin -f webp_transform
 ```
+
+### Viewing Benchmark Results
+Run the benchmark test with `-C none` and check `tests/_sandbox/webp_transform_benchmark/` for generated files.
