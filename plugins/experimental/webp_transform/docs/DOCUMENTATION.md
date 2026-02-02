@@ -2,27 +2,26 @@
 
 This plugin serves as a Universal Image Transcoder, automatically converting images (JPEG, PNG, WebP, AVIF) into the most efficient format supported by the user's browser (AVIF or WebP), or falling back to JPEG for legacy compatibility.
 
-## Why Use This Plugin?
+It supports both **Global** and **Per-Remap** configurations.
+
+## Key Features
 
 1.  **Bandwidth Savings:** Converts massive JPEG/PNG images to tiny AVIF/WebP.
 2.  **Modernization:** Automatically upgrades legacy WebP content to AVIF.
 3.  **Compatibility:** Automatically downgrades modern AVIF content to WebP or JPEG for older browsers.
+4.  **Adjustable Quality:** Fine-tune the compression level per format.
+5.  **Progressive Rendering:** Support for Progressive JPEG to improve perceived load speed.
+6.  **Metadata Stripping:** Granular control over EXIF/IPTC/XMP removal for privacy and size optimization.
 
-**Internal Benchmark Results:**
+### Internal Benchmark Results (120KB JPEG Source)
 - **Original JPEG:** 120 KB
-- **WebP:** 74 KB (~38% savings)
-- **AVIF:** 15 KB (~87% savings)
+- **WebP (Q=75):** 40 KB (~66% savings)
+- **AVIF (Q=50):** 15 KB (~87% savings)
+- **Metadata Stripping:** Up to 30KB+ additional savings per image.
 
 ## System Prerequisites
 
 For AVIF conversion to work, your server must have **ImageMagick 7** installed and compiled with **libheif** support.
-
-### Checking Server Support
-Run this command in your terminal:
-```bash
-magick -list format | grep -E "AVIF|HEIC"
-```
-You should see output similar to `AVIF  HEIC  rw+`.
 
 **Installation Guide (Rocky Linux 9 / RHEL 9):**
 ```bash
@@ -32,97 +31,76 @@ sudo dnf --enablerepo=remi install ImageMagick7 ImageMagick7-heic ImageMagick7-c
 
 ## Configuration
 
-Add the following line to your Apache Traffic Server `plugin.config` file:
+### 1. Global Configuration
+Add the following line to `plugin.config` to apply the plugin to **all** traffic:
 
 ```
-# Enable full universal transcoding (AVIF > WebP > JPEG)
-webp_transform.so convert_to_avif convert_to_webp convert_to_jpeg
+# Basic activation (All features ON by default)
+webp_transform.so
+
+# High performance with custom quality and metadata stripping
+webp_transform.so convert_to_avif convert_to_webp metadata=icc progressive avif_quality=40 webp_quality=60
+```
+
+### 2. Per-Remap Configuration
+Add the plugin to specific rules in `remap.config` using `@pparam`:
+
+```
+# High quality photography site
+map http://photo.com/ http://origin/ @plugin=webp_transform.so @pparam=convert_to_avif @pparam=avif_quality=90
+
+# High performance for thumbnails (Extreme stripping)
+map http://img.com/thumbs/ http://origin/ @plugin=webp_transform.so @pparam=convert_to_avif @pparam=progressive @pparam=avif_quality=20 @pparam=metadata=none
 ```
 
 ### Configuration Arguments
 
-| Argument | Description |
-| :--- | :--- |
-| `convert_to_avif` | Enables upgrade to AVIF (Best Compression). |
-| `convert_to_webp` | Enables upgrade/fallback to WebP (Good Compression). |
-| `convert_to_jpeg` | Enables fallback to JPEG (Legacy Compatibility). |
+| Argument | Description | Default |
+| :--- | :--- | :--- |
+| `convert_to_avif` | Enables upgrade to AVIF. | On |
+| `convert_to_webp` | Enables upgrade/fallback to WebP. | On |
+| `convert_to_jpeg` | Enables fallback to JPEG. | On |
+| `progressive` | Enables Progressive JPEG rendering. | Off |
+| `avif_quality=N` | Set AVIF quality (1-100). | 50 |
+| `webp_quality=N` | Set WebP quality (1-100). | 75 |
+| `jpeg_quality=N` | Set JPEG quality (1-100). | 85 |
+| `metadata=MODE` | Metadata stripping mode (see below). | `all` |
+
+### Metadata Modes
+- `none`: Removes **ALL** metadata (EXIF, XMP, IPTC, ICC). Maximum size reduction but may affect color accuracy.
+- `icc`: Removes EXIF/XMP/IPTC but **preserves ICC Color Profile**. Safe for color accuracy.
+- `all`: Keeps all original metadata (Default).
 
 ## How It Works
 
 The plugin uses a smart logic matrix to determine the best output format:
 
-| Input Format | Browser Support | Output Format | Reason |
-| :--- | :--- | :--- | :--- |
-| **JPEG / PNG** | AVIF | **AVIF** | Maximum Optimization |
-| **JPEG / PNG** | WebP (No AVIF) | **WebP** | Optimization |
-| **WebP** | AVIF | **AVIF** | Upgrade |
-| **WebP** | No WebP/AVIF | **JPEG** | Fallback (Legacy Support) |
-| **AVIF** | WebP (No AVIF) | **WebP** | Compatibility Fallback |
-| **AVIF** | No WebP/AVIF | **JPEG** | Compatibility Fallback |
-
-## Troubleshooting
-
-**Q: My images are not converting.**
-A: Check if the browser sends the correct `Accept` header. Check `diags.log` for any `ImageMagick++ error`.
-
-**Q: Do I need `convert_to_jpeg`?**
-A: Only if your Origin Server serves WebP or AVIF images and you have users with very old browsers (e.g., IE11) that don't support them.
+1.  **Detection:** Plugin checks the browser's `Accept` header.
+2.  **Selection:**
+    - If `image/avif` supported -> Targets **AVIF**.
+    - If not, but `image/webp` supported -> Targets **WebP**.
+    - If neither supported -> Targets **JPEG** (if input was modern).
+3.  **Transformation Logic (Self-Transformation):**
+    - The plugin normally **only** re-encodes if the Format Changes (e.g. JPEG -> AVIF).
+    - **Exception:** If `progressive` is enabled OR `metadata` is set to `none`/`icc`, the plugin will force a re-encoding even if the format matches (e.g. JPEG -> Progressive JPEG), applying the configured quality and stripping logic in the process.
+4.  **Header Sync:** The plugin automatically updates the `Content-Type` and adds `Vary: Accept` to ensure correct caching.
 
 ## Testing & Verification
 
 We use **AuTest** (Gold Testing System) to verify the plugin's functionality.
 
-### Test Files Location
+### Test Suite
 The tests are located in `tests/gold_tests/pluginTest/webp_transform/`.
 
-- `webp_transform_avif.test.py`: Verifies basic JPEG to AVIF conversion.
-- `webp_transform_advanced.test.py`: Verifies complex transcoding logic (WebP->AVIF, AVIF->WebP, Fallbacks).
-- `webp_transform_benchmark.test.py`: Performs real transcoding on sample images and verifies file size reduction.
+- `webp_transform_metadata.test.py`: Verifies metadata stripping logic.
+- `webp_transform_progressive.test.py`: Verifies Progressive JPEG generation.
+- `webp_transform_remap.test.py`: Verifies per-remap configurations.
+- `webp_transform_quality.test.py`: Verifies quality settings and defaults.
+- `webp_transform_advanced.test.py`: Verifies complex transcoding logic.
+- `webp_transform_avif.test.py`: Verifies basic AVIF support.
 
-### How to Run Tests
-From the root of the Traffic Server repository:
-
+### Running Tests
 ```bash
 cd tests
-# Setup Python environment (first time only)
-pipenv install
-
-# Run all webp_transform tests
-# Note: Adjust --ats-bin to your traffic_server binary location (e.g., /opt/trafficserver/bin)
 pipenv run autest -D gold_tests --ats-bin /opt/trafficserver/bin -f webp_transform
-```
-
-### Viewing Benchmark Results
-To see the actual file size reduction achieved during the benchmark:
-
-1.  Run the benchmark test with the `-C none` flag to prevent AuTest from deleting the output files:
-    ```bash
-    pipenv run autest -D gold_tests --ats-bin /opt/trafficserver/bin -f webp_transform_benchmark -C none
-    ```
-2.  Navigate to the test sandbox directory:
-    ```bash
-    cd tests/_sandbox/webp_transform_benchmark/
-    ```
-3.  Check the file sizes:
-    ```bash
-    ls -lh out_fractal.* out_logo.*
-    ```
-
-### Understanding Output
-
-- **PASSED**: The test logic executed correctly, headers were modified as expected, and the transcoding process completed without errors.
-- **FAILED**: Check the `Reason` in the output. Common failures include:
-    - `File differences`: The response header did not match the expected `Content-Type`.
-    - `ReturnCode`: The server process crashed or exited unexpectedly.
-    - `Diags log ... contains errors`: ImageMagick failed to decode/encode the image (often due to missing libraries in the OS).
-
-### Manual Verification
-You can also manually verify using `curl` against a running Traffic Server:
-
-```bash
-# Check if server returns AVIF
-curl -v -o test.avif --header "Accept: image/avif" http://localhost:8080/image.jpg
-
-# Check the response header
-< Content-Type: image/avif
 ```
