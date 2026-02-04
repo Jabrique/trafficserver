@@ -57,9 +57,9 @@ map http://img.com/thumbs/ http://origin/ @plugin=webp_transform.so @pparam=conv
 
 | Argument | Description | Default |
 | :--- | :--- | :--- |
-| `convert_to_avif` | Enables upgrade to AVIF. | On |
-| `convert_to_webp` | Enables upgrade/fallback to WebP. | On |
-| `convert_to_jpeg` | Enables fallback to JPEG. | On |
+| `convert_to_avif[=BOOL]` | Enables upgrade to AVIF. | `true` |
+| `convert_to_webp[=BOOL]` | Enables upgrade/fallback to WebP. | `true` |
+| `convert_to_jpeg[=BOOL]` | Enables fallback to JPEG. | `true` |
 | `progressive` | Enables Progressive JPEG rendering. | Off |
 | `avif_quality=N` | Set AVIF quality (1-100). | 50 |
 | `webp_quality=N` | Set WebP quality (1-100). | 75 |
@@ -67,6 +67,9 @@ map http://img.com/thumbs/ http://origin/ @plugin=webp_transform.so @pparam=conv
 | `max_image_size=N` | Max image size in bytes before aborting (DoS Protection). | 10MB |
 | `max_pixels=N` | Max total pixels (width x height) to process (Bomb Protection). | 100MP |
 | `metadata=MODE` | Metadata stripping mode (see below). | `all` |
+
+**Note on Boolean Values:**
+For arguments marked with `[=BOOL]`, you can use `true`/`false`, `1`/`0`, or `on`/`off`. If no value is provided (e.g., just `convert_to_webp`), it defaults to `true`.
 
 ### Metadata Modes
 - `none`: Removes **ALL** metadata (EXIF, XMP, IPTC, ICC). Maximum size reduction but may affect color accuracy.
@@ -118,8 +121,9 @@ The tests are located in `tests/gold_tests/pluginTest/webp_transform/`.
 - `webp_transform_quality.test.py`: Verifies quality settings and backward compatibility.
 - `webp_transform_advanced.test.py`: Verifies complex transcoding logic (Upgrade/Fallback).
 - `webp_transform_avif.test.py`: Verifies basic AVIF support.
-- `webp_transform_config_robustness.test.py`: Verifies plugin stability against invalid configurations (crashes, short arguments).
-- `webp_transform_edge_cases.test.py`: Verifies security features (DoS protection, decompression bomb, MIME spoofing, corrupt/empty inputs).
+- `webp_transform_config_boolean.test.py`: Verifies boolean parameter parsing and default retention.
+- `webp_transform_config_robustness.test.py`: Verifies plugin stability against invalid configurations.
+- `webp_transform_edge_cases.test.py`: Verifies security features (DoS protection, decompression bomb, MIME spoofing).
 
 ### Running Tests
 ```bash

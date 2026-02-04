@@ -95,72 +95,86 @@ Stat stat_passthrough_invalid;
 void
 parse_config(int argc, const char *argv[], PluginConfig &config)
 {
-  if (argc > 0) {
-    config.convert_to_webp = false;
-    config.convert_to_jpeg = false;
-    config.convert_to_avif = false;
+  for (int i = 0; i < argc; ++i) {
+    std::string_view option(argv[i]);
 
-    for (int i = 0; i < argc; ++i) {
-      std::string_view option(argv[i]);
-
-      auto parse_int_param = [&](std::string_view prefix, int &target, int min_val, int max_val) {
-        if (option.size() > prefix.size() && option.substr(0, prefix.size()) == prefix) {
-          try {
-            int val = std::stoi(std::string(option.substr(prefix.size())));
-            if (val >= min_val && val <= max_val) {
-              target = val;
-              return true;
-            }
-          } catch (...) {
-            TSError("[%s] Invalid %.*s value", TAG, (int)prefix.size(), prefix.data());
-          }
-        }
-        return false;
-      };
-
-      if (option == "convert_to_webp") {
-        config.convert_to_webp = true;
-      } else if (option == "convert_to_jpeg") {
-        config.convert_to_jpeg = true;
-      } else if (option == "convert_to_avif") {
-        config.convert_to_avif = true;
-      } else if (option == "progressive") {
-        config.progressive = true;
-      } else if (option == "metadata=none") {
-        config.metadata = MetadataMode::none;
-      } else if (option == "metadata=icc") {
-        config.metadata = MetadataMode::icc;
-      } else if (option == "metadata=all") {
-        config.metadata = MetadataMode::all;
-      } else if (parse_int_param("webp_quality=", config.webp_quality, 1, 100)) {
-        TSDebug(TAG, "Configured webp_quality to %d", config.webp_quality);
-      } else if (parse_int_param("jpeg_quality=", config.jpeg_quality, 1, 100)) {
-        TSDebug(TAG, "Configured jpeg_quality to %d", config.jpeg_quality);
-      } else if (parse_int_param("avif_quality=", config.avif_quality, 1, 100)) {
-        TSDebug(TAG, "Configured avif_quality to %d", config.avif_quality);
-      } else if (option.size() > 15 && option.substr(0, 15) == "max_image_size=") {
-        try {
-          int64_t val = std::stoll(std::string(option.substr(15)));
-          if (val > 0) {
-            config.max_image_size = val;
-            TSDebug(TAG, "Configured max_image_size to %ld", val);
-          }
-        } catch (...) {
-          TSError("[%s] Invalid max_image_size value", TAG);
-        }
-      } else if (option.size() > 11 && option.substr(0, 11) == "max_pixels=") {
-        try {
-          int64_t val = std::stoll(std::string(option.substr(11)));
-          if (val > 0) {
-            config.max_pixels = (size_t)val;
-            TSDebug(TAG, "Configured max_pixels to %zu", config.max_pixels);
-          }
-        } catch (...) {
-          TSError("[%s] Invalid max_pixels value", TAG);
-        }
-      } else {
-        TSDebug(TAG, "Unknown option: %.*s", (int)option.length(), option.data());
+    auto parse_bool_param = [&](std::string_view prefix, bool &target) {
+      if (option == prefix) {
+        target = true;
+        return true;
       }
+      if (option.size() > prefix.size() && option.substr(0, prefix.size()) == prefix && option[prefix.size()] == '=') {
+        std::string_view val = option.substr(prefix.size() + 1);
+        if (val == "true" || val == "1" || val == "on") {
+          target = true;
+        } else if (val == "false" || val == "0" || val == "off") {
+          target = false;
+        } else {
+          TSError("[%s] Invalid boolean value for %.*s: %.*s", TAG, (int)prefix.size(), prefix.data(), (int)val.length(),
+                  val.data());
+        }
+        return true;
+      }
+      return false;
+    };
+
+    auto parse_int_param = [&](std::string_view prefix, int &target, int min_val, int max_val) {
+      if (option.size() > prefix.size() && option.substr(0, prefix.size()) == prefix) {
+        try {
+          int val = std::stoi(std::string(option.substr(prefix.size())));
+          if (val >= min_val && val <= max_val) {
+            target = val;
+            return true;
+          }
+        } catch (...) {
+          TSError("[%s] Invalid %.*s value", TAG, (int)prefix.size(), prefix.data());
+        }
+      }
+      return false;
+    };
+
+    if (parse_bool_param("convert_to_webp", config.convert_to_webp)) {
+      continue;
+    } else if (parse_bool_param("convert_to_jpeg", config.convert_to_jpeg)) {
+      continue;
+    } else if (parse_bool_param("convert_to_avif", config.convert_to_avif)) {
+      continue;
+    } else if (option == "progressive") {
+      config.progressive = true;
+    } else if (option == "metadata=none") {
+      config.metadata = MetadataMode::none;
+    } else if (option == "metadata=icc") {
+      config.metadata = MetadataMode::icc;
+    } else if (option == "metadata=all") {
+      config.metadata = MetadataMode::all;
+    } else if (parse_int_param("webp_quality=", config.webp_quality, 1, 100)) {
+      TSDebug(TAG, "Configured webp_quality to %d", config.webp_quality);
+    } else if (parse_int_param("jpeg_quality=", config.jpeg_quality, 1, 100)) {
+      TSDebug(TAG, "Configured jpeg_quality to %d", config.jpeg_quality);
+    } else if (parse_int_param("avif_quality=", config.avif_quality, 1, 100)) {
+      TSDebug(TAG, "Configured avif_quality to %d", config.avif_quality);
+    } else if (option.size() > 15 && option.substr(0, 15) == "max_image_size=") {
+      try {
+        int64_t val = std::stoll(std::string(option.substr(15)));
+        if (val > 0) {
+          config.max_image_size = val;
+          TSDebug(TAG, "Configured max_image_size to %ld", val);
+        }
+      } catch (...) {
+        TSError("[%s] Invalid max_image_size value", TAG);
+      }
+    } else if (option.size() > 11 && option.substr(0, 11) == "max_pixels=") {
+      try {
+        int64_t val = std::stoll(std::string(option.substr(11)));
+        if (val > 0) {
+          config.max_pixels = (size_t)val;
+          TSDebug(TAG, "Configured max_pixels to %zu", config.max_pixels);
+        }
+      } catch (...) {
+        TSError("[%s] Invalid max_pixels value", TAG);
+      }
+    } else {
+      TSDebug(TAG, "Unknown option: %.*s", (int)option.length(), option.data());
     }
   }
 
@@ -290,7 +304,7 @@ public:
       image.write(&output_blob);
       produce(std::string_view(reinterpret_cast<const char *>(output_blob.data()), output_blob.length()));
     } catch (const std::exception &e) {
-      TSError("[%s] Processing error [%zu bytes]: %s. Falling back to passthrough.", TAG, _img_buffer.length(), e.what());
+      TSError("[%s] Image processing error [%zu bytes]: %s. Falling back to passthrough.", TAG, _img_buffer.length(), e.what());
       stat_transform_errors.increment(1);
       if (!_img_buffer.empty()) {
         produce(std::string_view(_img_buffer.data(), _img_buffer.length()));
