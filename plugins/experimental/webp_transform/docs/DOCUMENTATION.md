@@ -64,6 +64,8 @@ map http://img.com/thumbs/ http://origin/ @plugin=webp_transform.so @pparam=conv
 | `avif_quality=N` | Set AVIF quality (1-100). | 50 |
 | `webp_quality=N` | Set WebP quality (1-100). | 75 |
 | `jpeg_quality=N` | Set JPEG quality (1-100). | 85 |
+| `max_image_size=N` | Max image size in bytes before aborting (DoS Protection). | 10MB |
+| `max_pixels=N` | Max total pixels (width x height) to process (Bomb Protection). | 100MP |
 | `metadata=MODE` | Metadata stripping mode (see below). | `all` |
 
 ### Metadata Modes
@@ -85,6 +87,26 @@ The plugin uses a smart logic matrix to determine the best output format:
     - **Exception:** If `progressive` is enabled OR `metadata` is set to `none`/`icc`, the plugin will force a re-encoding even if the format matches (e.g. JPEG -> Progressive JPEG), applying the configured quality and stripping logic in the process.
 4.  **Header Sync:** The plugin automatically updates the `Content-Type` and adds `Vary: Accept` to ensure correct caching.
 
+## Monitoring & Statistics
+
+The plugin exposes several metrics to monitor its operation and security status. You can view these statistics using `traffic_ctl`:
+
+```bash
+traffic_ctl metric match plugin.webp_transform
+```
+
+### Available Metrics
+
+| Metric Name | Description |
+| :--- | :--- |
+| `plugin.webp_transform.convert_to_webp` | Total successful conversions to WebP. |
+| `plugin.webp_transform.convert_to_jpeg` | Total successful conversions to JPEG. |
+| `plugin.webp_transform.convert_to_avif` | Total successful conversions to AVIF. |
+| `plugin.webp_transform.errors` | Total processing errors encountered. |
+| `plugin.webp_transform.passthrough_size` | Total images passed through due to size limit (DoS protection). |
+| `plugin.webp_transform.passthrough_pixels` | Total images passed through due to pixel limit (Decompression bomb protection). |
+| `plugin.webp_transform.passthrough_invalid` | Total images passed through due to invalid or unsupported format. |
+
 ## Testing & Verification
 
 We use **AuTest** (Gold Testing System) to verify the plugin's functionality.
@@ -92,12 +114,12 @@ We use **AuTest** (Gold Testing System) to verify the plugin's functionality.
 ### Test Suite
 The tests are located in `tests/gold_tests/pluginTest/webp_transform/`.
 
-- `webp_transform_metadata.test.py`: Verifies metadata stripping logic.
-- `webp_transform_progressive.test.py`: Verifies Progressive JPEG generation.
 - `webp_transform_remap.test.py`: Verifies per-remap configurations.
-- `webp_transform_quality.test.py`: Verifies quality settings and defaults.
-- `webp_transform_advanced.test.py`: Verifies complex transcoding logic.
+- `webp_transform_quality.test.py`: Verifies quality settings and backward compatibility.
+- `webp_transform_advanced.test.py`: Verifies complex transcoding logic (Upgrade/Fallback).
 - `webp_transform_avif.test.py`: Verifies basic AVIF support.
+- `webp_transform_config_robustness.test.py`: Verifies plugin stability against invalid configurations (crashes, short arguments).
+- `webp_transform_edge_cases.test.py`: Verifies security features (DoS protection, decompression bomb, MIME spoofing, corrupt/empty inputs).
 
 ### Running Tests
 ```bash

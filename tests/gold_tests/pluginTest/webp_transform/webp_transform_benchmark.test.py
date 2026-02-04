@@ -72,3 +72,4 @@ tr = Test.AddTestRun("Compare Sizes Report")
 tr.Processes.Default.Command = 'echo "--- REPORT ---" && ls -lh out_fractal.* out_logo.*'
 tr.Processes.Default.ReturnCode = 0
 tr.Processes.Default.Streams.stdout = Testers.ContainsExpression("out", "List output files")
+
