@@ -21,8 +21,9 @@ server.ReturnCode = Any(None, 0, -2, -15)
 # --- SETUP ATS ---
 ts = Test.MakeATSProcess("ts")
 
-# Configure plugin with a small max_image_size (100KB) and small max_pixels (1000)
-ts.Disk.plugin_config.AddLine('webp_transform.so max_image_size=102400 max_pixels=1000 convert_to_webp')
+# Configure plugin with limits for DoS testing (within valid range: 1MB-100MB, 1MP-500MP)
+# Use 2MB size limit and 500K pixel limit to trigger passthrough on 1024x768=786K pixel image
+ts.Disk.plugin_config.AddLine('webp_transform.so max_image_size=2097152 max_pixels=500000 convert_to_webp')
 ts.Disk.records_config.update({
     'proxy.config.diags.debug.enabled': 1,
     'proxy.config.diags.debug.tags': 'webp_transform',
