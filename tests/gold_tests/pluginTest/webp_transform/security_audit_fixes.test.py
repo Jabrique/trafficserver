@@ -157,6 +157,49 @@ tr.Processes.Default.StartBefore(ts_negative_config)
 tr.StillRunningAfter = ts_negative_config
 
 # =============================================================================
+# TEST 7: Pixel Boundary Test (Exactly at max_pixels limit)
+# =============================================================================
+# Create image with exactly 500K pixels (707x707 = 499,849 pixels, just under limit)
+# And 708x708 = 501,264 pixels, just over limit
+ts_pixel_boundary = Test.MakeATSProcess("ts_pixel_boundary")
+ts_pixel_boundary.Disk.plugin_config.AddLine('webp_transform.so max_pixels=500000')
+ts_pixel_boundary.Disk.records_config.update({'proxy.config.http.cache.http': 0})
+ts_pixel_boundary.Disk.remap_config.AddLine('map / http://127.0.0.1:{}'.format(origin_port))
+
+# Create test images
+tr = Test.AddTestRun("Create 707x707 image (499,849 pixels - UNDER limit)")
+tr.Processes.Default.Command = 'magick -size 707x707 xc:blue {}/under_limit.jpg'.format(origin_dir)
+tr.Processes.Default.ReturnCode = 0
+tr.Processes.Default.StartBefore(server)
+tr.Processes.Default.StartBefore(ts_pixel_boundary)
+
+tr = Test.AddTestRun("Create 708x708 image (501,264 pixels - OVER limit)")
+tr.Processes.Default.Command = 'magick -size 708x708 xc:red {}/over_limit.jpg'.format(origin_dir)
+tr.Processes.Default.ReturnCode = 0
+
+tr = Test.AddTestRun("Test Image Under Pixel Limit")
+tr.Processes.Default.Command = \
+    'curl -v -o out_under_limit.webp --header "Accept: image/webp" http://127.0.0.1:{0}/under_limit.jpg'.format(
+        ts_pixel_boundary.Variables.port)
+tr.Processes.Default.ReturnCode = 0
+
+tr = Test.AddTestRun("Verify Under Limit Transforms")
+tr.Processes.Default.Command = 'file out_under_limit.webp'
+tr.Processes.Default.ReturnCode = 0
+tr.Processes.Default.Streams.stdout = Testers.ContainsExpression("Web/P image", "Should transform (under pixel limit)")
+
+tr = Test.AddTestRun("Test Image Over Pixel Limit")
+tr.Processes.Default.Command = \
+    'curl -v -o out_over_limit.jpg --header "Accept: image/webp" http://127.0.0.1:{0}/over_limit.jpg'.format(
+        ts_pixel_boundary.Variables.port)
+tr.Processes.Default.ReturnCode = 0
+
+tr = Test.AddTestRun("Verify Over Limit Passthrough")
+tr.Processes.Default.Command = 'file out_over_limit.jpg'
+tr.Processes.Default.ReturnCode = 0
+tr.Processes.Default.Streams.stdout = Testers.ContainsExpression("JPEG image data", "Should passthrough (over pixel limit)")
+
+# =============================================================================
 # CLEANUP
 # =============================================================================
 # Allow webp_transform errors in logs (expected for validation tests)
@@ -165,3 +208,4 @@ ts_config_overflow.Disk.diags_log.Content = Testers.ContainsExpression("webp_tra
 ts_config_min.Disk.diags_log.Content = Testers.ContainsExpression("webp_transform", "Allow plugin logs")
 ts_accept_header.Disk.diags_log.Content = Testers.ContainsExpression("webp_transform", "Allow plugin logs")
 ts_negative_config.Disk.diags_log.Content = Testers.ContainsExpression("webp_transform", "Allow plugin logs")
+ts_pixel_boundary.Disk.diags_log.Content = Testers.ContainsExpression("webp_transform", "Allow plugin logs")

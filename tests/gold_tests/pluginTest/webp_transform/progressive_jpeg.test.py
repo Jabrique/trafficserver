@@ -74,3 +74,25 @@ tr.Processes.Default.Command = \
 tr.Processes.Default.ReturnCode = 0
 # We expect to see "Interlace: JPEG" in the output eventually, but for Red Phase we just print it.
 tr.Processes.Default.Streams.stdout = Testers.ContainsExpression("Interlace", "Check Interlace output")
+
+# --- TEST 4: Progressive with Non-JPEG (Should Ignore) ---
+# Code at line 435-437 only applies progressive to JPEG
+# PNG with progressive=true should NOT apply PlaneInterlace
+ts_progressive_png = Test.MakeATSProcess("ts_progressive_png")
+ts_progressive_png.Disk.plugin_config.AddLine('webp_transform.so progressive')
+ts_progressive_png.Disk.records_config.update({'proxy.config.http.cache.http': 0})
+ts_progressive_png.Disk.remap_config.AddLine('map / http://127.0.0.1:{}'.format(origin_port))
+
+tr = Test.AddTestRun("Progressive PNG Test (should be ignored)")
+tr.Processes.Default.Command = \
+    'curl -v -o out_progressive_png.webp --header "Accept: image/webp" http://127.0.0.1:{0}/test.png'.format(
+        ts_progressive_png.Variables.port)
+tr.Processes.Default.ReturnCode = 0
+tr.Processes.Default.StartBefore(ts_progressive_png)
+tr.StillRunningAfter = server
+tr.StillRunningAfter = ts_progressive_png
+
+tr = Test.AddTestRun("Verify Progressive Ignored for PNG")
+tr.Processes.Default.Command = 'file out_progressive_png.webp'
+tr.Processes.Default.ReturnCode = 0
+tr.Processes.Default.Streams.stdout = Testers.ContainsExpression("Web/P image", "PNG should convert to WebP (progressive ignored)")

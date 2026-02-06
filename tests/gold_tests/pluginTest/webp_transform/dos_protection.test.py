@@ -1,10 +1,10 @@
 
 '''
-Test webp_transform plugin for Edge Cases (DoS Protection, Corrupt, Empty)
+Test webp_transform plugin for Edge Cases (DoS Protection, Corrupt, Empty, Header Edge Cases)
 '''
 import os
 
-Test.Summary = 'Test Edge Cases: Max Size Limit, Corrupt Input, Empty Input'
+Test.Summary = 'Test Edge Cases: Max Size Limit, Corrupt Input, Empty Input, Accept Header Edge Cases'
 
 Test.SkipUnless(Condition.PluginExists('webp_transform.so'),)
 
@@ -83,6 +83,64 @@ tr.Processes.Default.Command = 'file out_gif.img'
 tr.Processes.Default.ReturnCode = 0
 tr.Processes.Default.Streams.stdout = Testers.ContainsExpression("GIF image data", "Content should remain GIF (Passthrough)")
 
+# --- TEST 4B: Zero Dimensions Image (0x10 pixels) ---
+tr = Test.AddTestRun("Zero Dimensions Image Test")
+tr.Processes.Default.Command = \
+    'curl -v -o out_zero_dim.jpg --header "Accept: image/webp" http://127.0.0.1:{0}/zero_width.jpg'.format(ts.Variables.port)
+tr.Processes.Default.ReturnCode = 0
+
+tr = Test.AddTestRun("Verify Zero Dimensions Passthrough")
+tr.Processes.Default.Command = 'file out_zero_dim.jpg'
+tr.Processes.Default.ReturnCode = 0
+tr.Processes.Default.Streams.stdout = Testers.ContainsExpression("JPEG image data", "Zero dimension should passthrough (security)")
+
+# --- TEST 5: Empty Accept Header (Should Passthrough) ---
+tr = Test.AddTestRun("Empty Accept Header Test")
+tr.Processes.Default.Command = \
+    'curl -v -o out_empty_accept.jpg --header "Accept:" http://127.0.0.1:{0}/image.jpg'.format(ts.Variables.port)
+tr.Processes.Default.ReturnCode = 0
+
+tr = Test.AddTestRun("Verify Empty Accept Passthrough")
+tr.Processes.Default.Command = 'file out_empty_accept.jpg'
+tr.Processes.Default.ReturnCode = 0
+tr.Processes.Default.Streams.stdout = Testers.ContainsExpression("JPEG image data", "Should remain JPEG (no conversion)")
+
+# --- TEST 6: Missing Accept Header (curl default */*) ---
+# NOTE: curl sends "Accept: */*" by default, which triggers AVIF transformation
+tr = Test.AddTestRun("Missing Accept Header (curl default)")
+tr.Processes.Default.Command = \
+    'curl -v -o out_no_accept.avif http://127.0.0.1:{0}/image.jpg'.format(ts.Variables.port)
+tr.Processes.Default.ReturnCode = 0
+
+tr = Test.AddTestRun("Verify curl Default Accept Transforms")
+tr.Processes.Default.Command = 'file out_no_accept.avif'
+tr.Processes.Default.ReturnCode = 0
+tr.Processes.Default.Streams.stdout = Testers.ContainsExpression("ISO Media", "Should transform to AVIF (curl sends Accept: */*)")
+
+# --- TEST 7: Missing Content-Type Header (Should Passthrough) ---
+# Use query param ?no_content_type=1 to skip Content-Type header
+tr = Test.AddTestRun("Missing Content-Type Test")
+tr.Processes.Default.Command = \
+    'curl -v -o out_no_content_type.jpg --header "Accept: image/webp" "http://127.0.0.1:{0}/image.jpg?no_content_type=1"'.format(ts.Variables.port)
+tr.Processes.Default.ReturnCode = 0
+
+tr = Test.AddTestRun("Verify Missing Content-Type Passthrough")
+tr.Processes.Default.Command = 'file out_no_content_type.jpg'
+tr.Processes.Default.ReturnCode = 0
+tr.Processes.Default.Streams.stdout = Testers.ContainsExpression("JPEG image data", "Should passthrough without Content-Type (unknown format)")
+
 # --- CLEAN LOG CHECK ---
 # We allow ERROR messages from our plugin so AuTest doesn't fail the test
 ts.Disk.diags_log.Content = Testers.ContainsExpression("webp_transform", "Allow webp_transform logs")
+
+# --- TEST 8: Content-Type Multiple Semicolons (Parsing Robustness) ---
+# Use query param ?content_type_extra=multi to add semicolons
+tr = Test.AddTestRun("Content-Type Semicolon Parsing Test")
+tr.Processes.Default.Command = \
+    'curl -v -o out_semicolon.webp --header "Accept: image/webp" "http://127.0.0.1:{0}/image.jpg?content_type_extra=multi"'.format(ts.Variables.port)
+tr.Processes.Default.ReturnCode = 0
+
+tr = Test.AddTestRun("Verify Semicolon Parsing Transforms")
+tr.Processes.Default.Command = 'file out_semicolon.webp'
+tr.Processes.Default.ReturnCode = 0
+tr.Processes.Default.Streams.stdout = Testers.ContainsExpression("Web/P image", "Should parse Content-Type correctly (strip semicolons)")
