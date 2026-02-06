@@ -98,6 +98,7 @@ map http://img.com/thumbs/ http://origin/ @plugin=webp_transform.so @pparam=conv
 | `jpeg_quality=N` | Set JPEG quality (1-100). | 85 |
 | `max_image_size=N` | Max image size in bytes. **Valid range: 1KB-100MB** (1024-104857600). Images exceeding this bypass transformation (DoS protection). | 10MB |
 | `max_pixels=N` | Max total pixels (width × height) to process. **Valid range: 1K-500MP** (1000-500000000). Prevents decompression bombs. | 100MP |
+| `timeout=N` | ImageMagick processing timeout in seconds. **Valid range: 1-60 seconds**. Operations exceeding this abort and passthrough. | 5 |
 | `metadata=MODE` | Metadata stripping mode (see below). | `all` |
 
 **Note on Boolean Values:**
@@ -160,11 +161,19 @@ Normally, the plugin **skips transformation** if the input format already matche
 
 **Priority**: Progressive JPEG takes precedence over metadata stripping for JPEG inputs.
 
+⚠️ **CRITICAL LIMITATION**: The `progressive` parameter **ONLY affects JPEG images**. For PNG/WebP/AVIF formats, the parameter is **silently ignored** because ImageMagick's `PlaneInterlace` setting (used internally) only produces progressive encoding for JPEG format.
+
 **Examples**:
 - **JPEG → JPEG** with `progressive=true` → Re-encodes to Progressive JPEG ✓
+- **JPEG → JPEG** with `progressive=true, metadata=none` → Re-encodes (progressive + metadata stripping) ✓
+- **PNG → PNG** with `progressive=true, metadata=all` → Passthrough (progressive ignored for PNG) ✗
+- **PNG → PNG** with `metadata=icc` → Re-encodes PNG to strip ICC profile ✓
+- **WebP → WebP** with `progressive=true, metadata=all` → Passthrough (progressive ignored for WebP) ✗
 - **WebP → WebP** with `metadata=none` → Re-encodes WebP to strip metadata ✓
-- **AVIF → AVIF** with `progressive=true, metadata=all` → Passthrough (no re-encoding) ✗
-- **PNG → PNG** with `metadata=icc` → Re-encodes PNG to strip metadata ✓
+- **AVIF → AVIF** with `progressive=true, metadata=all` → Passthrough (progressive ignored for AVIF) ✗
+- **AVIF → AVIF** with `metadata=icc` → Re-encodes AVIF to strip ICC profile ✓
+
+**Note**: If you need progressive-like rendering for WebP, use WebP's native features at the encoder level, not this plugin.
 
 ### Passthrough Conditions
 
@@ -200,8 +209,50 @@ This plugin implements defense-in-depth against malicious images:
 ### DoS Protection Layers
 1. **Size Limit**: Images exceeding `max_image_size` (default 10MB) abort transformation after buffering starts → prevents bandwidth exhaustion
 2. **Pixel Bomb**: Images >100MP (default) rejected → prevents decompression bombs (tiny compressed → huge uncompressed)
-3. **Timeout Protection**: ImageMagick operations timeout after 5 seconds → prevents thread starvation from pathological images
-4. **Config Validation**: Invalid parameters abort plugin initialization → prevents production misconfigurations
+3. **Timeout Protection**: ImageMagick operations timeout after `timeout` seconds (default 5s, configurable 1-60s) → prevents thread starvation from pathological images
+4. **Config Validation**: Invalid parameters abort plugin initialization with different blast radius:
+
+**Global Plugin Mode** (`plugin.config`):
+```
+# Example invalid configuration
+webp_transform.so max_image_size=999999999999999
+```
+- ❌ **Impact**: ENTIRE plugin disabled for ALL traffic across all virtual hosts
+- ✅ **Mitigation**: All requests served without transformation (passthrough original images)
+- ✅ **Traffic Server**: Continues working normally (no crash, no service disruption)
+- ❌ **Client Impact**: None (images served unchanged - no broken images)
+- 📝 **Error Log**: `[webp_transform] Config validation failed - ABORTING plugin initialization`
+- 📊 **Metrics**: All `plugin.webp_transform.*` metrics remain at 0 (plugin not loaded)
+
+**Per-Remap Mode** (`remap.config`):
+```
+# Remap 1 - INVALID config (plugin disabled for this remap only)
+map http://site1.com/ http://origin/ \
+    @plugin=webp_transform.so @pparam=max_pixels=9999999999999
+
+# Remap 2 - VALID config (plugin works normally)
+map http://site2.com/ http://origin/ \
+    @plugin=webp_transform.so @pparam=max_pixels=50000000
+```
+- ❌ **Impact**: ONLY Remap 1 fails to initialize (isolated failure)
+- ✅ **Remap 2**: Works normally (transformations active for site2.com)
+- ✅ **Remap 1**: Requests served without transformation (passthrough for site1.com)
+- ✅ **Traffic Server**: Continues working normally (both sites accessible)
+- ❌ **Client Impact**: Site1.com serves original images (no optimization), Site2.com serves optimized images
+- 📝 **Error Log**: `[webp_transform] Config validation failed for remap instance`
+- 📊 **Metrics**: Site2.com metrics increment normally, Site1.com metrics remain at 0
+
+**Client Experience on Invalid Config**:
+- Browser receives original images (JPEG/PNG/WebP/AVIF unchanged)
+- No broken images - 100% uptime maintained
+- Transparent fallback to origin format
+
+**Operational Recommendations**:
+- Always test config changes in staging environment first
+- Use `traffic_ctl config reload` to apply changes (no restart needed)
+- Monitor error logs after reload: `tail -f /var/log/trafficserver/error.log | grep webp_transform`
+- Verify plugin loaded by checking metrics: `traffic_ctl metric match plugin.webp_transform`
+- Set up alerts for all metrics remaining at 0 (indicates plugin failed to load)
 
 ### Input Validation
 - **MIME Boundary Checking**: Accept header parsing uses strict boundary detection (space/comma/tab) to prevent spoofing like `Accept: comment-image/avif-hacked`
@@ -222,13 +273,14 @@ Watch these metrics for anomalies:
 **Production Recommendations**:
 - Set `max_image_size` conservatively (10MB default is safe)
 - Set `max_pixels` to prevent extreme images (100MP default is safe)
+- Tune `timeout` based on workload: CDN (2-3s), content-heavy (10-15s), internal (20-30s)
 - Monitor `oom_errors_total` and alert if > 0
 
 ## Performance Characteristics
 
 ### Blocking Behavior
 - **Synchronous Transformation**: Image processing is **blocking**. Each request waits for the transformation to complete before responding to the client.
-- **Timeout Protection**: Operations timeout after **5 seconds** (hardcoded) to prevent thread starvation from pathological images.
+- **Timeout Protection**: Operations timeout after `timeout` seconds (default 5s, configurable 1-60s via config parameter) to prevent thread starvation from pathological images.
 - **No Concurrent Limit**: The plugin does not limit concurrent transformations per client (relies on ATS connection limits).
 
 ### Memory Usage

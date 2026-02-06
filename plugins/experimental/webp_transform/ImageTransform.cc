@@ -56,12 +56,11 @@ namespace
 enum class ImageEncoding { webp, jpeg, png, avif, unknown };
 enum class MetadataMode { none, icc, all };
 
-const int DEFAULT_WEBP_QUALITY        = 75;
-const int DEFAULT_JPEG_QUALITY        = 85;
-const int DEFAULT_AVIF_QUALITY        = 50;
-const int64_t DEFAULT_MAX_SIZE        = 10 * 1024 * 1024;  // 10 MB
-const size_t DEFAULT_MAX_PIXELS       = 100 * 1000 * 1000; // 100 MPixels
-const int IMAGEMAGICK_TIMEOUT_SECONDS = 5;                 // MEDIUM-6: Timeout for ImageMagick operations
+const int DEFAULT_WEBP_QUALITY  = 75;
+const int DEFAULT_JPEG_QUALITY  = 85;
+const int DEFAULT_AVIF_QUALITY  = 50;
+const int64_t DEFAULT_MAX_SIZE  = 10 * 1024 * 1024;  // 10 MB
+const size_t DEFAULT_MAX_PIXELS = 100 * 1000 * 1000; // 100 MPixels
 
 std::once_flag magick_init_flag;
 static const char *g_plugin_path = nullptr; // HIGH-1: Store plugin path for InitializeMagick
@@ -87,6 +86,7 @@ struct PluginConfig {
   int64_t max_image_size = DEFAULT_MAX_SIZE;
   size_t max_pixels      = DEFAULT_MAX_PIXELS;
   MetadataMode metadata  = MetadataMode::all;
+  int timeout_seconds    = 5; // Configurable ImageMagick timeout (default 5s, range 1-60s)
 };
 
 // E3 (LOW-3): Prometheus-style stat naming (consistent with industry standard)
@@ -234,14 +234,40 @@ parse_config(int argc, const char *argv[], PluginConfig &config)
         TSError("[%s] Invalid max_pixels value", TAG);
         all_valid = false;
       }
+    } else if (option.size() > 8 && option.substr(0, 8) == "timeout=") {
+      try {
+        std::string value_str = std::string(option.substr(8));
+        size_t idx            = 0;
+        int val               = std::stoi(value_str, &idx);
+
+        const int MIN_TIMEOUT = 1;  // 1 second minimum
+        const int MAX_TIMEOUT = 60; // 60 seconds maximum
+
+        if (idx != value_str.length()) {
+          TSError("[%s] Invalid timeout: contains non-numeric characters", TAG);
+          all_valid = false;
+        } else if (val < MIN_TIMEOUT || val > MAX_TIMEOUT) {
+          TSError("[%s] timeout out of range: %d (allowed: %d-%d seconds)", TAG, val, MIN_TIMEOUT, MAX_TIMEOUT);
+          all_valid = false;
+        } else {
+          config.timeout_seconds = val;
+          TSDebug(TAG, "[%s] Configured timeout to %d seconds", TAG, config.timeout_seconds);
+        }
+      } catch (const std::out_of_range &e) {
+        TSError("[%s] timeout overflow: value too large", TAG);
+        all_valid = false;
+      } catch (...) {
+        TSError("[%s] Invalid timeout value", TAG);
+        all_valid = false;
+      }
     } else {
       TSDebug(TAG, "[%s] Unknown option: %.*s", TAG, (int)option.length(), option.data());
     }
   }
 
-  TSDebug(TAG, "[%s] Configuration: WebP=%d JPEG=%d AVIF=%d Progressive=%d Metadata=%d MaxSize=%ld MaxPixels=%zu", TAG,
+  TSDebug(TAG, "[%s] Configuration: WebP=%d JPEG=%d AVIF=%d Progressive=%d Metadata=%d MaxSize=%ld MaxPixels=%zu Timeout=%ds", TAG,
           config.convert_to_webp, config.convert_to_jpeg, config.convert_to_avif, config.progressive, (int)config.metadata,
-          config.max_image_size, config.max_pixels);
+          config.max_image_size, config.max_pixels, config.timeout_seconds);
 
   // A2 (MEDIUM-1): Return validation status - strict mode aborts on ANY invalid config
   return all_valid;
@@ -387,8 +413,8 @@ public:
       // A1 (MEDIUM-6): 2. Full Read with TIMEOUT protection against slow decode attacks
       auto read_future = std::async(std::launch::async, [&]() { image.read(input_blob); });
 
-      if (read_future.wait_for(std::chrono::seconds(IMAGEMAGICK_TIMEOUT_SECONDS)) == std::future_status::timeout) {
-        TSError("[%s] Image processing timeout (%ds) - possible DoS attack", TAG, IMAGEMAGICK_TIMEOUT_SECONDS);
+      if (read_future.wait_for(std::chrono::seconds(_config.timeout_seconds)) == std::future_status::timeout) {
+        TSError("[%s] Image processing timeout (%ds) - possible DoS attack", TAG, _config.timeout_seconds);
         stat_transform_errors_total.increment(1);
         throw std::runtime_error("Processing timeout");
       }
@@ -431,8 +457,8 @@ public:
       // A1 (MEDIUM-6): Write with timeout protection
       auto write_future = std::async(std::launch::async, [&]() { image.write(&output_blob); });
 
-      if (write_future.wait_for(std::chrono::seconds(IMAGEMAGICK_TIMEOUT_SECONDS)) == std::future_status::timeout) {
-        TSError("[%s] Image write timeout (%ds)", TAG, IMAGEMAGICK_TIMEOUT_SECONDS);
+      if (write_future.wait_for(std::chrono::seconds(_config.timeout_seconds)) == std::future_status::timeout) {
+        TSError("[%s] Image write timeout (%ds)", TAG, _config.timeout_seconds);
         stat_transform_errors_total.increment(1);
         throw std::runtime_error("Write timeout");
       }
