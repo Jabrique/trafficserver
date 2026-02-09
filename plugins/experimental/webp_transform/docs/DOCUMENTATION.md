@@ -389,16 +389,19 @@ Then monitor `traffic.out`:
 We use **AuTest** (Gold Testing System) to verify the plugin's functionality.
 
 ### Test Suite
-The tests are located in `tests/gold_tests/pluginTest/webp_transform/`.
+The tests are located in `tests/gold_tests/pluginTest/webp_transform/` with **86 test cases** covering critical code paths.
 
-- `webp_transform_remap.test.py`: Verifies per-remap configurations.
-- `webp_transform_quality.test.py`: Verifies quality settings and backward compatibility.
-- `webp_transform_advanced.test.py`: Verifies complex transcoding logic (Upgrade/Fallback).
-- `webp_transform_avif.test.py`: Verifies basic AVIF support.
-- `webp_transform_config_boolean.test.py`: Verifies boolean parameter parsing and default retention.
-- `webp_transform_config_robustness.test.py`: Verifies plugin stability against invalid configurations.
-- `webp_transform_edge_cases.test.py`: Verifies security features (DoS protection, decompression bomb, MIME spoofing).
-- `webp_transform_security_fixes.test.py`: Verifies security hardening from comprehensive audit (pixel overflow protection, config validation, MIME boundary checking, Accept header wildcards).
+- `remap_per_map.test.py`: Per-remap configurations and validation
+- `quality_settings.test.py`: Quality settings and backward compatibility
+- `format_upgrade_fallback.test.py`: Complex transcoding logic (Upgrade/Fallback, PNG support)
+- `avif_basic.test.py`: Basic AVIF support
+- `params_boolean.test.py`: Boolean parameter parsing and default retention
+- `params_validation.test.py`: Plugin stability against invalid configurations
+- `dos_protection.test.py`: Security (DoS, decompression bomb, MIME spoofing, Content-Type edge cases)
+- `security_audit_fixes.test.py`: Security hardening (pixel boundary, config validation, MIME boundary, Accept wildcards)
+- `progressive_jpeg.test.py`: Progressive JPEG generation
+- `metadata_stripping.test.py`: Metadata handling (all/icc/none modes)
+- `performance_multi_format.test.py`: Multi-format compression benchmarks
 
 ### Running Tests
 ```bash

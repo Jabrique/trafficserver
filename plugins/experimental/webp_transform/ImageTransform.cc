@@ -275,10 +275,10 @@ parse_config(int argc, const char *argv[], PluginConfig &config)
 
 // Helper function: Proper MIME type matching in Accept header
 static bool
-acceptsImageType(const std::string &accept, const std::string &mime_type)
+acceptsImageType(std::string_view accept, std::string_view mime_type)
 {
   size_t pos = 0;
-  while ((pos = accept.find(mime_type, pos)) != std::string::npos) {
+  while ((pos = accept.find(mime_type, pos)) != std::string_view::npos) {
     // Check boundaries: must be word boundary before mime_type
     bool valid_start = (pos == 0 || accept[pos - 1] == ' ' || accept[pos - 1] == ',' || accept[pos - 1] == '\t');
 
@@ -294,7 +294,7 @@ acceptsImageType(const std::string &accept, const std::string &mime_type)
 
   // Also check for wildcards: image/*, */*
   if (mime_type.substr(0, 6) == "image/") {
-    if (accept.find("image/*") != std::string::npos || accept.find("*/*") != std::string::npos) {
+    if (accept.find("image/*") != std::string_view::npos || accept.find("*/*") != std::string_view::npos) {
       return true;
     }
   }
@@ -344,7 +344,7 @@ public:
       if (!_img_buffer.empty()) {
         produce(std::string_view(_img_buffer.data(), _img_buffer.length()));
         _img_buffer.clear();
-        _img_buffer.shrink_to_fit();
+        // Buffer will be freed by destructor (RAII)
       }
       produce(data);
       return;
@@ -370,6 +370,13 @@ public:
       setOutputComplete();
       return;
     }
+
+    // Helper lambda: Passthrough original image on error
+    auto passthrough = [this]() {
+      if (!_img_buffer.empty()) {
+        produce(std::string_view(_img_buffer.data(), _img_buffer.length()));
+      }
+    };
 
     Blob input_blob(_img_buffer.data(), _img_buffer.length());
     Image image;
@@ -475,38 +482,28 @@ public:
     } catch (const Magick::Warning &warning) {
       // Non-fatal warning - log and passthrough original
       TSDebug(TAG, "[%s] ImageMagick warning: %s - attempting passthrough", TAG, warning.what());
-      if (!_img_buffer.empty()) {
-        produce(std::string_view(_img_buffer.data(), _img_buffer.length()));
-      }
+      passthrough();
     } catch (const Magick::ErrorCoder &error) {
       // Coder error (e.g., missing delegate library)
       TSError("[%s] ImageMagick coder error: %s - passthrough", TAG, error.what());
       stat_transform_errors_total.increment(1);
-      if (!_img_buffer.empty()) {
-        produce(std::string_view(_img_buffer.data(), _img_buffer.length()));
-      }
+      passthrough();
     } catch (const Magick::Error &error) {
       // Fatal ImageMagick error
       TSError("[%s] ImageMagick error: %s - passthrough", TAG, error.what());
       stat_transform_errors_total.increment(1);
-      if (!_img_buffer.empty()) {
-        produce(std::string_view(_img_buffer.data(), _img_buffer.length()));
-      }
+      passthrough();
     } catch (const std::bad_alloc &e) {
       // C1 (MEDIUM-3): Track OOM errors for observability
       TSError("[%s] Out of memory during image processing - passthrough", TAG);
       stat_oom_errors_total.increment(1);
       stat_transform_errors_total.increment(1);
-      if (!_img_buffer.empty()) {
-        produce(std::string_view(_img_buffer.data(), _img_buffer.length()));
-      }
+      passthrough();
     } catch (const std::exception &e) {
       // Other exceptions (including our own runtime_error from validation)
       TSError("[%s] Image processing error [%zu bytes]: %s - passthrough", TAG, _img_buffer.length(), e.what());
       stat_transform_errors_total.increment(1);
-      if (!_img_buffer.empty()) {
-        produce(std::string_view(_img_buffer.data(), _img_buffer.length()));
-      }
+      passthrough();
     }
 
     setOutputComplete();
@@ -544,20 +541,24 @@ public:
   handleReadResponseHeaders(Transaction &transaction) override
   {
     ImageEncoding input_image_type = ImageEncoding::unknown;
-    std::string ctype              = transaction.getServerResponse().getHeaders().values("Content-Type");
+    std::string_view ctype         = transaction.getServerResponse().getHeaders().values("Content-Type");
 
-    // Strict Content-Type Parsing
+    // Strict Content-Type Parsing: Extract MIME type before semicolon
     size_t semicolon_pos = ctype.find(';');
-    if (semicolon_pos != std::string::npos) {
+    if (semicolon_pos != std::string_view::npos) {
       ctype = ctype.substr(0, semicolon_pos);
     }
+
     // Trim whitespace
     const auto strBegin = ctype.find_first_not_of(" \t");
-    if (strBegin == std::string::npos) {
-      ctype = "";
-    } else {
+    if (strBegin != std::string_view::npos) {
+      ctype             = ctype.substr(strBegin);
       const auto strEnd = ctype.find_last_not_of(" \t");
-      ctype             = ctype.substr(strBegin, strEnd - strBegin + 1);
+      if (strEnd != std::string_view::npos) {
+        ctype = ctype.substr(0, strEnd + 1);
+      }
+    } else {
+      ctype = std::string_view();
     }
 
     if (ctype == "image/jpeg") {
@@ -571,9 +572,9 @@ public:
     }
 
     if (input_image_type != ImageEncoding::unknown) {
-      std::string accept  = transaction.getServerRequest().getHeaders().values("Accept");
-      bool avif_supported = acceptsImageType(accept, "image/avif");
-      bool webp_supported = acceptsImageType(accept, "image/webp");
+      std::string_view accept = transaction.getServerRequest().getHeaders().values("Accept");
+      bool avif_supported     = acceptsImageType(accept, "image/avif");
+      bool webp_supported     = acceptsImageType(accept, "image/webp");
 
       ImageEncoding target_type = ImageEncoding::unknown;
 
