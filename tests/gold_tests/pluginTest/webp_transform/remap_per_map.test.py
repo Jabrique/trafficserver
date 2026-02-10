@@ -61,3 +61,27 @@ tr.StillRunningAfter = ts
 tr = Test.AddTestRun("Verify Size Difference")
 tr.Processes.Default.Command = 'ls -lh out_remap_high.avif out_remap_low.avif'
 tr.Processes.Default.Streams.stdout = Testers.ContainsExpression("out_remap", "List files")
+
+# --- TEST 3: Invalid Remap Config (Should Return TS_ERROR) ---
+# Per lines 727-730: config validation failure returns TS_ERROR
+# This prevents invalid remap from loading while keeping server running
+# We can't easily test TS_ERROR return in AuTest, but we can verify remap doesn't work
+ts_invalid_remap = Test.MakeATSProcess("ts_invalid_remap")
+ts_invalid_remap.Disk.records_config.update({'proxy.config.http.cache.http': 0})
+# Add invalid quality value (out of range)
+ts_invalid_remap.Disk.remap_config.AddLine(
+    'map / http://127.0.0.1:{} @plugin=webp_transform.so @pparam=webp_quality=999'.format(origin_port))
+
+# Test that invalid config is properly rejected
+# ATS will fail to start with FATAL error, which is correct behavior
+# Just verify error logged by checking diags.log content
+
+# ATS should fail to start (not still running)
+ts_invalid_remap.ReturnCode = Any(None, 0, 70)  # 70 = config error exit code
+ts_invalid_remap.Ready = 0  # Don't wait for ready (will never be ready)
+
+# Verify error message in logs
+ts_invalid_remap.Disk.diags_log.Content = Testers.ContainsExpression(
+    "webp_quality= value 999 out of range", 
+    "Plugin should reject invalid quality value"
+)

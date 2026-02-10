@@ -63,3 +63,16 @@ tr.Processes.Default.Command = 'curl -v -o out_from_avif.jpg --header "Host: www
     ts.Variables.port)
 tr.Processes.Default.ReturnCode = 0
 tr.Processes.Default.Streams.stderr = Testers.ContainsExpression("Content-type: image/jpeg", "Check Content-Type")
+
+
+# --- TEST 5: PNG -> WebP Transformation ---
+tr = Test.AddTestRun("PNG to WebP Upgrade")
+tr.Processes.Default.Command = \
+    'curl -v -o out_png.webp --header "Host: www.example.com" --header "Accept: image/webp" http://127.0.0.1:{0}/test.png'.format(ts.Variables.port)
+tr.Processes.Default.ReturnCode = 0
+
+tr = Test.AddTestRun("Verify PNG to WebP")
+tr.Processes.Default.Command = 'file out_png.webp'
+tr.Processes.Default.ReturnCode = 0
+tr.Processes.Default.Streams.stdout = Testers.ContainsExpression("Web/P image", "PNG should convert to WebP")
+
