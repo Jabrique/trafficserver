@@ -124,7 +124,8 @@ tr.Processes.Default.Streams.stdout = Testers.ContainsExpression("JPEG image dat
                                                                    "Should remain JPEG (AVIF not in proper MIME format)")
 
 # =============================================================================
-# TEST 5: HIGH-3 Fix - Accept Header Wildcard Support
+# TEST 5: HIGH-3 Fix - Accept Header Wildcard Handling (Updated)
+# Wildcards (*/* and image/*) should NOT match AVIF/WebP for legacy browser safety
 # =============================================================================
 tr = Test.AddTestRun("HIGH-3: Accept Header Wildcard Test")
 tr.Processes.Default.Command = \
@@ -132,12 +133,12 @@ tr.Processes.Default.Command = \
         ts_accept_header.Variables.port)
 tr.Processes.Default.ReturnCode = 0
 
-tr = Test.AddTestRun("Verify Wildcard Accepted")
+tr = Test.AddTestRun("Verify Wildcard Does NOT Convert to Modern Format")
 tr.Processes.Default.Command = 'file out_wildcard.img'
 tr.Processes.Default.ReturnCode = 0
-# Should convert to AVIF or WebP (best format)
-tr.Processes.Default.Streams.stdout = Testers.ExcludesExpression("JPEG image data",
-                                                                   "Should convert (wildcard accepts modern formats)")
+# Wildcard should NOT match AVIF/WebP - stays as JPEG (passthrough for legacy browsers)
+tr.Processes.Default.Streams.stdout = Testers.ContainsExpression("JPEG image data",
+                                                                   "Wildcard should passthrough JPEG (not convert to AVIF/WebP)")
 
 # =============================================================================
 # TEST 6: CRITICAL-2 Fix - Constructor Validation
