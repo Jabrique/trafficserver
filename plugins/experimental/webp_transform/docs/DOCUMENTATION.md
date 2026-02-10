@@ -127,22 +127,41 @@ The plugin uses a smart logic matrix to determine the best output format:
 
 The plugin parses the client's `Accept` header to determine browser capabilities:
 
-**Exact Match**:
+**Exact Match (Recommended)**:
 - `Accept: image/avif` → AVIF transformation (if enabled)
 - `Accept: image/webp` → WebP transformation (if enabled)
 - `Accept: image/jpeg` → No transformation unless downgrade needed
 
-**Wildcard Support**:
-- `Accept: image/*` → Transforms to AVIF (highest priority format)
-- `Accept: */*` → Transforms to AVIF (highest priority format)
+**Wildcard Handling** (Updated in v9.2.x):
+
+⚠️ **IMPORTANT**: Wildcards (`*/*` and `image/*`) **DO NOT match AVIF or WebP**. This prevents legacy browsers (IE11, Safari <14, Firefox <65) from receiving modern formats they cannot display.
+
+| Accept Header | AVIF? | WebP? | JPEG/PNG? |
+|---------------|-------|-------|-----------|
+| `image/avif,image/webp,*/*` | ✅ (explicit) | ✅ (explicit) | ✅ |
+| `image/webp,*/*` | ❌ | ✅ (explicit) | ✅ |
+| `*/*` only | ❌ | ❌ | ✅ |
+| `image/*` only | ❌ | ❌ | ✅ |
+| `image/png,image/*;q=0.8,*/*;q=0.5` | ❌ | ❌ | ✅ |
+
+**Legacy Browser Behavior**:
+- IE 11: Sends `*/*` → Gets JPEG fallback (WebP/AVIF input auto-downgraded)
+- Safari <14: Sends `image/*,*/*` → Gets JPEG fallback
+- Firefox <65: Sends `*/*` → Gets JPEG fallback
+- Edge 12-17: Sends `image/jxr,*/*` → Gets JPEG fallback
+
+**Modern Browser Examples**:
+- Chrome 85+: `image/avif,image/webp,image/apng,image/*,*/*;q=0.8` → AVIF ✅
+- Firefox 93+: `image/avif,image/webp,*/*` → AVIF ✅
+- Safari 14+: `image/webp,image/png,image/*,*/*` → WebP ✅
 
 **Multiple Types**:
 - `Accept: image/avif, image/webp, image/jpeg` → AVIF (first match in priority order)
 - `Accept: text/html, image/webp` → WebP (non-image types ignored)
 
 **Priority Order** (when multiple formats accepted):
-1. **AVIF** (if `convert_to_avif=true` and browser supports `image/avif` or wildcards)
-2. **WebP** (if `convert_to_webp=true` and browser supports `image/webp` or wildcards)
+1. **AVIF** (if `convert_to_avif=true` and browser **explicitly** supports `image/avif`)
+2. **WebP** (if `convert_to_webp=true` and browser **explicitly** supports `image/webp`)
 3. **JPEG** (if `convert_to_jpeg=true` and input is WebP/AVIF)
 
 **Important Limitations**:

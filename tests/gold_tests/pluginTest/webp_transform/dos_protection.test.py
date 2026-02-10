@@ -105,17 +105,18 @@ tr.Processes.Default.Command = 'file out_empty_accept.jpg'
 tr.Processes.Default.ReturnCode = 0
 tr.Processes.Default.Streams.stdout = Testers.ContainsExpression("JPEG image data", "Should remain JPEG (no conversion)")
 
-# --- TEST 6: Missing Accept Header (curl default */*) ---
-# NOTE: curl sends "Accept: */*" by default, which triggers AVIF transformation
-tr = Test.AddTestRun("Missing Accept Header (curl default)")
+# --- TEST 6: curl Default Accept (*/*) - Legacy Browser Simulation ---
+# NOTE: curl sends "Accept: */*" by default. With the wildcard fix, this should
+# NOT convert to AVIF/WebP (legacy browsers get JPEG passthrough)
+tr = Test.AddTestRun("curl Default Accept (wildcard passthrough)")
 tr.Processes.Default.Command = \
-    'curl -v -o out_no_accept.avif http://127.0.0.1:{0}/image.jpg'.format(ts.Variables.port)
+    'curl -v -o out_no_accept.jpg http://127.0.0.1:{0}/image.jpg'.format(ts.Variables.port)
 tr.Processes.Default.ReturnCode = 0
 
-tr = Test.AddTestRun("Verify curl Default Accept Transforms")
-tr.Processes.Default.Command = 'file out_no_accept.avif'
+tr = Test.AddTestRun("Verify curl Default Accept Passthrough")
+tr.Processes.Default.Command = 'file out_no_accept.jpg'
 tr.Processes.Default.ReturnCode = 0
-tr.Processes.Default.Streams.stdout = Testers.ContainsExpression("ISO Media", "Should transform to AVIF (curl sends Accept: */*)")
+tr.Processes.Default.Streams.stdout = Testers.ContainsExpression("JPEG image data", "Wildcard */* should passthrough (legacy browser safety)")
 
 # --- TEST 7: Missing Content-Type Header (Should Passthrough) ---
 # Use query param ?no_content_type=1 to skip Content-Type header

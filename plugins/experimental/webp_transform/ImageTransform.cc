@@ -292,8 +292,17 @@ acceptsImageType(std::string_view accept, std::string_view mime_type)
     pos++;
   }
 
-  // Also check for wildcards: image/*, */*
+  // Wildcard handling for image types
+  // Modern formats (AVIF/WebP) require EXPLICIT listing in Accept header
+  // Wildcards (*/* or image/*) only match universal formats (JPEG/PNG/GIF)
+  // This ensures legacy browsers (IE11, Safari<14, Firefox<65) get JPEG fallback
   if (mime_type.substr(0, 6) == "image/") {
+    // Modern formats require explicit Accept header - no wildcard matching
+    if (mime_type == "image/avif" || mime_type == "image/webp") {
+      return false; // Already checked for explicit match above, not found
+    }
+
+    // Universal formats (JPEG, PNG, GIF, etc.) can use wildcard
     if (accept.find("image/*") != std::string_view::npos || accept.find("*/*") != std::string_view::npos) {
       return true;
     }
@@ -541,7 +550,8 @@ public:
   handleReadResponseHeaders(Transaction &transaction) override
   {
     ImageEncoding input_image_type = ImageEncoding::unknown;
-    std::string_view ctype         = transaction.getServerResponse().getHeaders().values("Content-Type");
+    std::string ctype_str          = transaction.getServerResponse().getHeaders().values("Content-Type");
+    std::string_view ctype         = ctype_str; // Safe: ctype_str owns the data
 
     // Strict Content-Type Parsing: Extract MIME type before semicolon
     size_t semicolon_pos = ctype.find(';');
@@ -572,9 +582,9 @@ public:
     }
 
     if (input_image_type != ImageEncoding::unknown) {
-      std::string_view accept = transaction.getServerRequest().getHeaders().values("Accept");
-      bool avif_supported     = acceptsImageType(accept, "image/avif");
-      bool webp_supported     = acceptsImageType(accept, "image/webp");
+      std::string accept  = transaction.getServerRequest().getHeaders().values("Accept");
+      bool avif_supported = acceptsImageType(accept, "image/avif");
+      bool webp_supported = acceptsImageType(accept, "image/webp");
 
       ImageEncoding target_type = ImageEncoding::unknown;
 
@@ -711,6 +721,7 @@ TSRemapInit(TSRemapInterface *api_info, char *errbuf, int errbuf_size)
 {
   if (!api_info) {
     strncpy(errbuf, "[TSRemapInit] - Invalid TSRemapInterface argument", errbuf_size - 1);
+    errbuf[errbuf_size - 1] = '\0'; // Ensure null termination
     return TS_ERROR;
   }
   ensure_magick_initialized();
