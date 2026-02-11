@@ -20,6 +20,9 @@ server.ReturnCode = Any(None, 0, -2, -15)
 # --- SETUP ATS ---
 ts = Test.MakeATSProcess("ts")
 
+# Enable stats_over_http for remap stats verification
+ts.Disk.plugin_config.AddLine('stats_over_http.so')
+
 # Note: We do NOT load the plugin globally here to test Remap-only mode.
 # Or we can load it globally but override in remap.
 # Let's try pure remap loading first (standard practice for remap plugins).
@@ -61,6 +64,23 @@ tr.StillRunningAfter = ts
 tr = Test.AddTestRun("Verify Size Difference")
 tr.Processes.Default.Command = 'ls -lh out_remap_high.avif out_remap_low.avif'
 tr.Processes.Default.Streams.stdout = Testers.ContainsExpression("out_remap", "List files")
+
+# --- TEST: Verify Remap Stats are Registered ---
+# When plugin is loaded via remap.config, remap.* stats should appear
+tr = Test.AddTestRun("Check Remap Stats Registered")
+tr.Processes.Default.Command = 'curl -s http://127.0.0.1:{0}/_stats 2>/dev/null | grep webp_transform.remap.conversions || echo "remap_stat_not_found"'.format(
+    ts.Variables.port)
+tr.Processes.Default.ReturnCode = 0
+tr.Processes.Default.Streams.stdout = Testers.ContainsExpression("webp_transform.remap.conversions",
+                                                                   "Remap stats should be registered")
+
+# Verify remap conversion count increased (we made 2 AVIF conversions above)
+tr = Test.AddTestRun("Check Remap AVIF Conversion Count")
+tr.Processes.Default.Command = 'curl -s http://127.0.0.1:{0}/_stats 2>/dev/null | grep webp_transform.remap.conversions_avif_total'.format(
+    ts.Variables.port)
+tr.Processes.Default.ReturnCode = 0
+tr.Processes.Default.Streams.stdout = Testers.ContainsExpression("conversions_avif_total",
+                                                                   "AVIF conversion stat should exist")
 
 # --- TEST 3: Invalid Remap Config (Should Return TS_ERROR) ---
 # Per lines 727-730: config validation failure returns TS_ERROR

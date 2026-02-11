@@ -90,18 +90,71 @@ struct PluginConfig {
 };
 
 // E3 (LOW-3): Prometheus-style stat naming (consistent with industry standard)
-Stat stat_conversions_webp_total;
-Stat stat_conversions_jpeg_total;
-Stat stat_conversions_avif_total;
-Stat stat_transform_errors_total;
-Stat stat_passthrough_size_bytes;
-Stat stat_passthrough_pixels_exceeded;
-Stat stat_passthrough_invalid_total;
+// Global plugin stats - initialized in TSPluginInit
+Stat global_conversions_webp_total;
+Stat global_conversions_jpeg_total;
+Stat global_conversions_avif_total;
+Stat global_transform_errors_total;
+Stat global_passthrough_size_bytes;
+Stat global_passthrough_pixels_exceeded;
+Stat global_passthrough_invalid_total;
+Stat global_oom_errors_total;
+Stat global_peak_buffer_mb;
+Stat global_active_transforms;
 
-// C1 (MEDIUM-3): Memory and observability metrics
-Stat stat_oom_errors_total;
-Stat stat_peak_buffer_mb;
-Stat stat_active_transforms;
+// Remap plugin stats - initialized in TSRemapInit
+Stat remap_conversions_webp_total;
+Stat remap_conversions_jpeg_total;
+Stat remap_conversions_avif_total;
+Stat remap_transform_errors_total;
+Stat remap_passthrough_size_bytes;
+Stat remap_passthrough_pixels_exceeded;
+Stat remap_passthrough_invalid_total;
+Stat remap_oom_errors_total;
+Stat remap_peak_buffer_mb;
+Stat remap_active_transforms;
+
+// Init flags for thread-safe initialization
+std::once_flag global_stats_init_flag;
+std::once_flag remap_stats_init_flag;
+
+// Initialize global plugin stats (called from TSPluginInit)
+static void
+init_global_stats()
+{
+  std::call_once(global_stats_init_flag, []() {
+    global_conversions_webp_total.init("plugin." TAG ".global.conversions_webp_total", Stat::SYNC_SUM, false);
+    global_conversions_jpeg_total.init("plugin." TAG ".global.conversions_jpeg_total", Stat::SYNC_SUM, false);
+    global_conversions_avif_total.init("plugin." TAG ".global.conversions_avif_total", Stat::SYNC_SUM, false);
+    global_transform_errors_total.init("plugin." TAG ".global.transform_errors_total", Stat::SYNC_SUM, false);
+    global_passthrough_size_bytes.init("plugin." TAG ".global.passthrough_size_bytes", Stat::SYNC_SUM, false);
+    global_passthrough_pixels_exceeded.init("plugin." TAG ".global.passthrough_pixels_exceeded", Stat::SYNC_SUM, false);
+    global_passthrough_invalid_total.init("plugin." TAG ".global.passthrough_invalid_total", Stat::SYNC_SUM, false);
+    global_oom_errors_total.init("plugin." TAG ".global.oom_errors_total", Stat::SYNC_SUM, false);
+    global_peak_buffer_mb.init("plugin." TAG ".global.peak_buffer_mb", Stat::SYNC_SUM, false);
+    global_active_transforms.init("plugin." TAG ".global.active_transforms", Stat::SYNC_SUM, false);
+    TSDebug(TAG, "Global stats initialized");
+  });
+}
+
+// Initialize remap plugin stats (called from TSRemapInit)
+static void
+init_remap_stats()
+{
+  std::call_once(remap_stats_init_flag, []() {
+    remap_conversions_webp_total.init("plugin." TAG ".remap.conversions_webp_total", Stat::SYNC_SUM, false);
+    remap_conversions_jpeg_total.init("plugin." TAG ".remap.conversions_jpeg_total", Stat::SYNC_SUM, false);
+    remap_conversions_avif_total.init("plugin." TAG ".remap.conversions_avif_total", Stat::SYNC_SUM, false);
+    remap_transform_errors_total.init("plugin." TAG ".remap.transform_errors_total", Stat::SYNC_SUM, false);
+    remap_passthrough_size_bytes.init("plugin." TAG ".remap.passthrough_size_bytes", Stat::SYNC_SUM, false);
+    remap_passthrough_pixels_exceeded.init("plugin." TAG ".remap.passthrough_pixels_exceeded", Stat::SYNC_SUM, false);
+    remap_passthrough_invalid_total.init("plugin." TAG ".remap.passthrough_invalid_total", Stat::SYNC_SUM, false);
+    remap_oom_errors_total.init("plugin." TAG ".remap.oom_errors_total", Stat::SYNC_SUM, false);
+    remap_peak_buffer_mb.init("plugin." TAG ".remap.peak_buffer_mb", Stat::SYNC_SUM, false);
+    remap_active_transforms.init("plugin." TAG ".remap.active_transforms", Stat::SYNC_SUM, false);
+    TSDebug(TAG, "Remap stats initialized");
+  });
+}
 
 // E2 (LOW-2): Remove magic numbers - use constexpr for clarity
 constexpr std::string_view MAX_SIZE_PREFIX   = "max_image_size=";
@@ -316,14 +369,19 @@ class ImageTransform : public TransformationPlugin
 {
 public:
   ImageTransform(Transaction &transaction, ImageEncoding input_image_type, ImageEncoding transform_image_type,
-                 const PluginConfig &config)
+                 const PluginConfig &config, bool is_remap = false)
     : TransformationPlugin(transaction, TransformationPlugin::RESPONSE_TRANSFORMATION),
       _input_image_type(input_image_type),
       _transform_image_type(transform_image_type),
-      _config(config)
+      _config(config),
+      _is_remap(is_remap)
   {
     // C1 (MEDIUM-3): Track active transformations for observability
-    stat_active_transforms.increment(1);
+    if (_is_remap) {
+      remap_active_transforms.increment(1);
+    } else {
+      global_active_transforms.increment(1);
+    }
 
     // Defensive validation: Ensure config invariants
     if (_config.max_image_size <= 0) {
@@ -347,7 +405,7 @@ public:
     if (_img_buffer.length() + data.length() > (size_t)_config.max_image_size) {
       TSDebug(TAG, "[%s] Image size exceeds limit (%ld). Aborting transformation and switching to streaming passthrough.", TAG,
               _config.max_image_size);
-      stat_passthrough_size_bytes.increment(1);
+      increment_passthrough_size();
       _transform_aborted = true;
 
       if (!_img_buffer.empty()) {
@@ -362,9 +420,7 @@ public:
 
     // C1 (MEDIUM-3): Track peak buffer size for memory observability
     size_t buffer_mb = _img_buffer.length() / (1024 * 1024);
-    if (buffer_mb > (size_t)stat_peak_buffer_mb.get()) {
-      stat_peak_buffer_mb.set(buffer_mb);
-    }
+    update_peak_buffer(buffer_mb);
   }
 
   void
@@ -397,7 +453,7 @@ public:
       std::string format = image.magick();
       if (format != "JPEG" && format != "PNG" && format != "WEBP" && format != "AVIF") {
         TSError("[%s] Security Alert: Unsupported format spoofed as image: %s", TAG, format.c_str());
-        stat_passthrough_invalid_total.increment(1);
+        increment_passthrough_invalid();
         throw std::runtime_error("Unsupported format");
       }
 
@@ -407,14 +463,14 @@ public:
 
       if (width == 0 || height == 0) {
         TSError("[%s] Invalid image dimensions", TAG); // C2 (MEDIUM-5): Sanitized - removed width/height
-        stat_passthrough_invalid_total.increment(1);
+        increment_passthrough_invalid();
         throw std::runtime_error("Invalid dimensions");
       }
 
       // Safe overflow check: Prevent width * height from overflowing SIZE_MAX
       if (height > 0 && width > SIZE_MAX / height) {
         TSError("[%s] Image dimension overflow detected", TAG); // C2: Sanitized
-        stat_passthrough_pixels_exceeded.increment(1);
+        increment_passthrough_pixels();
         throw std::runtime_error("Dimension overflow");
       }
 
@@ -422,7 +478,7 @@ public:
       size_t total_pixels = width * height;
       if (total_pixels > _config.max_pixels) {
         TSDebug(TAG, "[%s] Image pixel count exceeds configured limit", TAG); // C2: Sanitized
-        stat_passthrough_pixels_exceeded.increment(1);
+        increment_passthrough_pixels();
         throw std::runtime_error("Image too large");
       }
 
@@ -431,7 +487,7 @@ public:
 
       if (read_future.wait_for(std::chrono::seconds(_config.timeout_seconds)) == std::future_status::timeout) {
         TSError("[%s] Image processing timeout (%ds) - possible DoS attack", TAG, _config.timeout_seconds);
-        stat_transform_errors_total.increment(1);
+        increment_transform_errors();
         throw std::runtime_error("Processing timeout");
       }
       read_future.get(); // Retrieve result or exception
@@ -456,17 +512,17 @@ public:
 
       Blob output_blob;
       if (_transform_image_type == ImageEncoding::webp) {
-        stat_conversions_webp_total.increment(1);
+        increment_conversions_webp();
         TSDebug(TAG, "[%s] Transforming to WebP (Q=%d)", TAG, _config.webp_quality);
         image.quality(_config.webp_quality);
         image.magick("WEBP");
       } else if (_transform_image_type == ImageEncoding::avif) {
-        stat_conversions_avif_total.increment(1);
+        increment_conversions_avif();
         TSDebug(TAG, "[%s] Transforming to AVIF (Q=%d)", TAG, _config.avif_quality);
         image.quality(_config.avif_quality);
         image.magick("AVIF");
       } else {
-        stat_conversions_jpeg_total.increment(1);
+        increment_conversions_jpeg();
         TSDebug(TAG, "[%s] Transforming to JPEG (Q=%d)", TAG, _config.jpeg_quality);
         image.quality(_config.jpeg_quality);
         image.magick("JPEG");
@@ -477,7 +533,7 @@ public:
 
       if (write_future.wait_for(std::chrono::seconds(_config.timeout_seconds)) == std::future_status::timeout) {
         TSError("[%s] Image write timeout (%ds)", TAG, _config.timeout_seconds);
-        stat_transform_errors_total.increment(1);
+        increment_transform_errors();
         throw std::runtime_error("Write timeout");
       }
       write_future.get();
@@ -485,7 +541,7 @@ public:
       // A3 (MEDIUM-8): Validate output blob is not empty before sending
       if (output_blob.length() == 0) {
         TSError("[%s] ImageMagick produced empty output - falling back to passthrough", TAG);
-        stat_transform_errors_total.increment(1);
+        increment_transform_errors();
         throw std::runtime_error("Empty output blob");
       }
 
@@ -497,23 +553,23 @@ public:
     } catch (const Magick::ErrorCoder &error) {
       // Coder error (e.g., missing delegate library)
       TSError("[%s] ImageMagick coder error: %s - passthrough", TAG, error.what());
-      stat_transform_errors_total.increment(1);
+      increment_transform_errors();
       passthrough();
     } catch (const Magick::Error &error) {
       // Fatal ImageMagick error
       TSError("[%s] ImageMagick error: %s - passthrough", TAG, error.what());
-      stat_transform_errors_total.increment(1);
+      increment_transform_errors();
       passthrough();
     } catch (const std::bad_alloc &e) {
       // C1 (MEDIUM-3): Track OOM errors for observability
       TSError("[%s] Out of memory during image processing - passthrough", TAG);
-      stat_oom_errors_total.increment(1);
-      stat_transform_errors_total.increment(1);
+      increment_oom_errors();
+      increment_transform_errors();
       passthrough();
     } catch (const std::exception &e) {
       // Other exceptions (including our own runtime_error from validation)
       TSError("[%s] Image processing error [%zu bytes]: %s - passthrough", TAG, _img_buffer.length(), e.what());
-      stat_transform_errors_total.increment(1);
+      increment_transform_errors();
       passthrough();
     }
 
@@ -523,7 +579,11 @@ public:
   ~ImageTransform() override
   {
     // C1 (MEDIUM-3): Decrement active transforms counter
-    stat_active_transforms.decrement(1);
+    if (_is_remap) {
+      remap_active_transforms.decrement(1);
+    } else {
+      global_active_transforms.decrement(1);
+    }
     TSDebug(TAG, "[%s] ImageTransform destroyed", TAG);
   }
 
@@ -533,6 +593,57 @@ private:
   const ImageEncoding _transform_image_type; // E4: const correctness
   bool _transform_aborted = false;
   const PluginConfig _config;
+  const bool _is_remap;
+
+  // Helper functions to increment the correct stat based on plugin mode
+  void
+  increment_passthrough_size()
+  {
+    _is_remap ? remap_passthrough_size_bytes.increment(1) : global_passthrough_size_bytes.increment(1);
+  }
+  void
+  increment_passthrough_invalid()
+  {
+    _is_remap ? remap_passthrough_invalid_total.increment(1) : global_passthrough_invalid_total.increment(1);
+  }
+  void
+  increment_passthrough_pixels()
+  {
+    _is_remap ? remap_passthrough_pixels_exceeded.increment(1) : global_passthrough_pixels_exceeded.increment(1);
+  }
+  void
+  increment_transform_errors()
+  {
+    _is_remap ? remap_transform_errors_total.increment(1) : global_transform_errors_total.increment(1);
+  }
+  void
+  increment_conversions_webp()
+  {
+    _is_remap ? remap_conversions_webp_total.increment(1) : global_conversions_webp_total.increment(1);
+  }
+  void
+  increment_conversions_avif()
+  {
+    _is_remap ? remap_conversions_avif_total.increment(1) : global_conversions_avif_total.increment(1);
+  }
+  void
+  increment_conversions_jpeg()
+  {
+    _is_remap ? remap_conversions_jpeg_total.increment(1) : global_conversions_jpeg_total.increment(1);
+  }
+  void
+  increment_oom_errors()
+  {
+    _is_remap ? remap_oom_errors_total.increment(1) : global_oom_errors_total.increment(1);
+  }
+  void
+  update_peak_buffer(size_t mb)
+  {
+    Stat &peak_stat = _is_remap ? remap_peak_buffer_mb : global_peak_buffer_mb;
+    if (mb > (size_t)peak_stat.get()) {
+      peak_stat.set(mb);
+    }
+  }
 
   // D2 (MEDIUM-7): ImageMagick RAII cleanup verification
   // Note: ImageMagick++ Image class uses RAII and properly releases resources in destructor.
@@ -542,8 +653,8 @@ private:
 class WebpTransformTransactionPlugin : public TransactionPlugin
 {
 public:
-  WebpTransformTransactionPlugin(Transaction &transaction, const PluginConfig &config)
-    : TransactionPlugin(transaction), _config(config)
+  WebpTransformTransactionPlugin(Transaction &transaction, const PluginConfig &config, bool is_remap = false)
+    : TransactionPlugin(transaction), _config(config), _is_remap(is_remap)
   {
     registerHook(HOOK_READ_RESPONSE_HEADERS);
   }
@@ -634,7 +745,7 @@ public:
         }
         resp_headers["Vary"] = "Accept";
 
-        transaction.addPlugin(new ImageTransform(transaction, input_image_type, target_type, _config));
+        transaction.addPlugin(new ImageTransform(transaction, input_image_type, target_type, _config, _is_remap));
       }
     }
 
@@ -645,6 +756,7 @@ public:
 
 private:
   const PluginConfig _config;
+  const bool _is_remap;
 };
 
 class WebpTransformGlobalPlugin : public GlobalPlugin
@@ -655,7 +767,7 @@ public:
   void
   handleReadRequestHeadersPreRemap(Transaction &transaction) override
   {
-    transaction.addPlugin(new WebpTransformTransactionPlugin(transaction, _config));
+    transaction.addPlugin(new WebpTransformTransactionPlugin(transaction, _config, false)); // is_remap=false
     transaction.resume();
   }
 
@@ -671,7 +783,7 @@ public:
   Result
   doRemap(const Url &map_from_url, const Url &map_to_url, Transaction &transaction, bool &redirect) override
   {
-    transaction.addPlugin(new WebpTransformTransactionPlugin(transaction, _config));
+    transaction.addPlugin(new WebpTransformTransactionPlugin(transaction, _config, true)); // is_remap=true
     return RESULT_DID_REMAP;
   }
 
@@ -700,19 +812,8 @@ TSPluginInit(int argc, const char *argv[])
     return; // Don't register hooks if config is invalid
   }
 
-  // E3 (LOW-3): Initialize stats with Prometheus-style naming
-  stat_conversions_webp_total.init("plugin." TAG ".conversions_webp_total", Stat::SYNC_SUM, false);
-  stat_conversions_jpeg_total.init("plugin." TAG ".conversions_jpeg_total", Stat::SYNC_SUM, false);
-  stat_conversions_avif_total.init("plugin." TAG ".conversions_avif_total", Stat::SYNC_SUM, false);
-  stat_transform_errors_total.init("plugin." TAG ".transform_errors_total", Stat::SYNC_SUM, false);
-  stat_passthrough_size_bytes.init("plugin." TAG ".passthrough_size_bytes", Stat::SYNC_SUM, false);
-  stat_passthrough_pixels_exceeded.init("plugin." TAG ".passthrough_pixels_exceeded", Stat::SYNC_SUM, false);
-  stat_passthrough_invalid_total.init("plugin." TAG ".passthrough_invalid_total", Stat::SYNC_SUM, false);
-
-  // C1 (MEDIUM-3): Memory and observability metrics
-  stat_oom_errors_total.init("plugin." TAG ".oom_errors_total", Stat::SYNC_SUM, false);
-  stat_peak_buffer_mb.init("plugin." TAG ".peak_buffer_mb", Stat::SYNC_SUM, false);
-  stat_active_transforms.init("plugin." TAG ".active_transforms", Stat::SYNC_SUM, false);
+  // E3 (LOW-3): Initialize global stats with Prometheus-style naming
+  init_global_stats();
 
   ensure_magick_initialized();
   new WebpTransformGlobalPlugin(global_config);
@@ -726,6 +827,10 @@ TSRemapInit(TSRemapInterface *api_info, char *errbuf, int errbuf_size)
     errbuf[errbuf_size - 1] = '\0'; // Ensure null termination
     return TS_ERROR;
   }
+
+  // E3 (LOW-3): Initialize remap stats with Prometheus-style naming
+  init_remap_stats();
+
   ensure_magick_initialized();
   TSDebug(TAG, "[%s] Remap Plugin Initialized", TAG);
   return TS_SUCCESS;

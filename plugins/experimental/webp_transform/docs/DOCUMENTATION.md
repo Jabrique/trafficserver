@@ -241,7 +241,7 @@ webp_transform.so max_image_size=999999999999999
 - ✅ **Traffic Server**: Continues working normally (no crash, no service disruption)
 - ❌ **Client Impact**: None (images served unchanged - no broken images)
 - 📝 **Error Log**: `[webp_transform] Config validation failed - ABORTING plugin initialization`
-- 📊 **Metrics**: All `plugin.webp_transform.*` metrics remain at 0 (plugin not loaded)
+- 📊 **Metrics**: All `plugin.webp_transform.remap.*` metrics remain at 0 (plugin not loaded for that remap)
 
 **Per-Remap Mode** (`remap.config`):
 ```
@@ -327,28 +327,43 @@ Watch these metrics for anomalies:
 
 ## Monitoring & Statistics
 
-The plugin exposes several metrics to monitor its operation and security status. You can view these statistics using `traffic_ctl`:
+The plugin exposes separate metrics for **Global** and **Remap** plugin modes, allowing granular monitoring of each configuration.
 
 ```bash
+# View all metrics
 traffic_ctl metric match plugin.webp_transform
+
+# View only global plugin metrics
+traffic_ctl metric match plugin.webp_transform.global
+
+# View only remap plugin metrics
+traffic_ctl metric match plugin.webp_transform.remap
 ```
 
 ### Available Metrics
 
-| Metric Name | Description |
-| :--- | :--- |
-| `plugin.webp_transform.conversions_webp_total` | Total successful conversions to WebP. |
-| `plugin.webp_transform.conversions_jpeg_total` | Total successful conversions to JPEG. |
-| `plugin.webp_transform.conversions_avif_total` | Total successful conversions to AVIF. |
-| `plugin.webp_transform.transform_errors_total` | Total processing errors encountered. |
-| `plugin.webp_transform.passthrough_size_bytes` | Total images passed through due to size limit (DoS protection). |
-| `plugin.webp_transform.passthrough_pixels_exceeded` | Total images passed through due to pixel limit (Decompression bomb protection). |
-| `plugin.webp_transform.passthrough_invalid_total` | Total images passed through due to invalid or unsupported format. |
-| `plugin.webp_transform.oom_errors_total` | **NEW:** Total out-of-memory errors during transformation. Monitor this! |
-| `plugin.webp_transform.peak_buffer_mb` | **NEW:** Peak buffer size in MB across all transformations. |
-| `plugin.webp_transform.active_transforms` | **NEW:** Current number of active transformations (real-time counter). |
+Metrics are separated by plugin mode:
+- **`plugin.webp_transform.global.*`** - When plugin is loaded via `plugin.config` (global mode)
+- **`plugin.webp_transform.remap.*`** - When plugin is loaded via `remap.config` (per-remap mode)
 
-**Note**: Metric names were updated to Prometheus-style convention in February 2026. Old names (`convert_to_webp`, `errors`, etc.) no longer exist.
+| Metric Suffix | Description |
+| :--- | :--- |
+| `conversions_webp_total` | Total successful conversions to WebP. |
+| `conversions_jpeg_total` | Total successful conversions to JPEG. |
+| `conversions_avif_total` | Total successful conversions to AVIF. |
+| `transform_errors_total` | Total processing errors encountered. |
+| `passthrough_size_bytes` | Total images passed through due to size limit (DoS protection). |
+| `passthrough_pixels_exceeded` | Total images passed through due to pixel limit (Decompression bomb protection). |
+| `passthrough_invalid_total` | Total images passed through due to invalid or unsupported format. |
+| `oom_errors_total` | Total out-of-memory errors during transformation. Monitor this! |
+| `peak_buffer_mb` | Peak buffer size in MB across all transformations. |
+| `active_transforms` | Current number of active transformations (real-time counter). |
+
+**Example metric names:**
+- `plugin.webp_transform.global.conversions_webp_total` - WebP conversions via global plugin
+- `plugin.webp_transform.remap.conversions_avif_total` - AVIF conversions via remap plugin
+
+**Note**: Metrics are automatically exposed via `stats_over_http.so` endpoint (if enabled).
 
 ## Troubleshooting
 
@@ -366,7 +381,7 @@ traffic_ctl metric match plugin.webp_transform
 
 ### Runtime Issues
 
-#### High `transform_errors_total` Metric
+#### High `*.transform_errors_total` Metric
 **Possible Causes**:
 - ImageMagick timeout (5s) exceeded on slow/busy servers
 - Corrupt or malformed images
@@ -374,16 +389,18 @@ traffic_ctl metric match plugin.webp_transform
 
 **Diagnosis**: Enable debug logging to see specific errors
 
-#### High `oom_errors_total` Metric
+#### High `*.oom_errors_total` Metric
 **Cause**: Server running out of memory during transformation  
 **Impact**: Images served as-is (passthrough)  
 **Fix**: Reduce `max_pixels` OR increase server RAM  
-**Analysis**: Check `peak_buffer_mb` to see memory patterns
+**Analysis**: Check `*.peak_buffer_mb` to see memory patterns
 
-#### High `passthrough_invalid_total` Metric
+#### High `*.passthrough_invalid_total` Metric
 **Cause**: Many unsupported formats (GIF, BMP, TIFF) or corrupt images  
 **Impact**: Normal behavior - plugin only handles JPEG/PNG/WebP/AVIF  
 **Action**: No fix needed unless unexpectedly high
+
+**Note**: Replace `*` with `global` or `remap` depending on which plugin mode you're using.
 
 ### Debug Logging
 
