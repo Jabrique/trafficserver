@@ -50,12 +50,12 @@ tr.Processes.Default.ReturnCode = 0
 tr.Processes.Default.Streams.stdout = Testers.ContainsExpression("JPEG image data",
                                                                    "Should passthrough JPEG (not converted)")
 
-tr = Test.AddTestRun("Check Pixel Overflow Stat")
-tr.Processes.Default.Command = 'curl -s http://127.0.0.1:{0}/_stats 2>/dev/null | grep webp_transform.passthrough_pixels || echo "stat_not_found"'.format(
+tr = Test.AddTestRun("Check Pixel Overflow Stat (Global)")
+tr.Processes.Default.Command = 'curl -s http://127.0.0.1:{0}/_stats 2>/dev/null | grep webp_transform.global.passthrough_pixels || echo "stat_not_found"'.format(
     ts_pixel_overflow.Variables.port)
 tr.Processes.Default.ReturnCode = 0
-tr.Processes.Default.Streams.stdout = Testers.ContainsExpression("webp_transform.passthrough_pixels",
-                                                                   "Stat should be present")
+tr.Processes.Default.Streams.stdout = Testers.ContainsExpression("webp_transform.global.passthrough_pixels",
+                                                                   "Global stat should be present")
 
 # =============================================================================
 # TEST 2: CRITICAL-3 Fix - Config Integer Overflow
