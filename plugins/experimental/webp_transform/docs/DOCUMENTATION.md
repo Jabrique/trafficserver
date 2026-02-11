@@ -180,7 +180,7 @@ Normally, the plugin **skips transformation** if the input format already matche
 
 **Priority**: Progressive JPEG takes precedence over metadata stripping for JPEG inputs.
 
-⚠️ **CRITICAL LIMITATION**: The `progressive` parameter **ONLY affects JPEG images**. For PNG/WebP/AVIF formats, the parameter is **silently ignored** because ImageMagick's `PlaneInterlace` setting (used internally) only produces progressive encoding for JPEG format.
+⚠️ **CRITICAL LIMITATION**: The `progressive` parameter **ONLY affects JPEG output**. For WebP/AVIF/PNG output formats, the parameter is **silently ignored** because these formats do not support traditional progressive/interlaced loading like JPEG does.
 
 **Examples**:
 - **JPEG → JPEG** with `progressive=true` → Re-encodes to Progressive JPEG ✓

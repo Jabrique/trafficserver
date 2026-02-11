@@ -448,8 +448,10 @@ public:
         }
       }
 
-      if (_config.progressive) {
-        image.interlaceType(Magick::PlaneInterlace);
+      // Progressive JPEG: Only applies to JPEG output format
+      // WebP and AVIF do not support progressive/interlaced loading
+      if (_config.progressive && _transform_image_type == ImageEncoding::jpeg) {
+        image.interlaceType(Magick::LineInterlace);
       }
 
       Blob output_blob;
