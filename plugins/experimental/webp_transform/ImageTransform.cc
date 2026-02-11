@@ -33,6 +33,7 @@
 #include "tscpp/api/Logger.h"
 #include "tscpp/api/Stat.h"
 #include "tscpp/api/RemapPlugin.h"
+#include "ts/ts.h"
 
 #if defined(__GNUC__)
 #pragma GCC diagnostic push
@@ -102,57 +103,88 @@ Stat global_oom_errors_total;
 Stat global_peak_buffer_mb;
 Stat global_active_transforms;
 
-// Remap plugin stats - initialized in TSRemapInit
-Stat remap_conversions_webp_total;
-Stat remap_conversions_jpeg_total;
-Stat remap_conversions_avif_total;
-Stat remap_transform_errors_total;
-Stat remap_passthrough_size_bytes;
-Stat remap_passthrough_pixels_exceeded;
-Stat remap_passthrough_invalid_total;
-Stat remap_oom_errors_total;
-Stat remap_peak_buffer_mb;
-Stat remap_active_transforms;
+// Remap plugin stats - use raw stat IDs for thread-safe cross-thread access
+// (Stat objects have memory visibility issues when init'd in one thread and used in another)
+static int remap_conversions_webp_id    = TS_ERROR;
+static int remap_conversions_jpeg_id    = TS_ERROR;
+static int remap_conversions_avif_id    = TS_ERROR;
+static int remap_transform_errors_id    = TS_ERROR;
+static int remap_passthrough_size_id    = TS_ERROR;
+static int remap_passthrough_pixels_id  = TS_ERROR;
+static int remap_passthrough_invalid_id = TS_ERROR;
+static int remap_oom_errors_id          = TS_ERROR;
+static int remap_peak_buffer_id         = TS_ERROR;
+static int remap_active_transforms_id   = TS_ERROR;
 
 // Init flags for thread-safe initialization
 std::once_flag global_stats_init_flag;
 std::once_flag remap_stats_init_flag;
 
+// Helper to create stat and store ID
+// persistent=true for cumulative counters, false for gauges
+static int
+create_stat(const char *name, bool persistent)
+{
+  int id = TS_ERROR;
+  if (TSStatFindName(name, &id) == TS_SUCCESS) {
+    return id;
+  }
+  TSStatPersistence persist = persistent ? TS_STAT_PERSISTENT : TS_STAT_NON_PERSISTENT;
+  id                        = TSStatCreate(name, TS_RECORDDATATYPE_INT, persist, TS_STAT_SYNC_SUM);
+  if (id != TS_ERROR && !persistent) {
+    TSStatIntSet(id, 0); // Only reset non-persistent stats
+  }
+  return id;
+}
+
 // Initialize global plugin stats (called from TSPluginInit)
+// Cumulative stats: persistent=true (survive restarts)
+// Gauge stats: persistent=false (reset on restart)
 static void
 init_global_stats()
 {
   std::call_once(global_stats_init_flag, []() {
-    global_conversions_webp_total.init("plugin." TAG ".global.conversions_webp_total", Stat::SYNC_SUM, false);
-    global_conversions_jpeg_total.init("plugin." TAG ".global.conversions_jpeg_total", Stat::SYNC_SUM, false);
-    global_conversions_avif_total.init("plugin." TAG ".global.conversions_avif_total", Stat::SYNC_SUM, false);
-    global_transform_errors_total.init("plugin." TAG ".global.transform_errors_total", Stat::SYNC_SUM, false);
-    global_passthrough_size_bytes.init("plugin." TAG ".global.passthrough_size_bytes", Stat::SYNC_SUM, false);
-    global_passthrough_pixels_exceeded.init("plugin." TAG ".global.passthrough_pixels_exceeded", Stat::SYNC_SUM, false);
-    global_passthrough_invalid_total.init("plugin." TAG ".global.passthrough_invalid_total", Stat::SYNC_SUM, false);
-    global_oom_errors_total.init("plugin." TAG ".global.oom_errors_total", Stat::SYNC_SUM, false);
+    // Cumulative counters - persistent (survive restarts)
+    global_conversions_webp_total.init("plugin." TAG ".global.conversions_webp_total", Stat::SYNC_SUM, true);
+    global_conversions_jpeg_total.init("plugin." TAG ".global.conversions_jpeg_total", Stat::SYNC_SUM, true);
+    global_conversions_avif_total.init("plugin." TAG ".global.conversions_avif_total", Stat::SYNC_SUM, true);
+    global_transform_errors_total.init("plugin." TAG ".global.transform_errors_total", Stat::SYNC_SUM, true);
+    global_passthrough_size_bytes.init("plugin." TAG ".global.passthrough_size_bytes", Stat::SYNC_SUM, true);
+    global_passthrough_pixels_exceeded.init("plugin." TAG ".global.passthrough_pixels_exceeded", Stat::SYNC_SUM, true);
+    global_passthrough_invalid_total.init("plugin." TAG ".global.passthrough_invalid_total", Stat::SYNC_SUM, true);
+    global_oom_errors_total.init("plugin." TAG ".global.oom_errors_total", Stat::SYNC_SUM, true);
+    // Gauge stats - non-persistent (reset on restart)
     global_peak_buffer_mb.init("plugin." TAG ".global.peak_buffer_mb", Stat::SYNC_SUM, false);
     global_active_transforms.init("plugin." TAG ".global.active_transforms", Stat::SYNC_SUM, false);
-    TSDebug(TAG, "Global stats initialized");
+    TSDebug(TAG, "Global stats initialized (8 persistent, 2 non-persistent)");
   });
 }
 
 // Initialize remap plugin stats (called from TSRemapInit)
+// Uses raw stat IDs for thread-safe cross-thread access
 static void
 init_remap_stats()
 {
   std::call_once(remap_stats_init_flag, []() {
-    remap_conversions_webp_total.init("plugin." TAG ".remap.conversions_webp_total", Stat::SYNC_SUM, false);
-    remap_conversions_jpeg_total.init("plugin." TAG ".remap.conversions_jpeg_total", Stat::SYNC_SUM, false);
-    remap_conversions_avif_total.init("plugin." TAG ".remap.conversions_avif_total", Stat::SYNC_SUM, false);
-    remap_transform_errors_total.init("plugin." TAG ".remap.transform_errors_total", Stat::SYNC_SUM, false);
-    remap_passthrough_size_bytes.init("plugin." TAG ".remap.passthrough_size_bytes", Stat::SYNC_SUM, false);
-    remap_passthrough_pixels_exceeded.init("plugin." TAG ".remap.passthrough_pixels_exceeded", Stat::SYNC_SUM, false);
-    remap_passthrough_invalid_total.init("plugin." TAG ".remap.passthrough_invalid_total", Stat::SYNC_SUM, false);
-    remap_oom_errors_total.init("plugin." TAG ".remap.oom_errors_total", Stat::SYNC_SUM, false);
-    remap_peak_buffer_mb.init("plugin." TAG ".remap.peak_buffer_mb", Stat::SYNC_SUM, false);
-    remap_active_transforms.init("plugin." TAG ".remap.active_transforms", Stat::SYNC_SUM, false);
-    TSDebug(TAG, "Remap stats initialized");
+    // Cumulative counters - persistent (survive restarts)
+    remap_conversions_webp_id    = create_stat("plugin." TAG ".remap.conversions_webp_total", true);
+    remap_conversions_jpeg_id    = create_stat("plugin." TAG ".remap.conversions_jpeg_total", true);
+    remap_conversions_avif_id    = create_stat("plugin." TAG ".remap.conversions_avif_total", true);
+    remap_transform_errors_id    = create_stat("plugin." TAG ".remap.transform_errors_total", true);
+    remap_passthrough_size_id    = create_stat("plugin." TAG ".remap.passthrough_size_bytes", true);
+    remap_passthrough_pixels_id  = create_stat("plugin." TAG ".remap.passthrough_pixels_exceeded", true);
+    remap_passthrough_invalid_id = create_stat("plugin." TAG ".remap.passthrough_invalid_total", true);
+    remap_oom_errors_id          = create_stat("plugin." TAG ".remap.oom_errors_total", true);
+    // Gauge stats - non-persistent (reset on restart)
+    remap_peak_buffer_id       = create_stat("plugin." TAG ".remap.peak_buffer_mb", false);
+    remap_active_transforms_id = create_stat("plugin." TAG ".remap.active_transforms", false);
+
+    bool ok = (remap_conversions_avif_id != TS_ERROR);
+    if (ok) {
+      TSDebug(TAG, "Remap stats initialized (8 persistent, 2 non-persistent)");
+    } else {
+      TSError("[%s] FAILED to initialize remap stats!", TAG);
+    }
   });
 }
 
@@ -378,7 +410,8 @@ public:
   {
     // C1 (MEDIUM-3): Track active transformations for observability
     if (_is_remap) {
-      remap_active_transforms.increment(1);
+      if (remap_active_transforms_id != TS_ERROR)
+        TSStatIntIncrement(remap_active_transforms_id, 1);
     } else {
       global_active_transforms.increment(1);
     }
@@ -580,7 +613,8 @@ public:
   {
     // C1 (MEDIUM-3): Decrement active transforms counter
     if (_is_remap) {
-      remap_active_transforms.decrement(1);
+      if (remap_active_transforms_id != TS_ERROR)
+        TSStatIntDecrement(remap_active_transforms_id, 1);
     } else {
       global_active_transforms.decrement(1);
     }
@@ -596,52 +630,100 @@ private:
   const bool _is_remap;
 
   // Helper functions to increment the correct stat based on plugin mode
+  // Remap uses raw TSStatIntIncrement (thread-safe), global uses Stat objects
   void
   increment_passthrough_size()
   {
-    _is_remap ? remap_passthrough_size_bytes.increment(1) : global_passthrough_size_bytes.increment(1);
+    if (_is_remap) {
+      if (remap_passthrough_size_id != TS_ERROR)
+        TSStatIntIncrement(remap_passthrough_size_id, 1);
+    } else {
+      global_passthrough_size_bytes.increment(1);
+    }
   }
   void
   increment_passthrough_invalid()
   {
-    _is_remap ? remap_passthrough_invalid_total.increment(1) : global_passthrough_invalid_total.increment(1);
+    if (_is_remap) {
+      if (remap_passthrough_invalid_id != TS_ERROR)
+        TSStatIntIncrement(remap_passthrough_invalid_id, 1);
+    } else {
+      global_passthrough_invalid_total.increment(1);
+    }
   }
   void
   increment_passthrough_pixels()
   {
-    _is_remap ? remap_passthrough_pixels_exceeded.increment(1) : global_passthrough_pixels_exceeded.increment(1);
+    if (_is_remap) {
+      if (remap_passthrough_pixels_id != TS_ERROR)
+        TSStatIntIncrement(remap_passthrough_pixels_id, 1);
+    } else {
+      global_passthrough_pixels_exceeded.increment(1);
+    }
   }
   void
   increment_transform_errors()
   {
-    _is_remap ? remap_transform_errors_total.increment(1) : global_transform_errors_total.increment(1);
+    if (_is_remap) {
+      if (remap_transform_errors_id != TS_ERROR)
+        TSStatIntIncrement(remap_transform_errors_id, 1);
+    } else {
+      global_transform_errors_total.increment(1);
+    }
   }
   void
   increment_conversions_webp()
   {
-    _is_remap ? remap_conversions_webp_total.increment(1) : global_conversions_webp_total.increment(1);
+    if (_is_remap) {
+      if (remap_conversions_webp_id != TS_ERROR)
+        TSStatIntIncrement(remap_conversions_webp_id, 1);
+    } else {
+      global_conversions_webp_total.increment(1);
+    }
   }
   void
   increment_conversions_avif()
   {
-    _is_remap ? remap_conversions_avif_total.increment(1) : global_conversions_avif_total.increment(1);
+    if (_is_remap) {
+      if (remap_conversions_avif_id != TS_ERROR)
+        TSStatIntIncrement(remap_conversions_avif_id, 1);
+    } else {
+      global_conversions_avif_total.increment(1);
+    }
   }
   void
   increment_conversions_jpeg()
   {
-    _is_remap ? remap_conversions_jpeg_total.increment(1) : global_conversions_jpeg_total.increment(1);
+    if (_is_remap) {
+      if (remap_conversions_jpeg_id != TS_ERROR)
+        TSStatIntIncrement(remap_conversions_jpeg_id, 1);
+    } else {
+      global_conversions_jpeg_total.increment(1);
+    }
   }
   void
   increment_oom_errors()
   {
-    _is_remap ? remap_oom_errors_total.increment(1) : global_oom_errors_total.increment(1);
+    if (_is_remap) {
+      if (remap_oom_errors_id != TS_ERROR)
+        TSStatIntIncrement(remap_oom_errors_id, 1);
+    } else {
+      global_oom_errors_total.increment(1);
+    }
   }
   void
   update_peak_buffer(size_t mb)
   {
-    Stat &peak_stat = _is_remap ? remap_peak_buffer_mb : global_peak_buffer_mb;
-    if (mb > (size_t)peak_stat.get()) {
-      peak_stat.set(mb);
+    if (_is_remap) {
+      if (remap_peak_buffer_id != TS_ERROR) {
+        int64_t current = TSStatIntGet(remap_peak_buffer_id);
+        if ((int64_t)mb > current)
+          TSStatIntSet(remap_peak_buffer_id, mb);
+      }
+    } else {
+      int64_t current = global_peak_buffer_mb.get();
+      if ((int64_t)mb > current)
+        global_peak_buffer_mb.set(mb);
     }
   }
 

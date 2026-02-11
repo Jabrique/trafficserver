@@ -346,24 +346,28 @@ Metrics are separated by plugin mode:
 - **`plugin.webp_transform.global.*`** - When plugin is loaded via `plugin.config` (global mode)
 - **`plugin.webp_transform.remap.*`** - When plugin is loaded via `remap.config` (per-remap mode)
 
-| Metric Suffix | Description |
-| :--- | :--- |
-| `conversions_webp_total` | Total successful conversions to WebP. |
-| `conversions_jpeg_total` | Total successful conversions to JPEG. |
-| `conversions_avif_total` | Total successful conversions to AVIF. |
-| `transform_errors_total` | Total processing errors encountered. |
-| `passthrough_size_bytes` | Total images passed through due to size limit (DoS protection). |
-| `passthrough_pixels_exceeded` | Total images passed through due to pixel limit (Decompression bomb protection). |
-| `passthrough_invalid_total` | Total images passed through due to invalid or unsupported format. |
-| `oom_errors_total` | Total out-of-memory errors during transformation. Monitor this! |
-| `peak_buffer_mb` | Peak buffer size in MB across all transformations. |
-| `active_transforms` | Current number of active transformations (real-time counter). |
+| Metric Suffix | Type | Persistence | Description |
+| :--- | :--- | :--- | :--- |
+| `conversions_webp_total` | Counter | **Persistent** | Total successful conversions to WebP. |
+| `conversions_jpeg_total` | Counter | **Persistent** | Total successful conversions to JPEG. |
+| `conversions_avif_total` | Counter | **Persistent** | Total successful conversions to AVIF. |
+| `transform_errors_total` | Counter | **Persistent** | Total processing errors encountered. |
+| `passthrough_size_bytes` | Counter | **Persistent** | Total images passed through due to size limit (DoS protection). |
+| `passthrough_pixels_exceeded` | Counter | **Persistent** | Total images passed through due to pixel limit (Decompression bomb protection). |
+| `passthrough_invalid_total` | Counter | **Persistent** | Total images passed through due to invalid or unsupported format. |
+| `oom_errors_total` | Counter | **Persistent** | Total out-of-memory errors during transformation. Monitor this! |
+| `peak_buffer_mb` | Gauge | Non-Persistent | Peak buffer size in MB across all transformations. |
+| `active_transforms` | Gauge | Non-Persistent | Current number of active transformations (real-time counter). |
+
+**Persistence Behavior:**
+- **Persistent counters** (8 per mode): Values survive Traffic Server restarts. Useful for long-term monitoring and cumulative tracking.
+- **Non-persistent gauges** (2 per mode): Reset to 0 on restart. Represents current state, not historical totals.
 
 **Example metric names:**
 - `plugin.webp_transform.global.conversions_webp_total` - WebP conversions via global plugin
 - `plugin.webp_transform.remap.conversions_avif_total` - AVIF conversions via remap plugin
 
-**Note**: Metrics are automatically exposed via `stats_over_http.so` endpoint (if enabled).
+**Note**: Metrics are automatically exposed via `stats_over_http.so` endpoint (if enabled). Stats sync occurs every 5 seconds (default `REC_RAW_STAT_SYNC_INTERVAL_MS`).
 
 ## Troubleshooting
 

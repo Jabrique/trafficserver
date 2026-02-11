@@ -1,5 +1,16 @@
 '''
 Test webp_transform plugin for Per-Remap Configuration
+
+Tests:
+1. Per-remap quality settings (high vs low quality)
+2. Remap stats registration (plugin.webp_transform.remap.*)
+3. Invalid config rejection
+
+Note on Stats Persistence:
+- Cumulative stats (conversions, errors) are persistent and survive restarts
+- Gauge stats (active_transforms, peak_buffer) reset on restart
+- Persistence cannot be easily tested in AuTest (requires restart cycle)
+- Manual verification: Check stats before/after `traffic_ctl server restart`
 '''
 import os
 
