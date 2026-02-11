@@ -64,16 +64,18 @@ tr.Processes.Default.Command = 'curl -v -o out_prog.jpg --header "Accept: image/
 tr.Processes.Default.ReturnCode = 0
 
 # 3. Verify Interlace Status
-# Using grep to check identify output.
 # Baseline should contain "Interlace: None"
-# Progressive should contain "Interlace: JPEG" (or Plane)
-tr = Test.AddTestRun("Verify Interlace")
-tr.Processes.Default.Command = \
-    'echo "--- BASELINE ---" && magick identify -verbose out_base.jpg | grep Interlace && ' + \
-    'echo "--- PROGRESSIVE ---" && magick identify -verbose out_prog.jpg | grep Interlace'
+# Progressive should contain "Interlace: Line" or "Interlace: JPEG"
+tr = Test.AddTestRun("Verify Baseline is Non-Interlaced")
+tr.Processes.Default.Command = 'magick identify -verbose out_base.jpg | grep Interlace'
 tr.Processes.Default.ReturnCode = 0
-# We expect to see "Interlace: JPEG" in the output eventually, but for Red Phase we just print it.
-tr.Processes.Default.Streams.stdout = Testers.ContainsExpression("Interlace", "Check Interlace output")
+tr.Processes.Default.Streams.stdout = Testers.ContainsExpression("None", "Baseline JPEG should have Interlace: None")
+
+tr = Test.AddTestRun("Verify Progressive is Interlaced")
+tr.Processes.Default.Command = 'magick identify -verbose out_prog.jpg | grep Interlace'
+tr.Processes.Default.ReturnCode = 0
+# LineInterlace produces "Interlace: Line" or "Interlace: JPEG" depending on IM version
+tr.Processes.Default.Streams.stdout = Testers.ExcludesExpression("None", "Progressive JPEG should NOT have Interlace: None")
 
 # --- TEST 4: Progressive with Non-JPEG (Should Ignore) ---
 # Code at line 435-437 only applies progressive to JPEG
