@@ -100,7 +100,7 @@ Stat global_passthrough_size_bytes;
 Stat global_passthrough_pixels_exceeded;
 Stat global_passthrough_invalid_total;
 Stat global_oom_errors_total;
-Stat global_peak_buffer_mb;
+Stat global_peak_buffer_bytes;
 Stat global_active_transforms;
 
 // Remap plugin stats - use raw stat IDs for thread-safe cross-thread access
@@ -113,7 +113,7 @@ static int remap_passthrough_size_id    = TS_ERROR;
 static int remap_passthrough_pixels_id  = TS_ERROR;
 static int remap_passthrough_invalid_id = TS_ERROR;
 static int remap_oom_errors_id          = TS_ERROR;
-static int remap_peak_buffer_id         = TS_ERROR;
+static int remap_peak_buffer_bytes_id   = TS_ERROR;
 static int remap_active_transforms_id   = TS_ERROR;
 
 // Init flags for thread-safe initialization
@@ -154,7 +154,7 @@ init_global_stats()
     global_passthrough_invalid_total.init("plugin." TAG ".global.passthrough_invalid_total", Stat::SYNC_SUM, true);
     global_oom_errors_total.init("plugin." TAG ".global.oom_errors_total", Stat::SYNC_SUM, true);
     // Gauge stats - non-persistent (reset on restart)
-    global_peak_buffer_mb.init("plugin." TAG ".global.peak_buffer_mb", Stat::SYNC_SUM, false);
+    global_peak_buffer_bytes.init("plugin." TAG ".global.peak_buffer_bytes", Stat::SYNC_SUM, false);
     global_active_transforms.init("plugin." TAG ".global.active_transforms", Stat::SYNC_SUM, false);
     TSDebug(TAG, "Global stats initialized (8 persistent, 2 non-persistent)");
   });
@@ -176,7 +176,7 @@ init_remap_stats()
     remap_passthrough_invalid_id = create_stat("plugin." TAG ".remap.passthrough_invalid_total", true);
     remap_oom_errors_id          = create_stat("plugin." TAG ".remap.oom_errors_total", true);
     // Gauge stats - non-persistent (reset on restart)
-    remap_peak_buffer_id       = create_stat("plugin." TAG ".remap.peak_buffer_mb", false);
+    remap_peak_buffer_bytes_id = create_stat("plugin." TAG ".remap.peak_buffer_bytes", false);
     remap_active_transforms_id = create_stat("plugin." TAG ".remap.active_transforms", false);
 
     bool ok = (remap_conversions_avif_id != TS_ERROR);
@@ -452,8 +452,7 @@ public:
     _img_buffer.append(data.data(), data.length());
 
     // C1 (MEDIUM-3): Track peak buffer size for memory observability
-    size_t buffer_mb = _img_buffer.length() / (1024 * 1024);
-    update_peak_buffer(buffer_mb);
+    update_peak_buffer(_img_buffer.length());
   }
 
   void
@@ -712,18 +711,18 @@ private:
     }
   }
   void
-  update_peak_buffer(size_t mb)
+  update_peak_buffer(size_t bytes)
   {
     if (_is_remap) {
-      if (remap_peak_buffer_id != TS_ERROR) {
-        int64_t current = TSStatIntGet(remap_peak_buffer_id);
-        if ((int64_t)mb > current)
-          TSStatIntSet(remap_peak_buffer_id, mb);
+      if (remap_peak_buffer_bytes_id != TS_ERROR) {
+        int64_t current = TSStatIntGet(remap_peak_buffer_bytes_id);
+        if ((int64_t)bytes > current)
+          TSStatIntSet(remap_peak_buffer_bytes_id, bytes);
       }
     } else {
-      int64_t current = global_peak_buffer_mb.get();
-      if ((int64_t)mb > current)
-        global_peak_buffer_mb.set(mb);
+      int64_t current = global_peak_buffer_bytes.get();
+      if ((int64_t)bytes > current)
+        global_peak_buffer_bytes.set(bytes);
     }
   }
 

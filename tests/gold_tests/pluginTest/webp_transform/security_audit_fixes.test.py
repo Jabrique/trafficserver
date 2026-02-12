@@ -57,6 +57,14 @@ tr.Processes.Default.ReturnCode = 0
 tr.Processes.Default.Streams.stdout = Testers.ContainsExpression("webp_transform.global.passthrough_pixels",
                                                                    "Global stat should be present")
 
+# Test peak_buffer_bytes stat exists (renamed from peak_buffer_mb for accuracy)
+tr = Test.AddTestRun("Check peak_buffer_bytes Stat (Global)")
+tr.Processes.Default.Command = 'curl -s http://127.0.0.1:{0}/_stats 2>/dev/null | grep webp_transform.global.peak_buffer_bytes || echo "stat_not_found"'.format(
+    ts_pixel_overflow.Variables.port)
+tr.Processes.Default.ReturnCode = 0
+tr.Processes.Default.Streams.stdout = Testers.ContainsExpression("webp_transform.global.peak_buffer_bytes",
+                                                                   "peak_buffer_bytes stat should exist (not peak_buffer_mb)")
+
 # =============================================================================
 # TEST 2: CRITICAL-3 Fix - Config Integer Overflow
 # =============================================================================
