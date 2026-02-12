@@ -308,7 +308,7 @@ Watch these metrics for anomalies:
   - ImageMagick uncompressed pixels in memory
   - Output blob
 - **Example**: A 10MB JPEG may use ~30MB RAM during transformation
-- **Tracking**: Monitor `peak_buffer_mb` metric for actual usage patterns across all active transformations
+- **Tracking**: Monitor `peak_buffer_bytes` metric for actual usage patterns across all active transformations
 - **Release**: Memory is automatically released after transformation completes (or on error)
 
 ### Latency Expectations
@@ -356,7 +356,7 @@ Metrics are separated by plugin mode:
 | `passthrough_pixels_exceeded` | Counter | **Persistent** | Total images passed through due to pixel limit (Decompression bomb protection). |
 | `passthrough_invalid_total` | Counter | **Persistent** | Total images passed through due to invalid or unsupported format. |
 | `oom_errors_total` | Counter | **Persistent** | Total out-of-memory errors during transformation. Monitor this! |
-| `peak_buffer_mb` | Gauge | Non-Persistent | Peak buffer size in MB across all transformations. |
+| `peak_buffer_bytes` | Gauge | Non-Persistent | Peak buffer size in bytes across all transformations. |
 | `active_transforms` | Gauge | Non-Persistent | Current number of active transformations (real-time counter). |
 
 **Persistence Behavior:**
@@ -397,7 +397,7 @@ Metrics are separated by plugin mode:
 **Cause**: Server running out of memory during transformation  
 **Impact**: Images served as-is (passthrough)  
 **Fix**: Reduce `max_pixels` OR increase server RAM  
-**Analysis**: Check `*.peak_buffer_mb` to see memory patterns
+**Analysis**: Check `*.peak_buffer_bytes` to see memory patterns
 
 #### High `*.passthrough_invalid_total` Metric
 **Cause**: Many unsupported formats (GIF, BMP, TIFF) or corrupt images  
