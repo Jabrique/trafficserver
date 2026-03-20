@@ -33,6 +33,7 @@
 #include <inttypes.h>
 
 #include <cjose/cjose.h>
+#include <libxml/parser.h>
 
 /* Plugin registration. */
 TSReturnCode
@@ -50,6 +51,7 @@ TSRemapInit(TSRemapInterface *api_info, char *errbuf, int errbuf_size)
   }
 
   TSDebug(PLUGIN_NAME, "plugin is successfully initialized");
+  xmlInitParser(); /* Initialize libxml2 once (thread-safe, idempotent) */
   return TS_SUCCESS;
 }
 
@@ -209,6 +211,11 @@ TSRemapDoRemap(void *ih, TSHttpTxn txnp, TSRemapRequestInfo *rri)
 
   TSHandleMLocRelease(mbuf, TS_NULL_MLOC, ul);
 
+  if (!url) {
+    PluginError("Failed to get URL string from pristine URL");
+    goto fail;
+  }
+
   PluginDebug("Processing request for %.*s.", url_ct, url);
   PluginDebug("Token names: URL=%s, Cookie=%s", access_token_name, renewal_token_name);
   checkpoints[cpi++] = mark_timer(&t);
@@ -284,6 +291,12 @@ TSRemapDoRemap(void *ih, TSHttpTxn txnp, TSRemapRequestInfo *rri)
       checkpoints[cpi++] = mark_timer(&t);
     }
 
+    /* Free previous original_jws_str before overwriting (prevents leak on retry) */
+    if (original_jws_str) {
+      TSfree(original_jws_str);
+      original_jws_str = NULL;
+    }
+
     /* Check for renewal/session token in cookies */
     jws = get_jws_from_cookie(&client_cookie, &client_cookie_sz_ct, renewal_token_name, &original_jws_str);
     if (jws) {
@@ -347,6 +360,9 @@ check_auth:
     }
     if (strip_uri != NULL) {
       TSfree(strip_uri);
+    }
+    if (original_jws_str != NULL) {
+      TSfree(original_jws_str);
     }
     return TSREMAP_NO_REMAP;
   }
@@ -444,12 +460,18 @@ check_auth:
   if (cookie) {
     PluginDebug("Scheduling cookie callback for %.*s", url_ct, url);
     TSCont cont = cont_new(cookie);
-    TSHttpTxnHookAdd(txnp, TS_HTTP_SEND_RESPONSE_HDR_HOOK, cont);
+    if (cont) {
+      TSHttpTxnHookAdd(txnp, TS_HTTP_SEND_RESPONSE_HDR_HOOK, cont);
+    } else {
+      cookie = NULL; /* cont_new already freed cookie on failure */
+    }
   }
 
   /* BUG #4 FIX: Manifest injection decoupled from renewal */
   /* Works for both renewable and non-renewable tokens */
-  if (renewal_cfg && renewal_cfg->manifest_injection.enabled) {
+  /* Only set up transform for manifest-like URIs to avoid accumulating
+   * large segment responses (e.g., 5MB .m4s) in memory unnecessarily. */
+  if (renewal_cfg && renewal_cfg->manifest_injection.enabled && detect_manifest_type(strip_uri, NULL) != MANIFEST_TYPE_UNKNOWN) {
     /* CRITICAL: Cache behavior configuration.
      *
      * cache_untransformed=true (RECOMMENDED, DEFAULT):
@@ -476,9 +498,9 @@ check_auth:
       PluginDebug("Cache untransformed disabled: transformed manifest will be cached (cache pollution warning!)");
     }
 
-    const char *renewal_token_name = config_get_renewal_token_name((struct config *)ih);
-    if (!renewal_token_name) {
-      renewal_token_name = "cr-session-token"; /* Default */
+    const char *manifest_token_name = config_get_renewal_token_name((struct config *)ih);
+    if (!manifest_token_name) {
+      manifest_token_name = "cr-session-token"; /* Default */
     }
 
     /* BUG #4 FIX: Priority logic for token selection */
@@ -502,7 +524,7 @@ check_auth:
     }
 
     if (token_for_manifest) {
-      setup_manifest_transform(txnp, token_for_manifest, renewal_token_name, access_token_name, &renewal_cfg->manifest_injection);
+      setup_manifest_transform(txnp, token_for_manifest, manifest_token_name, access_token_name, &renewal_cfg->manifest_injection);
       PluginDebug("Manifest transform scheduled for %.*s", url_ct, url);
     } else {
       /* This should not happen - we always have either renewal or original token */
@@ -517,6 +539,11 @@ check_auth:
       TSfree(original_jws_str); /* From get_jws_from_uri/cookie() - uses TSmalloc */
       original_jws_str = NULL;
     }
+  }
+
+  if (original_jws_str) {
+    TSfree(original_jws_str);
+    original_jws_str = NULL;
   }
 
   int64_t last_mark = 0;

@@ -52,22 +52,25 @@ parse_jwt(json_t *raw)
   }
 
   struct jwt *jwt = malloc(sizeof *jwt);
-  jwt->raw        = raw;
-  jwt->iss        = json_string_value(json_object_get(raw, "iss"));
-  jwt->sub        = json_string_value(json_object_get(raw, "sub"));
-  jwt->aud        = json_object_get(raw, "aud");
-  jwt->exp        = parse_number(json_object_get(raw, "exp"));
-  jwt->nbf        = parse_number(json_object_get(raw, "nbf"));
-  jwt->iat        = parse_number(json_object_get(raw, "iat"));
-  jwt->jti        = json_string_value(json_object_get(raw, "jti"));
-  jwt->cdniv      = parse_integer_default(json_object_get(raw, "cdniv"), 1);
-  jwt->cdnicrit   = json_string_value(json_object_get(raw, "cdnicrit"));
-  jwt->cdniip     = json_string_value(json_object_get(raw, "cdniip"));
-  jwt->cdniuc     = json_string_value(json_object_get(raw, "cdniuc"));
-  jwt->cdniets    = json_integer_value(json_object_get(raw, "cdniets"));
-  jwt->cdnistt    = json_integer_value(json_object_get(raw, "cdnistt"));
-  jwt->cdnistd    = parse_integer_default(json_object_get(raw, "cdnistd"), 0);
-  jwt->cdnisalt   = json_string_value(json_object_get(raw, "cdnisalt"));
+  if (!jwt) {
+    return NULL;
+  }
+  jwt->raw      = raw;
+  jwt->iss      = json_string_value(json_object_get(raw, "iss"));
+  jwt->sub      = json_string_value(json_object_get(raw, "sub"));
+  jwt->aud      = json_object_get(raw, "aud");
+  jwt->exp      = parse_number(json_object_get(raw, "exp"));
+  jwt->nbf      = parse_number(json_object_get(raw, "nbf"));
+  jwt->iat      = parse_number(json_object_get(raw, "iat"));
+  jwt->jti      = json_string_value(json_object_get(raw, "jti"));
+  jwt->cdniv    = parse_integer_default(json_object_get(raw, "cdniv"), 1);
+  jwt->cdnicrit = json_string_value(json_object_get(raw, "cdnicrit"));
+  jwt->cdniip   = json_string_value(json_object_get(raw, "cdniip"));
+  jwt->cdniuc   = json_string_value(json_object_get(raw, "cdniuc"));
+  jwt->cdniets  = json_integer_value(json_object_get(raw, "cdniets"));
+  jwt->cdnistt  = json_integer_value(json_object_get(raw, "cdnistt"));
+  jwt->cdnistd  = parse_integer_default(json_object_get(raw, "cdnistd"), 0);
+  jwt->cdnisalt = json_string_value(json_object_get(raw, "cdnisalt"));
   return jwt;
 }
 
@@ -126,12 +129,13 @@ jwt_validate(struct jwt *jwt)
     return false;
   }
 
-  if (now() > jwt->exp) {
+  double t = now();
+  if (t > jwt->exp) {
     PluginDebug("Initial JWT Failure: expired token");
     return false;
   }
 
-  if (now() < jwt->nbf) {
+  if (t < jwt->nbf) {
     PluginDebug("Initial JWT Failure: nbf claim violated");
     return false;
   }
@@ -400,9 +404,10 @@ renew(struct jwt *jwt, const char *iss, cjose_jwk_t *jwk, const char *alg, const
   renew_copy_string(new_json, "iss", iss); /* use issuer of new signing key */
   renew_copy_string(new_json, "sub", jwt->sub);
   renew_copy_raw(new_json, "aud", jwt->aud);
-  renew_copy_real(new_json, "exp", now() + jwt->cdniets); /* expire ets seconds hence */
+  double current_time = now();
+  renew_copy_real(new_json, "exp", current_time + jwt->cdniets); /* expire ets seconds hence */
   renew_copy_real(new_json, "nbf", jwt->nbf);
-  renew_copy_real(new_json, "iat", now()); /* issued now */
+  renew_copy_real(new_json, "iat", current_time); /* issued now */
   renew_copy_string(new_json, "jti", jwt->jti);
   renew_copy_string(new_json, "cdniuc", jwt->cdniuc);
   renew_copy_integer(new_json, "cdniv", jwt->cdniv);

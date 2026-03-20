@@ -20,6 +20,7 @@
 #include "common.h"
 #include <stdbool.h>
 #include <string.h>
+#include <stdlib.h>
 
 bool
 match_hash(const char *needle, const char *haystack)
@@ -30,27 +31,38 @@ match_hash(const char *needle, const char *haystack)
 bool
 match_regex(const char *pattern, const char *uri)
 {
-  struct re_pattern_buffer pat_buff;
-
-  pat_buff.translate = 0;
-  pat_buff.fastmap   = 0;
-  pat_buff.buffer    = 0;
-  pat_buff.allocated = 0;
-
-  re_syntax_options = RE_SYNTAX_POSIX_MINIMAL_EXTENDED;
+  regex_t preg;
 
   PluginDebug("Testing regex pattern /%s/ against \"%s\"", pattern, uri);
 
-  const char *comp_err = re_compile_pattern(pattern, strlen(pattern), &pat_buff);
-
+  /* Anchor pattern at start to preserve re_match() semantics:
+   * re_match(pat, str, len, 0, 0) matches from position 0 only.
+   * regexec() searches anywhere — prepend ^ to get equivalent behavior.
+   * Skip prepending if pattern already starts with ^ to avoid ^^pattern. */
+  int comp_err;
+  if (pattern[0] == '^') {
+    comp_err = regcomp(&preg, pattern, REG_EXTENDED | REG_NOSUB);
+  } else {
+    size_t pattern_len     = strlen(pattern);
+    char *anchored_pattern = malloc(pattern_len + 2);
+    if (!anchored_pattern) {
+      PluginDebug("Regex: failed to allocate anchored pattern");
+      return false;
+    }
+    anchored_pattern[0] = '^';
+    memcpy(anchored_pattern + 1, pattern, pattern_len + 1);
+    comp_err = regcomp(&preg, anchored_pattern, REG_EXTENDED | REG_NOSUB);
+    free(anchored_pattern);
+  }
   if (comp_err) {
-    PluginDebug("Regex Compilation ERROR: %s", comp_err);
+    char errbuf[128];
+    regerror(comp_err, &preg, errbuf, sizeof(errbuf));
+    PluginDebug("Regex Compilation ERROR: %s", errbuf);
     return false;
   }
 
-  int match_ret;
-  match_ret = re_match(&pat_buff, uri, strlen(uri), 0, 0);
-  regfree(&pat_buff);
+  int match_ret = regexec(&preg, uri, 0, NULL, 0);
+  regfree(&preg);
 
-  return match_ret >= 0;
+  return match_ret == 0;
 }

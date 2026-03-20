@@ -20,6 +20,7 @@
 #include "config.h"
 #include "timing.h"
 #include "jwt.h"
+#include "normalize.h"
 
 #include <cjose/cjose.h>
 #include <jansson.h>
@@ -27,6 +28,7 @@
 #include <string.h>
 #include <search.h>
 #include <errno.h>
+#include <regex.h>
 
 #define JSONError(err) PluginError("json-err: %s:%d:%d: %s", (err).source, (err).line, (err).column, (err).text)
 
@@ -35,6 +37,8 @@
 struct auth_directive {
   char auth;
   char *container;
+  regex_t compiled_regex;
+  bool regex_compiled; /* true if compiled_regex is valid and must be regfree'd */
 };
 
 struct config {
@@ -245,6 +249,9 @@ config_delete(struct config *cfg)
 
   if (cfg->auth_directives) {
     for (struct auth_directive *ad = cfg->auth_directives; ad->container; ++ad) {
+      if (ad->regex_compiled) {
+        regfree(&ad->compiled_regex);
+      }
       free(ad->container);
     }
     free(cfg->auth_directives);
@@ -309,38 +316,82 @@ read_config_from_json(json_t *const issuer_json)
             ++ad;
             ++ad_old_ct;
           }
-          cfg->auth_directives = realloc(cfg->auth_directives, (ad_ct + ad_old_ct + 1) * sizeof *cfg->auth_directives);
+          struct auth_directive *new_ad = realloc(cfg->auth_directives, (ad_ct + ad_old_ct + 1) * sizeof *cfg->auth_directives);
+          if (!new_ad) {
+            PluginError("Failed to extend auth_directives (realloc %zu bytes)",
+                        (ad_ct + ad_old_ct + 1) * sizeof *cfg->auth_directives);
+            goto cfg_fail;
+          }
+          cfg->auth_directives = new_ad;
           ad                   = cfg->auth_directives + ad_old_ct;
         } else {
           ad = cfg->auth_directives = malloc((ad_ct + 1) * sizeof *cfg->auth_directives);
-        }
-        json_t *ad_obj;
-        for (size_t idx = 0; (idx < ad_ct) && (ad_obj = json_array_get(ad_json, idx)); ++idx, ++ad) {
-          json_t *uri_json  = json_object_get(ad_obj, "uri");
-          json_t *auth_json = json_object_get(ad_obj, "auth");
-          if (uri_json) {
-            const char *uri = json_string_value(uri_json);
-            ad->container   = strdup(uri ? uri : "");
-            ad->auth        = AUTH_DENY;
-            if (auth_json) {
-              const char *auth = json_string_value(auth_json);
-              if (!auth) {
-                auth = "";
-              }
-              if (!strcmp(auth, "allow")) {
-                ad->auth = AUTH_ALLOW;
-              } else if (!strcmp(auth, "deny")) {
-                ad->auth = AUTH_DENY;
-              } else {
-                PluginError("auth_directive has unknown auth parameter '%s', defaulting to deny: %s", auth, uri);
-              }
-            } else {
-              PluginError("auth_directive is missing auth parameter, defaulting to deny: %s", uri);
-            }
-            PluginDebug("Adding auth_directive %d for %s.", (int)ad->auth, ad->container);
+          if (!ad) {
+            PluginError("Failed to allocate auth_directives (%zu bytes)", (ad_ct + 1) * sizeof *cfg->auth_directives);
+            goto cfg_fail;
           }
         }
-        ad->container = NULL;
+        json_t *ad_obj;
+        for (size_t idx = 0; (idx < ad_ct) && (ad_obj = json_array_get(ad_json, idx)); ++idx) {
+          json_t *uri_json  = json_object_get(ad_obj, "uri");
+          json_t *auth_json = json_object_get(ad_obj, "auth");
+          if (!uri_json) {
+            PluginError("auth_directive at index %zu missing 'uri' field, skipping", idx);
+            continue;
+          }
+          const char *uri    = json_string_value(uri_json);
+          ad->container      = strdup(uri ? uri : "");
+          ad->auth           = AUTH_DENY;
+          ad->regex_compiled = false;
+          if (auth_json) {
+            const char *auth = json_string_value(auth_json);
+            if (!auth) {
+              auth = "";
+            }
+            if (!strcmp(auth, "allow")) {
+              ad->auth = AUTH_ALLOW;
+            } else if (!strcmp(auth, "deny")) {
+              ad->auth = AUTH_DENY;
+            } else {
+              PluginError("auth_directive has unknown auth parameter '%s', defaulting to deny: %s", auth, uri);
+            }
+          } else {
+            PluginError("auth_directive is missing auth parameter, defaulting to deny: %s", uri);
+          }
+
+          /* Pre-compile regex at config load time to avoid per-request regcomp() overhead.
+           * Pattern format is "regex:<pattern>" — extract part after "regex:" prefix. */
+          if (ad->container && !strncmp(ad->container, "regex:", 6)) {
+            const char *pattern = ad->container + 6;
+            int comp_err;
+            if (pattern[0] == '^') {
+              comp_err = regcomp(&ad->compiled_regex, pattern, REG_EXTENDED | REG_NOSUB);
+            } else {
+              size_t pattern_len     = strlen(pattern);
+              char *anchored_pattern = malloc(pattern_len + 2);
+              if (anchored_pattern) {
+                anchored_pattern[0] = '^';
+                memcpy(anchored_pattern + 1, pattern, pattern_len + 1);
+                comp_err = regcomp(&ad->compiled_regex, anchored_pattern, REG_EXTENDED | REG_NOSUB);
+                free(anchored_pattern);
+              } else {
+                PluginError("Failed to allocate anchored pattern for auth_directive regex");
+                comp_err = -1;
+              }
+            }
+            if (comp_err == 0) {
+              ad->regex_compiled = true;
+              PluginDebug("Pre-compiled regex for auth_directive: %s", ad->container);
+            } else {
+              PluginError("Failed to compile regex for auth_directive: %s", ad->container);
+            }
+          }
+
+          PluginDebug("Adding auth_directive %d for %s.", (int)ad->auth, ad->container);
+          ++ad;
+        }
+        ad->container      = NULL;
+        ad->regex_compiled = false;
       }
     } else {
       PluginDebug("No auth_directives to load for %s.", *issuer);
@@ -663,14 +714,36 @@ uri_matches_auth_directive(struct config *cfg, const char *uri, size_t uri_ct)
   }
 
   char *uri_s = malloc(uri_ct + 1);
+  if (!uri_s) {
+    return false;
+  }
   memcpy(uri_s, uri, uri_ct);
   uri_s[uri_ct] = 0;
+
+  /* Normalize URI once for all compiled regex matches */
+  int buff_ct      = uri_ct + 2;
+  char *normal_uri = (char *)TSmalloc(buff_ct);
+  memset(normal_uri, 0, buff_ct);
+  bool have_normal = (normalize_uri(uri_s, uri_ct, normal_uri, buff_ct) == 0);
+
   for (const struct auth_directive *ad = cfg->auth_directives; ad->container; ++ad) {
-    if (jwt_check_uri(ad->container, uri_s)) {
-      free(uri_s);
-      return (ad->auth == AUTH_ALLOW);
+    if (ad->regex_compiled && have_normal) {
+      /* Fast path: use pre-compiled regex, skip per-request regcomp */
+      if (regexec(&ad->compiled_regex, normal_uri, 0, NULL, 0) == 0) {
+        TSfree(normal_uri);
+        free(uri_s);
+        return (ad->auth == AUTH_ALLOW);
+      }
+    } else {
+      /* Fallback for hash patterns or normalization failure */
+      if (jwt_check_uri(ad->container, uri_s)) {
+        TSfree(normal_uri);
+        free(uri_s);
+        return (ad->auth == AUTH_ALLOW);
+      }
     }
   }
+  TSfree(normal_uri);
   free(uri_s);
   return false;
 }

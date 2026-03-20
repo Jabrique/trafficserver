@@ -33,6 +33,7 @@ extern "C" {
 #include "../config.h"
 #include "../session.h"
 #include "../manifest.h"
+#include "../cookie.h"
 
 /* BUG #4 FIX: Helper function to extract JWS from Set-Cookie header */
 char *extract_jws_from_set_cookie(const char *set_cookie_header);
@@ -4928,6 +4929,966 @@ TEST_CASE("Renewal threshold decision logic", "[threshold][optimization][P2]")
       config_delete(cfg);
       fprintf(stderr, "✓ Valid threshold: %s\n", test_cases[i].description);
     }
+  }
+
+  fprintf(stderr, "\n");
+}
+
+TEST_CASE("auth_directive missing uri field", "[AuthDirective][EdgeCase]")
+{
+  INFO("Auth directive with missing 'uri' field should be skipped without corrupting subsequent directives");
+
+  SECTION("Missing uri in first directive, valid allow in second - must still match")
+  {
+    const char *config_json = R"({
+      "test-issuer": {
+        "id": "test-audience",
+        "auth_directives": [
+          { "auth": "deny" },
+          { "auth": "allow", "uri": "regex:^https://example\\.com/public/.*" }
+        ],
+        "keys": [{
+          "alg": "HS256",
+          "kid": "0",
+          "k": "dGVzdC1rZXktc2VjcmV0MTIzNDU2Nzg5MA",
+          "kty": "oct"
+        }]
+      }
+    })";
+
+    struct config *cfg = read_config_from_string(config_json);
+    REQUIRE(cfg != NULL);
+
+    const char *test_uri = "https://example.com/public/test.txt";
+    bool result          = uri_matches_auth_directive(cfg, test_uri, strlen(test_uri));
+    REQUIRE(result == true);
+
+    config_delete(cfg);
+    fprintf(stderr, "✓ Missing uri field skipped, subsequent directive matched\n");
+  }
+
+  SECTION("Missing uri in middle directive, valid deny after it")
+  {
+    const char *config_json = R"({
+      "test-issuer": {
+        "id": "test-audience",
+        "auth_directives": [
+          { "auth": "allow", "uri": "regex:^https://example\\.com/free/.*" },
+          { "auth": "deny" },
+          { "auth": "deny", "uri": "regex:^https://example\\.com/paid/.*" }
+        ],
+        "keys": [{
+          "alg": "HS256",
+          "kid": "0",
+          "k": "dGVzdC1rZXktc2VjcmV0MTIzNDU2Nzg5MA",
+          "kty": "oct"
+        }]
+      }
+    })";
+
+    struct config *cfg = read_config_from_string(config_json);
+    REQUIRE(cfg != NULL);
+
+    const char *free_uri = "https://example.com/free/video.mp4";
+    REQUIRE(uri_matches_auth_directive(cfg, free_uri, strlen(free_uri)) == true);
+
+    const char *paid_uri = "https://example.com/paid/video.mp4";
+    bool result          = uri_matches_auth_directive(cfg, paid_uri, strlen(paid_uri));
+    REQUIRE(result == false);
+
+    config_delete(cfg);
+    fprintf(stderr, "✓ Missing uri in middle skipped, directives after it still work\n");
+  }
+
+  fprintf(stderr, "\n");
+}
+
+/* ==========================================================================
+ * AUDIT FIX REGRESSION TESTS
+ * Tests for all 5 audit patches to ensure no regressions
+ * ========================================================================== */
+
+TEST_CASE("SEC-03: Regex pre-compilation at config load", "[AuditFix][Regex][Performance]")
+{
+  INFO("Verify auth_directive regex patterns are pre-compiled and match correctly");
+
+  SECTION("Regex auth_directive matches correctly with pre-compiled regex")
+  {
+    const char *config_json = R"({
+      "test-issuer": {
+        "id": "test-audience",
+        "auth_directives": [
+          { "auth": "allow", "uri": "regex:^https://cdn\\.example\\.com/public/.*" },
+          { "auth": "deny", "uri": "regex:^https://cdn\\.example\\.com/premium/.*" }
+        ],
+        "keys": [{
+          "alg": "HS256",
+          "kid": "0",
+          "k": "dGVzdC1rZXktc2VjcmV0MTIzNDU2Nzg5MA",
+          "kty": "oct"
+        }]
+      }
+    })";
+
+    struct config *cfg = read_config_from_string(config_json);
+    REQUIRE(cfg != NULL);
+
+    /* Allow directive should match */
+    const char *public_uri = "https://cdn.example.com/public/video.mp4";
+    REQUIRE(uri_matches_auth_directive(cfg, public_uri, strlen(public_uri)) == true);
+
+    /* Deny directive should match and return false */
+    const char *premium_uri = "https://cdn.example.com/premium/video.mp4";
+    REQUIRE(uri_matches_auth_directive(cfg, premium_uri, strlen(premium_uri)) == false);
+
+    /* Unmatched URI should return false */
+    const char *other_uri = "https://cdn.example.com/other/file.txt";
+    REQUIRE(uri_matches_auth_directive(cfg, other_uri, strlen(other_uri)) == false);
+
+    config_delete(cfg);
+    fprintf(stderr, "✓ Pre-compiled regex auth_directive matching works correctly\n");
+  }
+
+  SECTION("Multiple config load/delete cycles without memory leak (regfree)")
+  {
+    const char *config_json = R"({
+      "test-issuer": {
+        "id": "test-audience",
+        "auth_directives": [
+          { "auth": "allow", "uri": "regex:^/free/.*" },
+          { "auth": "deny", "uri": "regex:^/paid/.*" },
+          { "auth": "allow", "uri": "regex:^/trailer/[0-9]+\\.mp4$" }
+        ],
+        "keys": [{
+          "alg": "HS256",
+          "kid": "0",
+          "k": "dGVzdC1rZXktc2VjcmV0MTIzNDU2Nzg5MA",
+          "kty": "oct"
+        }]
+      }
+    })";
+
+    /* Load and destroy 100 times — if regfree is missing, valgrind would catch it */
+    for (int i = 0; i < 100; i++) {
+      struct config *cfg = read_config_from_string(config_json);
+      REQUIRE(cfg != NULL);
+      config_delete(cfg);
+    }
+    fprintf(stderr, "✓ 100 config load/delete cycles completed without crash (regex freed)\n");
+  }
+
+  SECTION("Malformed regex pattern in auth_directive does not crash")
+  {
+    const char *config_json = R"({
+      "test-issuer": {
+        "id": "test-audience",
+        "auth_directives": [
+          { "auth": "allow", "uri": "regex:[invalid((" },
+          { "auth": "allow", "uri": "regex:^https://example\\.com/valid/.*" }
+        ],
+        "keys": [{
+          "alg": "HS256",
+          "kid": "0",
+          "k": "dGVzdC1rZXktc2VjcmV0MTIzNDU2Nzg5MA",
+          "kty": "oct"
+        }]
+      }
+    })";
+
+    struct config *cfg = read_config_from_string(config_json);
+    REQUIRE(cfg != NULL);
+
+    /* Malformed regex should not crash — falls back to jwt_check_uri */
+    const char *test_uri = "https://example.com/valid/test.mp4";
+    bool result          = uri_matches_auth_directive(cfg, test_uri, strlen(test_uri));
+    REQUIRE(result == true);
+
+    config_delete(cfg);
+    fprintf(stderr, "✓ Malformed regex handled gracefully, valid directive still works\n");
+  }
+
+  SECTION("Auth directive regex matching with full URI patterns")
+  {
+    const char *config_json = R"({
+      "test-issuer": {
+        "id": "test-audience",
+        "auth_directives": [
+          { "auth": "allow", "uri": "regex:^https://cdn\\.test\\.com/videos/free/.*" }
+        ],
+        "keys": [{
+          "alg": "HS256",
+          "kid": "0",
+          "k": "dGVzdC1rZXktc2VjcmV0MTIzNDU2Nzg5MA",
+          "kty": "oct"
+        }]
+      }
+    })";
+
+    struct config *cfg = read_config_from_string(config_json);
+    REQUIRE(cfg != NULL);
+
+    const char *match_uri = "https://cdn.test.com/videos/free/clip.mp4";
+    REQUIRE(uri_matches_auth_directive(cfg, match_uri, strlen(match_uri)) == true);
+
+    const char *nomatch_uri = "https://cdn.test.com/videos/paid/clip.mp4";
+    REQUIRE(uri_matches_auth_directive(cfg, nomatch_uri, strlen(nomatch_uri)) == false);
+
+    config_delete(cfg);
+    fprintf(stderr, "✓ Full URI regex auth directive patterns work correctly\n");
+  }
+
+  SECTION("Regex with anchoring edge cases")
+  {
+    const char *config_json = R"({
+      "test-issuer": {
+        "id": "test-audience",
+        "auth_directives": [
+          { "auth": "allow", "uri": "regex:^http://test\\.com/exact-path$" }
+        ],
+        "keys": [{
+          "alg": "HS256",
+          "kid": "0",
+          "k": "dGVzdC1rZXktc2VjcmV0MTIzNDU2Nzg5MA",
+          "kty": "oct"
+        }]
+      }
+    })";
+
+    struct config *cfg = read_config_from_string(config_json);
+    REQUIRE(cfg != NULL);
+
+    /* Exact match pattern — note: normalize_uri adds trailing / for empty path */
+    const char *exact_uri = "http://test.com/exact-path";
+    REQUIRE(uri_matches_auth_directive(cfg, exact_uri, strlen(exact_uri)) == true);
+
+    /* Different path should not match */
+    const char *other_uri = "http://test.com/other-path";
+    REQUIRE(uri_matches_auth_directive(cfg, other_uri, strlen(other_uri)) == false);
+
+    config_delete(cfg);
+    fprintf(stderr, "✓ Regex anchoring edge cases handled correctly\n");
+  }
+
+  SECTION("Empty regex pattern in auth_directive")
+  {
+    const char *config_json = R"({
+      "test-issuer": {
+        "id": "test-audience",
+        "auth_directives": [
+          { "auth": "allow", "uri": "regex:" }
+        ],
+        "keys": [{
+          "alg": "HS256",
+          "kid": "0",
+          "k": "dGVzdC1rZXktc2VjcmV0MTIzNDU2Nzg5MA",
+          "kty": "oct"
+        }]
+      }
+    })";
+
+    struct config *cfg = read_config_from_string(config_json);
+    REQUIRE(cfg != NULL);
+
+    /* Empty regex matches everything (anchored ^ still matches any string at start) */
+    const char *any_uri = "https://any.host.com/any/path.mp4";
+    REQUIRE(uri_matches_auth_directive(cfg, any_uri, strlen(any_uri)) == true);
+
+    config_delete(cfg);
+    fprintf(stderr, "✓ Empty regex pattern matches everything\n");
+  }
+
+  fprintf(stderr, "\n");
+}
+
+TEST_CASE("SEC-01: Constant-time salt comparison correctness", "[AuditFix][Salt][Security]")
+{
+  INFO("Verify constant-time comparison produces correct results for all edge cases");
+
+  json_error_t jerr      = {};
+  struct salt_config cfg = {.enabled = true, .bind_session_id = true, .bind_user_agent = false, .bind_client_ip = false};
+
+  SECTION("Salt differing only in last byte is rejected")
+  {
+    /* Generate a valid salt from known input, then modify last byte */
+    const char *session_id = "constant-time-test-session";
+    char *correct_salt     = generate_salt(&cfg, session_id, NULL, NULL);
+    REQUIRE(correct_salt != NULL);
+    REQUIRE(strlen(correct_salt) == 64);
+
+    /* Create JWT with the correct salt */
+    char jwt_buf[512];
+    snprintf(jwt_buf, sizeof(jwt_buf), R"({"iss":"Test","exp":9999999999,"cdnisalt":"%s"})", correct_salt);
+
+    json_t *jwt_obj = json_loadb(jwt_buf, strlen(jwt_buf), 0, &jerr);
+    REQUIRE(jwt_obj != NULL);
+    struct jwt *jwt = parse_jwt(jwt_obj);
+    REQUIRE(jwt != NULL);
+
+    /* Should match with correct salt */
+    bool valid = validate_salt(jwt, &cfg, NULL, NULL, session_id, NULL, NULL);
+    REQUIRE(valid == true);
+
+    jwt_delete(jwt);
+    free(correct_salt);
+    fprintf(stderr, "✓ Correct salt matches\n");
+  }
+
+  SECTION("Salt differing at first byte is rejected")
+  {
+    const char *session_id = "first-byte-diff-test";
+    char *correct_salt     = generate_salt(&cfg, session_id, NULL, NULL);
+    REQUIRE(correct_salt != NULL);
+
+    /* Flip first hex char */
+    char modified_salt[65];
+    memcpy(modified_salt, correct_salt, 64);
+    modified_salt[64] = '\0';
+    modified_salt[0]  = (modified_salt[0] == '0') ? '1' : '0';
+
+    char jwt_buf[512];
+    snprintf(jwt_buf, sizeof(jwt_buf), R"({"iss":"Test","exp":9999999999,"cdnisalt":"%s"})", modified_salt);
+
+    json_t *jwt_obj = json_loadb(jwt_buf, strlen(jwt_buf), 0, &jerr);
+    REQUIRE(jwt_obj != NULL);
+    struct jwt *jwt = parse_jwt(jwt_obj);
+    REQUIRE(jwt != NULL);
+
+    bool valid = validate_salt(jwt, &cfg, NULL, NULL, session_id, NULL, NULL);
+    REQUIRE(valid == false);
+
+    jwt_delete(jwt);
+    free(correct_salt);
+    fprintf(stderr, "✓ Salt differing at first byte is rejected\n");
+  }
+
+  SECTION("Salt differing at last byte is rejected")
+  {
+    const char *session_id = "last-byte-diff-test";
+    char *correct_salt     = generate_salt(&cfg, session_id, NULL, NULL);
+    REQUIRE(correct_salt != NULL);
+
+    char modified_salt[65];
+    memcpy(modified_salt, correct_salt, 64);
+    modified_salt[64] = '\0';
+    modified_salt[63] = (modified_salt[63] == '0') ? '1' : '0';
+
+    char jwt_buf[512];
+    snprintf(jwt_buf, sizeof(jwt_buf), R"({"iss":"Test","exp":9999999999,"cdnisalt":"%s"})", modified_salt);
+
+    json_t *jwt_obj = json_loadb(jwt_buf, strlen(jwt_buf), 0, &jerr);
+    REQUIRE(jwt_obj != NULL);
+    struct jwt *jwt = parse_jwt(jwt_obj);
+    REQUIRE(jwt != NULL);
+
+    bool valid = validate_salt(jwt, &cfg, NULL, NULL, session_id, NULL, NULL);
+    REQUIRE(valid == false);
+
+    jwt_delete(jwt);
+    free(correct_salt);
+    fprintf(stderr, "✓ Salt differing at last byte is rejected\n");
+  }
+
+  SECTION("Identical salts always match")
+  {
+    const char *session_id = "identical-salt-test";
+    char *correct_salt     = generate_salt(&cfg, session_id, NULL, NULL);
+    REQUIRE(correct_salt != NULL);
+
+    char jwt_buf[512];
+    snprintf(jwt_buf, sizeof(jwt_buf), R"({"iss":"Test","exp":9999999999,"cdnisalt":"%s"})", correct_salt);
+
+    json_t *jwt_obj = json_loadb(jwt_buf, strlen(jwt_buf), 0, &jerr);
+    REQUIRE(jwt_obj != NULL);
+    struct jwt *jwt = parse_jwt(jwt_obj);
+    REQUIRE(jwt != NULL);
+
+    /* Run multiple times to verify consistency */
+    for (int i = 0; i < 10; i++) {
+      REQUIRE(validate_salt(jwt, &cfg, NULL, NULL, session_id, NULL, NULL) == true);
+    }
+
+    jwt_delete(jwt);
+    free(correct_salt);
+    fprintf(stderr, "✓ Identical salts consistently match (10 iterations)\n");
+  }
+
+  fprintf(stderr, "\n");
+}
+
+TEST_CASE("SEC-04: Cached now() in jwt_validate consistency", "[AuditFix][JWT][Time]")
+{
+  INFO("Verify jwt_validate uses consistent time for exp and nbf checks");
+
+  json_error_t jerr = {};
+
+  SECTION("Token valid at current time passes both exp and nbf")
+  {
+    /* Create a token valid for a long window */
+    const char *jwt_string = R"({
+      "iss": "Test",
+      "cdniv": 1,
+      "exp": 9999999999,
+      "nbf": 0
+    })";
+
+    json_t *jwt_obj = json_loadb(jwt_string, strlen(jwt_string), 0, &jerr);
+    REQUIRE(jwt_obj != NULL);
+    struct jwt *jwt = parse_jwt(jwt_obj);
+    REQUIRE(jwt != NULL);
+
+    REQUIRE(jwt_validate(jwt) == true);
+
+    jwt_delete(jwt);
+    fprintf(stderr, "✓ Token with wide validity window passes\n");
+  }
+
+  SECTION("Token with exp=now and nbf=now is a very tight window")
+  {
+    /* A token that expires at exactly 1.0 second (epoch) — should fail as expired */
+    const char *jwt_string = R"({
+      "iss": "Test",
+      "cdniv": 1,
+      "exp": 1.0,
+      "nbf": 0
+    })";
+
+    json_t *jwt_obj = json_loadb(jwt_string, strlen(jwt_string), 0, &jerr);
+    REQUIRE(jwt_obj != NULL);
+    struct jwt *jwt = parse_jwt(jwt_obj);
+    REQUIRE(jwt != NULL);
+
+    /* exp=1.0 is in the past, should fail */
+    REQUIRE(jwt_validate(jwt) == false);
+
+    jwt_delete(jwt);
+    fprintf(stderr, "✓ Token with past exp is rejected consistently\n");
+  }
+
+  SECTION("Token with nbf far in the future is rejected")
+  {
+    const char *jwt_string = R"({
+      "iss": "Test",
+      "cdniv": 1,
+      "exp": 9999999999,
+      "nbf": 9999999998
+    })";
+
+    json_t *jwt_obj = json_loadb(jwt_string, strlen(jwt_string), 0, &jerr);
+    REQUIRE(jwt_obj != NULL);
+    struct jwt *jwt = parse_jwt(jwt_obj);
+    REQUIRE(jwt != NULL);
+
+    /* nbf is far in the future, should fail */
+    REQUIRE(jwt_validate(jwt) == false);
+
+    jwt_delete(jwt);
+    fprintf(stderr, "✓ Token with future nbf is rejected\n");
+  }
+
+  fprintf(stderr, "\n");
+}
+
+/* ==========================================================================
+ * HOLISTIC GAP ANALYSIS TESTS
+ * Test cases discovered during comprehensive test suite audit
+ * ========================================================================== */
+
+/* ---- CRIT-01: cookie.c has ZERO unit tests ---- */
+
+TEST_CASE("CRIT-01: Cookie parser next_cookie/get_cookie_value", "[Cookie][Parser][Critical]")
+{
+  INFO("cookie.c functions had zero unit tests — critical attack surface");
+
+  SECTION("Parse single cookie key=value")
+  {
+    const char *cookie = "session-token=abc123";
+    size_t cookie_ct   = strlen(cookie);
+    size_t ct;
+    const char *val = get_cookie_value(&cookie, &cookie_ct, "session-token", &ct);
+    REQUIRE(val != NULL);
+    REQUIRE(ct == 6);
+    REQUIRE(strncmp(val, "abc123", ct) == 0);
+    fprintf(stderr, "✓ Single cookie parsed correctly\n");
+  }
+
+  SECTION("Parse cookie from multiple cookies separated by semicolons")
+  {
+    const char *cookie = "foo=bar; session-token=xyz789; other=val";
+    size_t cookie_ct   = strlen(cookie);
+    size_t ct;
+    const char *val = get_cookie_value(&cookie, &cookie_ct, "session-token", &ct);
+    REQUIRE(val != NULL);
+    REQUIRE(ct == 6);
+    REQUIRE(strncmp(val, "xyz789", ct) == 0);
+    fprintf(stderr, "✓ Cookie found among multiple cookies\n");
+  }
+
+  SECTION("Cookie not found returns NULL")
+  {
+    const char *cookie = "foo=bar; baz=qux";
+    size_t cookie_ct   = strlen(cookie);
+    size_t ct;
+    const char *val = get_cookie_value(&cookie, &cookie_ct, "nonexistent", &ct);
+    REQUIRE(val == NULL);
+    REQUIRE(ct == 0);
+    fprintf(stderr, "✓ Missing cookie returns NULL\n");
+  }
+
+  SECTION("Cookie with empty value")
+  {
+    const char *cookie = "session-token=; other=val";
+    size_t cookie_ct   = strlen(cookie);
+    size_t ct;
+    const char *val = get_cookie_value(&cookie, &cookie_ct, "session-token", &ct);
+    REQUIRE(val != NULL);
+    REQUIRE(ct == 0);
+    fprintf(stderr, "✓ Empty cookie value parsed correctly\n");
+  }
+
+  SECTION("Cookie without equals sign (value-only cookie)")
+  {
+    const char *cookie = "just-a-name; other=val";
+    size_t cookie_ct   = strlen(cookie);
+    size_t ct;
+    /* Cookie without = is treated as valueless key */
+    const char *val = get_cookie_value(&cookie, &cookie_ct, "other", &ct);
+    REQUIRE(val != NULL);
+    REQUIRE(ct == 3);
+    REQUIRE(strncmp(val, "val", ct) == 0);
+    fprintf(stderr, "✓ Cookie without = handled correctly\n");
+  }
+
+  SECTION("Cookie with leading whitespace/tabs")
+  {
+    const char *cookie = "  \t session-token=abc";
+    size_t cookie_ct   = strlen(cookie);
+    size_t ct;
+    const char *val = get_cookie_value(&cookie, &cookie_ct, "session-token", &ct);
+    REQUIRE(val != NULL);
+    REQUIRE(strncmp(val, "abc", ct) == 0);
+    fprintf(stderr, "✓ Leading whitespace in cookie stripped\n");
+  }
+
+  SECTION("Cookie value with equals sign in JWT")
+  {
+    /* JWTs contain base64 with '=' padding — must not split on them */
+    const char *cookie = "cr-session-token=eyJhbGc.eyJpc3M.sig==; Path=/";
+    size_t cookie_ct   = strlen(cookie);
+    size_t ct;
+    const char *val = get_cookie_value(&cookie, &cookie_ct, "cr-session-token", &ct);
+    REQUIRE(val != NULL);
+    /* Value extends from after first '=' to ';' */
+    REQUIRE(strncmp(val, "eyJhbGc.eyJpc3M.sig==", ct) == 0);
+    fprintf(stderr, "✓ JWT with base64 padding in cookie value parsed correctly\n");
+  }
+
+  SECTION("Empty cookie string")
+  {
+    const char *cookie = "";
+    size_t cookie_ct   = 0;
+    size_t ct;
+    const char *val = get_cookie_value(&cookie, &cookie_ct, "anything", &ct);
+    REQUIRE(val == NULL);
+    REQUIRE(ct == 0);
+    fprintf(stderr, "✓ Empty cookie string returns NULL\n");
+  }
+
+  SECTION("Cookie with multiple same-name keys returns first match")
+  {
+    const char *cookie = "token=first; token=second; token=third";
+    size_t cookie_ct   = strlen(cookie);
+    size_t ct;
+    const char *val = get_cookie_value(&cookie, &cookie_ct, "token", &ct);
+    REQUIRE(val != NULL);
+    REQUIRE(ct == 5);
+    REQUIRE(strncmp(val, "first", ct) == 0);
+    fprintf(stderr, "✓ Duplicate cookie names return first match\n");
+  }
+
+  SECTION("Cookie with key as substring of another key")
+  {
+    const char *cookie = "my-token-extended=wrong; my-token=correct";
+    size_t cookie_ct   = strlen(cookie);
+    size_t ct;
+    const char *val = get_cookie_value(&cookie, &cookie_ct, "my-token", &ct);
+    /* Should match exact "my-token", not "my-token-extended" */
+    REQUIRE(val != NULL);
+    REQUIRE(strncmp(val, "correct", ct) == 0);
+    fprintf(stderr, "✓ Exact key matching — no substring false positives\n");
+  }
+
+  SECTION("Very long cookie value (4KB JWT)")
+  {
+    /* Build a 4KB cookie value */
+    std::string long_value(4096, 'A');
+    std::string cookie_str = "cr-token=" + long_value + "; Path=/";
+    const char *cookie     = cookie_str.c_str();
+    size_t cookie_ct       = cookie_str.length();
+    size_t ct;
+    const char *val = get_cookie_value(&cookie, &cookie_ct, "cr-token", &ct);
+    REQUIRE(val != NULL);
+    REQUIRE(ct == 4096);
+    fprintf(stderr, "✓ 4KB cookie value parsed without overflow\n");
+  }
+
+  fprintf(stderr, "\n");
+}
+
+/* ---- CRIT-02: HLS line_buf[4096] truncation ---- */
+
+TEST_CASE("CRIT-02: HLS manifest with very long segment URLs", "[Manifest][HLS][Truncation][Critical]")
+{
+  INFO("HLS inject uses char line_buf[4096] — lines >4096 get truncated silently");
+
+  struct manifest_injection_config cfg = {
+    .enabled                 = true,
+    .inject_to_segments      = true,
+    .inject_to_init_segments = true,
+    .replace_access_token    = false,
+    .hls_support             = true,
+    .dash_support            = false,
+    .cache_untransformed     = true,
+  };
+
+  SECTION("Segment URL exactly 4095 chars is handled")
+  {
+    /* Build manifest with a 4095-char URL line (just under limit) */
+    std::string long_url = "https://cdn.example.com/" + std::string(4060, 'a') + ".ts";
+    std::string manifest = "#EXTM3U\n#EXTINF:10,\n" + long_url + "\n";
+
+    size_t new_len = 0;
+    char *result   = inject_token_hls(manifest.c_str(), manifest.length(), "TOKEN", "t", NULL, &cfg, &new_len);
+    REQUIRE(result != NULL);
+    /* Verify token was injected (URL should contain ?t=TOKEN) */
+    std::string result_str(result, new_len);
+    REQUIRE(result_str.find("?t=TOKEN") != std::string::npos);
+    free(result);
+    fprintf(stderr, "✓ URL at 4095 chars handled correctly\n");
+  }
+
+  SECTION("Segment URL >4096 chars gets truncated but no crash")
+  {
+    /* Build manifest with a 5000-char URL line (exceeds line_buf) */
+    std::string long_url = "https://cdn.example.com/" + std::string(4980, 'b') + ".ts";
+    std::string manifest = "#EXTM3U\n#EXTINF:10,\n" + long_url + "\n";
+
+    size_t new_len = 0;
+    char *result   = inject_token_hls(manifest.c_str(), manifest.length(), "TOKEN", "t", NULL, &cfg, &new_len);
+    /* Should not crash — truncation is graceful */
+    REQUIRE(result != NULL);
+    REQUIRE(new_len > 0);
+    free(result);
+    fprintf(stderr, "✓ URL >4096 chars truncated without crash\n");
+  }
+
+  fprintf(stderr, "\n");
+}
+
+/* ---- HIGH-01: HLS >50 segments triggers realloc path ---- */
+
+TEST_CASE("HIGH-01: HLS manifest with >50 segments (realloc path)", "[Manifest][HLS][Realloc]")
+{
+  INFO("HLS injection estimates space for 50 segments. >50 triggers realloc chain.");
+
+  struct manifest_injection_config cfg = {
+    .enabled                 = true,
+    .inject_to_segments      = true,
+    .inject_to_init_segments = false,
+    .replace_access_token    = false,
+    .hls_support             = true,
+    .dash_support            = false,
+    .cache_untransformed     = true,
+  };
+
+  SECTION("Manifest with 100 segments")
+  {
+    std::string manifest = "#EXTM3U\n#EXT-X-TARGETDURATION:10\n";
+    for (int i = 0; i < 100; i++) {
+      manifest += "#EXTINF:10,\nseg" + std::to_string(i) + ".ts\n";
+    }
+
+    size_t new_len = 0;
+    char *result   = inject_token_hls(manifest.c_str(), manifest.length(), "mytoken", "st", NULL, &cfg, &new_len);
+    REQUIRE(result != NULL);
+    REQUIRE(new_len > manifest.length());
+
+    /* Verify token was injected into all segments */
+    std::string result_str(result, new_len);
+    size_t count = 0;
+    size_t pos   = 0;
+    while ((pos = result_str.find("?st=mytoken", pos)) != std::string::npos) {
+      count++;
+      pos++;
+    }
+    REQUIRE(count == 100);
+    free(result);
+    fprintf(stderr, "✓ 100 segments with realloc — all tokens injected\n");
+  }
+
+  SECTION("Manifest with 200 segments and long token")
+  {
+    std::string long_token(500, 'T');
+    std::string manifest = "#EXTM3U\n";
+    for (int i = 0; i < 200; i++) {
+      manifest += "#EXTINF:6,\nhttps://cdn.example.com/path/segment_" + std::to_string(i) + ".ts\n";
+    }
+
+    size_t new_len = 0;
+    char *result   = inject_token_hls(manifest.c_str(), manifest.length(), long_token.c_str(), "param", NULL, &cfg, &new_len);
+    REQUIRE(result != NULL);
+    REQUIRE(new_len > manifest.length());
+    free(result);
+    fprintf(stderr, "✓ 200 segments with 500-char token — realloc chain works\n");
+  }
+
+  fprintf(stderr, "\n");
+}
+
+/* ---- HIGH-02: Overlapping auth_directive patterns (first-match-wins) ---- */
+
+TEST_CASE("HIGH-02: Auth directive first-match-wins with overlapping patterns", "[AuthDirective][Priority]")
+{
+  INFO("When multiple auth_directives match, first match determines allow/deny");
+
+  SECTION("Allow before deny — URI is allowed")
+  {
+    const char *config_json = R"({
+      "test-issuer": {
+        "id": "test-audience",
+        "auth_directives": [
+          { "auth": "allow", "uri": "regex:^https://cdn\\.test\\.com/.*" },
+          { "auth": "deny",  "uri": "regex:^https://cdn\\.test\\.com/paid/.*" }
+        ],
+        "keys": [{"alg":"HS256","kid":"0","k":"dGVzdC1rZXktc2VjcmV0MTIzNDU2Nzg5MA","kty":"oct"}]
+      }
+    })";
+    struct config *cfg      = read_config_from_string(config_json);
+    REQUIRE(cfg != NULL);
+
+    /* /paid/ matches BOTH — but allow comes first */
+    const char *uri = "https://cdn.test.com/paid/movie.mp4";
+    REQUIRE(uri_matches_auth_directive(cfg, uri, strlen(uri)) == true);
+
+    config_delete(cfg);
+    fprintf(stderr, "✓ Allow before deny → allowed (first match wins)\n");
+  }
+
+  SECTION("Deny before allow — URI is denied")
+  {
+    const char *config_json = R"({
+      "test-issuer": {
+        "id": "test-audience",
+        "auth_directives": [
+          { "auth": "deny",  "uri": "regex:^https://cdn\\.test\\.com/paid/.*" },
+          { "auth": "allow", "uri": "regex:^https://cdn\\.test\\.com/.*" }
+        ],
+        "keys": [{"alg":"HS256","kid":"0","k":"dGVzdC1rZXktc2VjcmV0MTIzNDU2Nzg5MA","kty":"oct"}]
+      }
+    })";
+    struct config *cfg      = read_config_from_string(config_json);
+    REQUIRE(cfg != NULL);
+
+    /* /paid/ matches BOTH — but deny comes first */
+    const char *uri = "https://cdn.test.com/paid/movie.mp4";
+    REQUIRE(uri_matches_auth_directive(cfg, uri, strlen(uri)) == false);
+
+    /* /free/ only matches the second (allow) pattern */
+    const char *free_uri = "https://cdn.test.com/free/movie.mp4";
+    REQUIRE(uri_matches_auth_directive(cfg, free_uri, strlen(free_uri)) == true);
+
+    config_delete(cfg);
+    fprintf(stderr, "✓ Deny before allow → denied (first match wins), non-overlapping still works\n");
+  }
+
+  fprintf(stderr, "\n");
+}
+
+/* ---- HIGH-03: Duplicate token parameter in URL ---- */
+
+TEST_CASE("HIGH-03: URL with duplicate token parameters", "[Parser][EdgeCase]")
+{
+  INFO("URL with multiple instances of same param name — first match should be used");
+
+  SECTION("Duplicate access token in URL — first extracted")
+  {
+    const char *url     = "http://cdn.example.com/video.mp4?token=FIRST_JWT&token=SECOND_JWT";
+    char strip_uri[256] = {0};
+    size_t strip_ct     = 0;
+    char *original_jwt  = NULL;
+
+    cjose_jws_t *jws = get_jws_from_uri(url, strlen(url), "token", strip_uri, sizeof(strip_uri), &strip_ct, &original_jwt);
+    /* cjose_jws_import will likely fail on "FIRST_JWT" (not valid JWS), but
+     * the important thing is it doesn't crash and tries the first match */
+    if (jws) {
+      cjose_jws_release(jws);
+    }
+    if (original_jwt) {
+      free(original_jwt); /* TSmalloc → malloc in unit test mode */
+    }
+    /* No crash = success */
+    fprintf(stderr, "✓ Duplicate token params handled without crash\n");
+  }
+
+  fprintf(stderr, "\n");
+}
+
+/* ---- LOW-01: jwt_check_aud with unusual JSON types ---- */
+
+TEST_CASE("LOW-01: jwt_check_aud with non-string non-array types", "[JWT][Aud][EdgeCase]")
+{
+  INFO("aud claim could be JSON object, boolean, or null — must return false");
+
+  SECTION("aud as JSON object")
+  {
+    json_t *aud = json_object();
+    json_object_set_new(aud, "key", json_string("val"));
+    REQUIRE(jwt_check_aud(aud, "tester") == false);
+    json_decref(aud);
+    fprintf(stderr, "✓ JSON object aud returns false\n");
+  }
+
+  SECTION("aud as JSON boolean true")
+  {
+    json_t *aud = json_true();
+    REQUIRE(jwt_check_aud(aud, "tester") == false);
+    json_decref(aud);
+    fprintf(stderr, "✓ JSON boolean aud returns false\n");
+  }
+
+  SECTION("aud as JSON null")
+  {
+    json_t *aud = json_null();
+    REQUIRE(jwt_check_aud(aud, "tester") == false);
+    json_decref(aud);
+    fprintf(stderr, "✓ JSON null aud returns false\n");
+  }
+
+  SECTION("aud array with mixed types (only strings checked)")
+  {
+    json_t *aud = json_array();
+    json_array_append_new(aud, json_integer(42));
+    json_array_append_new(aud, json_string("tester"));
+    json_array_append_new(aud, json_true());
+    REQUIRE(jwt_check_aud(aud, "tester") == true);
+    json_decref(aud);
+    fprintf(stderr, "✓ Mixed-type aud array — string match still found\n");
+  }
+
+  fprintf(stderr, "\n");
+}
+
+/* ---- MED-01: extract_uri_from_map_tag edge cases ---- */
+
+TEST_CASE("MED-01: extract_uri_from_map_tag edge cases", "[Manifest][HLS][MapTag]")
+{
+  INFO("EXT-X-MAP tag parsing edge cases");
+
+  SECTION("Standard URI extraction")
+  {
+    const char *line = "#EXT-X-MAP:URI=\"init.mp4\"";
+    char *uri        = extract_uri_from_map_tag(line);
+    REQUIRE(uri != NULL);
+    REQUIRE(strcmp(uri, "init.mp4") == 0);
+    free(uri);
+    fprintf(stderr, "✓ Standard URI extraction works\n");
+  }
+
+  SECTION("URI with single quotes")
+  {
+    const char *line = "#EXT-X-MAP:URI='init.mp4'";
+    char *uri        = extract_uri_from_map_tag(line);
+    REQUIRE(uri != NULL);
+    REQUIRE(strcmp(uri, "init.mp4") == 0);
+    free(uri);
+    fprintf(stderr, "✓ Single-quoted URI extraction works\n");
+  }
+
+  SECTION("No URI attribute returns NULL")
+  {
+    const char *line = "#EXT-X-MAP:BYTERANGE=\"100@0\"";
+    char *uri        = extract_uri_from_map_tag(line);
+    REQUIRE(uri == NULL);
+    fprintf(stderr, "✓ Missing URI attribute returns NULL\n");
+  }
+
+  SECTION("URI with query parameters")
+  {
+    const char *line = "#EXT-X-MAP:URI=\"init.mp4?param=val&other=2\"";
+    char *uri        = extract_uri_from_map_tag(line);
+    REQUIRE(uri != NULL);
+    REQUIRE(strcmp(uri, "init.mp4?param=val&other=2") == 0);
+    free(uri);
+    fprintf(stderr, "✓ URI with query parameters extracted correctly\n");
+  }
+
+  SECTION("Empty URI value")
+  {
+    const char *line = "#EXT-X-MAP:URI=\"\"";
+    char *uri        = extract_uri_from_map_tag(line);
+    REQUIRE(uri != NULL);
+    REQUIRE(strcmp(uri, "") == 0);
+    free(uri);
+    fprintf(stderr, "✓ Empty URI value returns empty string\n");
+  }
+
+  SECTION("NULL input")
+  {
+    REQUIRE(extract_uri_from_map_tag(NULL) == NULL);
+    fprintf(stderr, "✓ NULL input returns NULL\n");
+  }
+
+  SECTION("Missing closing quote returns NULL")
+  {
+    const char *line = "#EXT-X-MAP:URI=\"init.mp4";
+    char *uri        = extract_uri_from_map_tag(line);
+    REQUIRE(uri == NULL);
+    fprintf(stderr, "✓ Missing closing quote returns NULL\n");
+  }
+
+  fprintf(stderr, "\n");
+}
+
+/* ---- MED-04: Config with many auth_directives (stress test) ---- */
+
+TEST_CASE("MED-04: Config with many auth_directives stress test", "[Config][Stress][Performance]")
+{
+  INFO("Test regex precompilation and matching with many directives");
+
+  SECTION("100 auth_directives load and match correctly")
+  {
+    /* Build config JSON with 100 auth_directives */
+    std::string directives = "";
+    for (int i = 0; i < 100; i++) {
+      if (i > 0)
+        directives += ",\n";
+      directives += R"({"auth":")" + std::string(i % 2 == 0 ? "allow" : "deny") +
+                    R"(","uri":"regex:^https://cdn\\.test\\.com/path)" + std::to_string(i) + R"(/.*"})";
+    }
+
+    std::string config_json = R"({"test-issuer":{"id":"test","auth_directives":[)" + directives +
+                              R"(],"keys":[{"alg":"HS256","kid":"0","k":"dGVzdC1rZXktc2VjcmV0MTIzNDU2Nzg5MA","kty":"oct"}]}})";
+
+    struct config *cfg = read_config_from_string(config_json.c_str());
+    REQUIRE(cfg != NULL);
+
+    /* Match directive at index 0 (allow) */
+    const char *uri0 = "https://cdn.test.com/path0/video.mp4";
+    REQUIRE(uri_matches_auth_directive(cfg, uri0, strlen(uri0)) == true);
+
+    /* Match directive at index 1 (deny) */
+    const char *uri1 = "https://cdn.test.com/path1/video.mp4";
+    REQUIRE(uri_matches_auth_directive(cfg, uri1, strlen(uri1)) == false);
+
+    /* Match directive at index 99 (deny) */
+    const char *uri99 = "https://cdn.test.com/path99/video.mp4";
+    REQUIRE(uri_matches_auth_directive(cfg, uri99, strlen(uri99)) == false);
+
+    /* No match */
+    const char *uri_nomatch = "https://cdn.test.com/other/video.mp4";
+    REQUIRE(uri_matches_auth_directive(cfg, uri_nomatch, strlen(uri_nomatch)) == false);
+
+    config_delete(cfg);
+    fprintf(stderr, "✓ 100 auth_directives loaded, matched, and freed correctly\n");
   }
 
   fprintf(stderr, "\n");

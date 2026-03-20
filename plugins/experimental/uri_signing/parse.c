@@ -208,7 +208,7 @@ validate_jws(cjose_jws_t *jws, struct config *cfg, const char *uri, size_t uri_c
   char const *pt;
   if (!cjose_jws_get_plaintext(jws, (uint8_t **)&pt, &pt_ct, &cerr)) {
     PluginDebug("Cannot get plaintext for %16p", jws);
-    return false;
+    return NULL;
   }
 
   TimerDebug("getting jws plaintext");
@@ -222,7 +222,7 @@ validate_jws(cjose_jws_t *jws, struct config *cfg, const char *uri, size_t uri_c
     } else {
       PluginDebug("Cannot load json for %16p: %.*s", jws, (int)pt_ct, pt);
     }
-    return false;
+    return NULL;
   }
   struct jwt *jwt = parse_jwt(jwk_json);
 

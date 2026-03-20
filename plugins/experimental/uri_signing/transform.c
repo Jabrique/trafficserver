@@ -107,7 +107,7 @@ handle_transform(TSCont contp)
   /* Initialize output VIO on first call */
   if (!data->output_vio) {
     TSVConn output_vconn;
-    int64_t towrite;
+    int64_t initial_towrite;
 
     /* Create IO buffers */
     data->output_buffer = TSIOBufferCreate();
@@ -115,8 +115,8 @@ handle_transform(TSCont contp)
 
     /* Get output connection and set up write VIO */
     output_vconn     = TSTransformOutputVConnGet(contp);
-    towrite          = TSVIONTodoGet(write_vio);
-    data->output_vio = TSVConnWrite(output_vconn, contp, data->output_reader, towrite);
+    initial_towrite  = TSVIONTodoGet(write_vio);
+    data->output_vio = TSVConnWrite(output_vconn, contp, data->output_reader, initial_towrite);
 
     PluginDebug("Transform: Output VIO initialized");
   }
@@ -148,7 +148,7 @@ handle_transform(TSCont contp)
       if (new_manifest && new_len > 0) {
         PluginDebug("Transform: Injected tokens, new size = %zu", new_len);
         TSIOBufferWrite(data->output_buffer, new_manifest, new_len);
-        TSfree(new_manifest);
+        free(new_manifest); /* inject_token_hls/dash() use malloc */
       } else {
         /* Injection failed or not manifest, write original */
         if (manifest_type == MANIFEST_TYPE_UNKNOWN) {
@@ -261,7 +261,7 @@ handle_transform(TSCont contp)
       if (new_manifest && new_len > 0) {
         PluginDebug("Transform: Injected tokens, new size = %zu", new_len);
         TSIOBufferWrite(data->output_buffer, new_manifest, new_len);
-        TSfree(new_manifest);
+        free(new_manifest); /* inject_token_hls/dash() use malloc */
       } else {
         /* Injection failed or not manifest, write original */
         if (manifest_type == MANIFEST_TYPE_UNKNOWN) {
@@ -360,6 +360,11 @@ setup_manifest_transform(TSHttpTxn txnp, const char *token, const char *param_na
 
   /* Create transformation continuation */
   TSVConn connp = TSTransformCreate(manifest_transform_handler, txnp);
+  if (!connp) {
+    PluginError("Transform: Failed to create transform continuation");
+    cleanup_transform_data(data);
+    return;
+  }
   TSContDataSet(connp, data);
 
   /* Hook the transform into the transaction */

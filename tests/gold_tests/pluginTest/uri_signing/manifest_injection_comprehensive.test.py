@@ -773,3 +773,232 @@ ps11.Streams.stdout += Testers.ContainsExpression('URI="init.mp4\\?cr-session-to
 ps11.Streams.stderr += Testers.ExcludesExpression("< Set-Cookie: cr-session-token=", "cdniets=0 should NOT set renewal cookie")
 tr11.StillRunningAfter = server
 tr11.StillRunningAfter = ts11
+
+# ==============================================================================
+# CACHE ISOLATION & TRANSFORM EDGE CASES
+# ==============================================================================
+
+import time as _time
+
+_EC_KID = "primary-key-2024"
+_EC_FAR_FUTURE = int(_time.time()) + 365 * 30 * 24 * 3600
+
+token_a_cache = jwt.encode({
+    "iss": "issuer", "exp": _EC_FAR_FUTURE,
+    "cdnistt": 1, "cdniets": 3600, "cdniuc": "regex:.*"
+}, SECRET, algorithm="HS256", headers={"kid": _EC_KID})
+
+token_b_cache = jwt.encode({
+    "iss": "issuer", "exp": _EC_FAR_FUTURE - 86400,
+    "cdnistt": 1, "cdniets": 3600, "cdniuc": "regex:.*"
+}, SECRET, algorithm="HS256", headers={"kid": _EC_KID})
+
+token_nonrenew_cache = jwt.encode({
+    "iss": "issuer", "exp": _EC_FAR_FUTURE,
+    "cdnistt": 0, "cdniets": 0, "cdniuc": "regex:.*"
+}, SECRET, algorithm="HS256", headers={"kid": _EC_KID})
+
+# HLS manifest for edge case tests
+hls_manifest_ec = (
+    "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:10\n"
+    "#EXTINF:10.0,\nsegment0.ts\n#EXTINF:10.0,\nsegment1.ts\n"
+    "#EXT-X-ENDLIST\n"
+)
+large_body_ec = "NOT_A_MANIFEST_" + ("X" * 65536)
+
+
+def _ec_add_manifest(path, body, content_type, host, extra_headers=""):
+    hdr = (
+        "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nConnection: close\r\n"
+        "{}\r\n"
+    ).format(content_type, extra_headers)
+    server.addResponse("sessionfile.log",
+                       {"headers": "GET {} HTTP/1.1\r\nHost: {}\r\n\r\n".format(path, host),
+                        "timestamp": "1469733493.993", "body": ""},
+                       {"headers": hdr, "timestamp": "1469733493.993", "body": body})
+
+
+_ec_add_manifest("/video/live.m3u8", hls_manifest_ec,
+                 "application/vnd.apple.mpegurl", "cachehost-ec",
+                 extra_headers="Cache-Control: max-age=60\r\n")
+_ec_add_manifest("/video/live.m3u8", hls_manifest_ec,
+                 "application/vnd.apple.mpegurl", "manifesthost-ec")
+_ec_add_manifest("/video/empty.m3u8", "",
+                 "application/vnd.apple.mpegurl", "manifesthost-ec")
+_ec_add_manifest("/video/large.m3u8", large_body_ec,
+                 "application/octet-stream", "manifesthost-ec")
+_ec_add_manifest("/video/head.m3u8", hls_manifest_ec,
+                 "application/vnd.apple.mpegurl", "manifesthost-ec")
+
+# Origin with its own Set-Cookie (coexistence test)
+server.addResponse("sessionfile.log",
+                   {"headers": "GET /video/setcookie.m3u8 HTTP/1.1\r\nHost: manifesthost-ec\r\n\r\n",
+                    "timestamp": "1469733493.993", "body": ""},
+                   {"headers": ("HTTP/1.1 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\n"
+                                "Set-Cookie: origin-session=abc123\r\nConnection: close\r\n\r\n"),
+                    "timestamp": "1469733493.993", "body": hls_manifest_ec})
+
+
+def _ec_create_manifest_config(name):
+    config = {
+        "issuer": {
+            "renewal_kid": _EC_KID,
+            "id": "testcdn-ec",
+            "strip_token": True,
+            "renewal_token": {
+                "token_name": "cr-session-token",
+                "manifest_injection": {
+                    "enabled": True,
+                    "inject_to_segments": True,
+                    "inject_to_init_segments": False,
+                    "replace_access_token": False,
+                    "hls_support": True,
+                    "dash_support": True,
+                    "cache_untransformed": True,
+                }
+            },
+            "keys": [{
+                "alg": "HS256",
+                "k": "dGVzdC1zZWNyZXQta2V5LTEyMzQ1Njc4OTA=",
+                "kid": _EC_KID,
+                "kty": "oct"
+            }]
+        }
+    }
+    path = os.path.join(Test.RunDirectory, "ec_manifest_config_{}.json".format(name))
+    with open(path, 'w') as f:
+        json.dump(config, f, indent=2)
+    return path
+
+
+_ec_cfg_cache = _ec_create_manifest_config("cache")
+_ec_cfg_manifest = _ec_create_manifest_config("manifest")
+
+# ts12_cache: cache ENABLED — per-user cache isolation test
+ts12_cache = Test.MakeATSProcess("ts12-cache", enable_cache=True)
+ts12_cache.Disk.records_config.update({
+    'proxy.config.diags.debug.enabled': 1,
+    'proxy.config.diags.debug.tags': 'uri_signing|transform|cache',
+    'proxy.config.http.cache.http': 1,
+})
+ts12_cache.Disk.remap_config.AddLine(
+    f'map http://cachehost-ec/ http://127.0.0.1:{server.Variables.Port}/'
+    f' @plugin=uri_signing.so @pparam={_ec_cfg_cache}')
+
+# ts12_manifest: cache DISABLED — transform edge cases
+ts12_manifest = Test.MakeATSProcess("ts12-manifest", enable_cache=False)
+ts12_manifest.Disk.records_config.update({
+    'proxy.config.diags.debug.enabled': 1,
+    'proxy.config.diags.debug.tags': 'uri_signing|transform',
+})
+ts12_manifest.Disk.remap_config.AddLine(
+    f'map http://manifesthost-ec/ http://127.0.0.1:{server.Variables.Port}/'
+    f' @plugin=uri_signing.so @pparam={_ec_cfg_manifest}')
+
+# --- Cache isolation: User A (cache miss) → own session token ---
+tr12a = Test.AddTestRun("EC Cache: User A gets manifest (cache miss) → own session token")
+ps12a = tr12a.Processes.Default
+ps12a.StartBefore(ts12_cache)
+ps12a.Command = (
+    f'curl -s -v -x localhost:{ts12_cache.Variables.port} '
+    f'"http://cachehost-ec/video/live.m3u8?cr-access-token={token_a_cache}"'
+)
+ps12a.ReturnCode = 0
+ps12a.Streams.stderr = Testers.ContainsExpression("HTTP/1.1 200", "User A → 200")
+ps12a.Streams.stderr += Testers.ContainsExpression(
+    "Set-Cookie: cr-session-token=", "User A gets Set-Cookie")
+ps12a.Streams.stdout = Testers.ContainsExpression(
+    "cr-session-token=", "User A's manifest has injected tokens")
+tr12a.StillRunningAfter = server
+tr12a.StillRunningAfter = ts12_cache
+
+# --- Cache isolation: User B (cache hit) → THEIR OWN session token ---
+tr12b = Test.AddTestRun("EC Cache: User B (cache hit) gets own session token (not User A's)")
+ps12b = tr12b.Processes.Default
+ps12b.Command = (
+    f'curl -s -v -x localhost:{ts12_cache.Variables.port} '
+    f'"http://cachehost-ec/video/live.m3u8?cr-access-token={token_b_cache}"'
+)
+ps12b.ReturnCode = 0
+ps12b.Streams.stderr = Testers.ContainsExpression("HTTP/1.1 200", "User B → 200")
+ps12b.Streams.stderr += Testers.ContainsExpression(
+    "Set-Cookie: cr-session-token=",
+    "CRITICAL: User B gets their OWN session token, not cached User A's")
+ps12b.Streams.stdout = Testers.ContainsExpression(
+    "cr-session-token=", "User B's manifest has token injection")
+tr12b.StillRunningAfter = server
+tr12b.StillRunningAfter = ts12_cache
+
+# --- Transform: Empty manifest body (0 bytes) ---
+tr12c = Test.AddTestRun("EC Transform: Empty manifest body (0 bytes) — no crash")
+ps12c = tr12c.Processes.Default
+ps12c.StartBefore(ts12_manifest)
+ps12c.Command = (
+    f'curl -s -v -x localhost:{ts12_manifest.Variables.port} '
+    f'"http://manifesthost-ec/video/empty.m3u8?cr-access-token={token_a_cache}"'
+)
+ps12c.ReturnCode = 0
+ps12c.Streams.stderr = Testers.ContainsExpression("HTTP/1.1 200", "Empty manifest → 200 no crash")
+tr12c.StillRunningAfter = server
+tr12c.StillRunningAfter = ts12_manifest
+
+# --- Transform: 64KB non-manifest on .m3u8 URL (no injection expected) ---
+tr12d = Test.AddTestRun("EC Transform: 64KB non-manifest on .m3u8 URL passes through unchanged")
+ps12d = tr12d.Processes.Default
+ps12d.Command = (
+    f'curl -s -v -x localhost:{ts12_manifest.Variables.port} '
+    f'"http://manifesthost-ec/video/large.m3u8?cr-access-token={token_a_cache}"'
+)
+ps12d.ReturnCode = 0
+ps12d.Streams.stderr = Testers.ContainsExpression("HTTP/1.1 200", "Large non-manifest → 200")
+ps12d.Streams.stdout = Testers.ContainsExpression(
+    "NOT_A_MANIFEST_", "Non-manifest content passes through")
+ps12d.Streams.stdout += Testers.ExcludesExpression(
+    "cr-session-token=", "No token injected into non-manifest body")
+tr12d.StillRunningAfter = server
+tr12d.StillRunningAfter = ts12_manifest
+
+# --- Transform: HEAD on manifest URL (transform created, no body) ---
+tr12e = Test.AddTestRun("EC Transform: HEAD on manifest URL — no crash (no body to process)")
+ps12e = tr12e.Processes.Default
+ps12e.Command = (
+    f'curl -s -I -x localhost:{ts12_manifest.Variables.port} '
+    f'"http://manifesthost-ec/video/head.m3u8?cr-access-token={token_a_cache}"'
+)
+ps12e.ReturnCode = 0
+ps12e.Streams.stdout = Testers.ContainsExpression("200", "HEAD on manifest → 200")
+tr12e.StillRunningAfter = server
+tr12e.StillRunningAfter = ts12_manifest
+
+# --- Transform: Non-renewable token manifest injection (BUG #4 regression guard) ---
+tr12f = Test.AddTestRun("EC Transform: Non-renewable token manifest injection (BUG #4 regression)")
+ps12f = tr12f.Processes.Default
+ps12f.Command = (
+    f'curl -s -v -x localhost:{ts12_manifest.Variables.port} '
+    f'"http://manifesthost-ec/video/live.m3u8?cr-access-token={token_nonrenew_cache}"'
+)
+ps12f.ReturnCode = 0
+ps12f.Streams.stderr = Testers.ContainsExpression("HTTP/1.1 200", "Non-renewable → 200")
+ps12f.Streams.stderr += Testers.ExcludesExpression(
+    "Set-Cookie:", "Non-renewable: no Set-Cookie")
+ps12f.Streams.stdout = Testers.ContainsExpression(
+    "cr-session-token=",
+    "BUG #4 regression: non-renewable token still gets manifest injection")
+tr12f.StillRunningAfter = server
+tr12f.StillRunningAfter = ts12_manifest
+
+# --- Set-Cookie coexistence: origin + plugin ---
+tr12g = Test.AddTestRun("EC Transform: Origin Set-Cookie + Plugin Set-Cookie coexist")
+ps12g = tr12g.Processes.Default
+ps12g.Command = (
+    f'curl -s -v -x localhost:{ts12_manifest.Variables.port} '
+    f'"http://manifesthost-ec/video/setcookie.m3u8?cr-access-token={token_a_cache}"'
+)
+ps12g.ReturnCode = 0
+ps12g.Streams.stderr = Testers.ContainsExpression("HTTP/1.1 200", "Set-Cookie coexistence → 200")
+ps12g.Streams.stderr += Testers.ContainsExpression(
+    "Set-Cookie: cr-session-token=", "Plugin Set-Cookie present")
+ps12g.Streams.stderr += Testers.ContainsExpression(
+    "origin-session=abc123", "Origin Set-Cookie not clobbered")
+tr12g.StillRunningAfter = server
+tr12g.StillRunningAfter = ts12_manifest

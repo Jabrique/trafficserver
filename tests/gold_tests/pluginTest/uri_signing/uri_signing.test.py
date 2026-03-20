@@ -537,3 +537,340 @@ ps.Streams.stderr = Testers.ExcludesExpression("Set-Cookie:",
     "BUG #9: Session token still fresh → skip renewal (threshold optimization)")
 tr.StillRunningAfter = server
 tr.StillRunningAfter = ts_threshold_3600
+# ==============================================================================
+# AUTH DIRECTIVE & BEHAVIORAL EDGE CASES
+# ==============================================================================
+
+# Token constants (same tokens used in tests 2 and 3 above)
+_EC_TOKEN_VALID = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJpc3N1ZXIiLCJleHAiOjE5MjMwNTYwODR9.zw_wFQ-wvrWmfPLGj3hAUWn-GOHkiJZi2but4KV0paY"
+_EC_TOKEN_EXPIRED = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJpc3N1ZXIiLCJleHAiOjF9.GkdlOPHQc6BqS4Q6x79GeYuVFO2zuGbaPZZsJfD6ir8"
+_EC_LONG_PATH = "/longpath" + "a" * 500
+
+
+def _ec_add(path, body, host, status="200 OK", method="GET"):
+    server.addResponse("sessionfile.log",
+                       {"headers": "{} {} HTTP/1.1\r\nHost: {}\r\n\r\n".format(method, path, host),
+                        "timestamp": "1469733493.993", "body": ""},
+                       {"headers": "HTTP/1.1 {}\r\nConnection: close\r\n\r\n".format(status),
+                        "timestamp": "1469733493.993", "body": body})
+
+
+# Origin responses for edgehost (auth+strip tests)
+_ec_add("/someasset.ts", "somebody", "edgehost")
+_ec_add("/crossdomain.xml", "<crossdomain/>", "edgehost")
+_ec_add("/style.css", "body{}", "edgehost")
+_ec_add("/headtest.ts", "head-body-data", "edgehost")
+_ec_add("/nonexistent", "Not Found", "edgehost", "404 Not Found")
+_ec_add(_EC_LONG_PATH, "long-url-response", "edgehost")
+_ec_add("/someasset.ts", "post-response", "edgehost", method="POST")
+
+# Origin responses for multihost (multi-issuer tests)
+_ec_add("/style.css", "body{}", "multihost")
+_ec_add("/app.js", "console.log(1)", "multihost")
+_ec_add("/data.json", "{}", "multihost")
+
+
+def _ec_write_config(name, config_dict):
+    path = os.path.join(Test.RunDirectory, "ec_config_{}.json".format(name))
+    with open(path, 'w') as f:
+        json.dump(config_dict, f, indent=2)
+    return path
+
+
+_ec_config_edge = _ec_write_config("edge", {
+    "issuer": {
+        "id": "issuer",
+        "renewal_kid": "1",
+        "strip_token": True,
+        "auth_directives": [
+            {"auth": "allow", "uri": "regex:.*crossdomain\\.xml"},
+            {"auth": "allow", "uri": "regex:.*\\.css"},
+        ],
+        "keys": [
+            {"alg": "HS256", "k": "SECRET00", "kid": "0", "kty": "oct"},
+            {"alg": "HS256", "k": "SECRET01", "kid": "1", "kty": "oct"},
+        ]
+    }
+})
+
+_ec_config_multi = _ec_write_config("multi", {
+    "issuer-css": {
+        "auth_directives": [{"auth": "allow", "uri": "regex:.*\\.css"}],
+        "keys": [{"alg": "HS256", "k": "SECRET00", "kid": "0", "kty": "oct"}]
+    },
+    "issuer-js": {
+        "auth_directives": [{"auth": "allow", "uri": "regex:.*\\.js"}],
+        "keys": [{"alg": "HS256", "k": "SECRET01", "kid": "1", "kty": "oct"}]
+    }
+})
+
+ts_edge = Test.MakeATSProcess("ts-edge", enable_cache=False)
+ts_edge.Disk.records_config.update({
+    'proxy.config.diags.debug.enabled': 1,
+    'proxy.config.diags.debug.tags': 'uri_signing',
+})
+ts_edge.Disk.remap_config.AddLine(
+    'map http://edgehost/ http://127.0.0.1:{}/'.format(server.Variables.Port) +
+    ' @plugin=uri_signing.so @pparam={}'.format(_ec_config_edge))
+
+ts_multi_ec = Test.MakeATSProcess("ts-multi-ec", enable_cache=False)
+ts_multi_ec.Disk.records_config.update({
+    'proxy.config.diags.debug.enabled': 1,
+    'proxy.config.diags.debug.tags': 'uri_signing',
+})
+ts_multi_ec.Disk.remap_config.AddLine(
+    'map http://multihost/ http://127.0.0.1:{}/'.format(server.Variables.Port) +
+    ' @plugin=uri_signing.so @pparam={}'.format(_ec_config_multi))
+
+_EC_PORT = ts_edge.Variables.port
+_EC_PORT_MULTI = ts_multi_ec.Variables.port
+
+# --- Keep-alive: no state leakage between 3 requests on same connection ---
+tr = Test.AddTestRun("EC: Keep-alive no state leakage between requests")
+ps = tr.Processes.Default
+ps.StartBefore(ts_edge)
+ps.Command = (
+    'curl -s -v '
+    '-x localhost:{port} '
+    '"http://edgehost/someasset.ts?cr-access-token={token}" '
+    '"http://edgehost/someasset.ts" '
+    '"http://edgehost/crossdomain.xml"'
+).format(port=_EC_PORT, token=_EC_TOKEN_VALID)
+ps.ReturnCode = 0
+ps.Streams.stderr = Testers.ContainsExpression("HTTP/1.1 200", "Req 1 valid token → 200")
+ps.Streams.stderr += Testers.ContainsExpression("HTTP/1.1 403", "Req 2 no token → 403 (no state leak)")
+tr.StillRunningAfter = server
+tr.StillRunningAfter = ts_edge
+
+# --- Auth-allow: token (even expired) on auth-allowed URL → 200 ---
+tr = Test.AddTestRun("EC: Token on auth-allow URL with strip_token → 200")
+ps = tr.Processes.Default
+ps.Command = (
+    'curl -s -v -x localhost:{} "http://edgehost/crossdomain.xml?cr-access-token={}"'
+).format(_EC_PORT, _EC_TOKEN_VALID)
+ps.ReturnCode = 0
+ps.Streams.stderr = Testers.ContainsExpression("HTTP/1.1 200", "auth-allow + token → 200")
+tr.StillRunningAfter = server
+tr.StillRunningAfter = ts_edge
+
+tr = Test.AddTestRun("EC: Expired token on auth-allow URL → 200 (auth-allow bypasses validation)")
+ps = tr.Processes.Default
+ps.Command = (
+    'curl -s -v -x localhost:{} "http://edgehost/crossdomain.xml?cr-access-token={}"'
+).format(_EC_PORT, _EC_TOKEN_EXPIRED)
+ps.ReturnCode = 0
+ps.Streams.stderr = Testers.ContainsExpression("HTTP/1.1 200", "auth-allow bypasses token validation")
+tr.StillRunningAfter = server
+tr.StillRunningAfter = ts_edge
+
+tr = Test.AddTestRun("EC: CSS file allowed without token (auth_directive extension match)")
+ps = tr.Processes.Default
+ps.Command = 'curl -s -v -x localhost:{} "http://edgehost/style.css"'.format(_EC_PORT)
+ps.ReturnCode = 0
+ps.Streams.stderr = Testers.ContainsExpression("HTTP/1.1 200", "CSS allowed without token")
+tr.StillRunningAfter = server
+tr.StillRunningAfter = ts_edge
+
+# --- Token priority: URL vs Cookie ---
+tr = Test.AddTestRun("EC: URL token takes priority over Cookie token")
+ps = tr.Processes.Default
+ps.Command = (
+    'curl -s -v -x localhost:{port} '
+    '"http://edgehost/someasset.ts?cr-access-token={valid}" '
+    '-H "Cookie: cr-session-token={valid}"'
+).format(port=_EC_PORT, valid=_EC_TOKEN_VALID)
+ps.ReturnCode = 0
+ps.Streams.stderr = Testers.ContainsExpression("HTTP/1.1 200", "Both valid → 200 (URL wins)")
+tr.StillRunningAfter = server
+tr.StillRunningAfter = ts_edge
+
+tr = Test.AddTestRun("EC: Valid URL token + expired Cookie → 200")
+ps = tr.Processes.Default
+ps.Command = (
+    'curl -s -v -x localhost:{port} '
+    '"http://edgehost/someasset.ts?cr-access-token={valid}" '
+    '-H "Cookie: cr-session-token={expired}"'
+).format(port=_EC_PORT, valid=_EC_TOKEN_VALID, expired=_EC_TOKEN_EXPIRED)
+ps.ReturnCode = 0
+ps.Streams.stderr = Testers.ContainsExpression("HTTP/1.1 200", "Valid URL overrides expired cookie")
+tr.StillRunningAfter = server
+tr.StillRunningAfter = ts_edge
+
+tr = Test.AddTestRun("EC: No URL token + valid Cookie → 200")
+ps = tr.Processes.Default
+ps.Command = (
+    'curl -s -v -x localhost:{port} "http://edgehost/someasset.ts" '
+    '-H "Cookie: cr-session-token={valid}"'
+).format(port=_EC_PORT, valid=_EC_TOKEN_VALID)
+ps.ReturnCode = 0
+ps.Streams.stderr = Testers.ContainsExpression("HTTP/1.1 200", "Valid cookie without URL token → 200")
+tr.StillRunningAfter = server
+tr.StillRunningAfter = ts_edge
+
+# --- Error handling ---
+tr = Test.AddTestRun("EC: HEAD on protected URL without token → 403")
+ps = tr.Processes.Default
+ps.Command = 'curl -s -I -x localhost:{} "http://edgehost/someasset.ts"'.format(_EC_PORT)
+ps.ReturnCode = 0
+ps.Streams.stdout = Testers.ContainsExpression("403", "HEAD without token → 403")
+tr.StillRunningAfter = server
+tr.StillRunningAfter = ts_edge
+
+tr = Test.AddTestRun("EC: HEAD on protected URL with token → 200")
+ps = tr.Processes.Default
+ps.Command = (
+    'curl -s -I -x localhost:{} "http://edgehost/headtest.ts?cr-access-token={}"'
+).format(_EC_PORT, _EC_TOKEN_VALID)
+ps.ReturnCode = 0
+ps.Streams.stdout = Testers.ContainsExpression("200", "HEAD with valid token → 200")
+tr.StillRunningAfter = server
+tr.StillRunningAfter = ts_edge
+
+tr = Test.AddTestRun("EC: Valid token + origin returns 404 → plugin passes through (not 403)")
+ps = tr.Processes.Default
+ps.Command = (
+    'curl -s -v -x localhost:{} "http://edgehost/nonexistent?cr-access-token={}"'
+).format(_EC_PORT, _EC_TOKEN_VALID)
+ps.ReturnCode = 0
+ps.Streams.stderr = Testers.ContainsExpression("HTTP/1.1 404", "Origin 404 passed through")
+tr.StillRunningAfter = server
+tr.StillRunningAfter = ts_edge
+
+tr = Test.AddTestRun("EC: Long URL (500+ char path) with valid token → 200")
+ps = tr.Processes.Default
+ps.Command = (
+    'curl -s -v -x localhost:{port} "http://edgehost{path}?cr-access-token={token}"'
+).format(port=_EC_PORT, path=_EC_LONG_PATH, token=_EC_TOKEN_VALID)
+ps.ReturnCode = 0
+ps.Streams.stderr = Testers.ContainsExpression("HTTP/1.1 200", "Long URL with valid token → 200")
+tr.StillRunningAfter = server
+tr.StillRunningAfter = ts_edge
+
+tr = Test.AddTestRun("EC: Garbage token string → 403")
+ps = tr.Processes.Default
+ps.Command = (
+    'curl -s -v -x localhost:{} '
+    '"http://edgehost/someasset.ts?cr-access-token=NOT.A.VALID.JWT.TOKEN"'
+).format(_EC_PORT)
+ps.ReturnCode = 0
+ps.Streams.stderr = Testers.ContainsExpression("HTTP/1.1 403", "Garbage token → 403")
+tr.StillRunningAfter = server
+tr.StillRunningAfter = ts_edge
+
+tr = Test.AddTestRun("EC: Empty token value → 403")
+ps = tr.Processes.Default
+ps.Command = (
+    'curl -s -v -x localhost:{} "http://edgehost/someasset.ts?cr-access-token="'
+).format(_EC_PORT)
+ps.ReturnCode = 0
+ps.Streams.stderr = Testers.ContainsExpression("HTTP/1.1 403", "Empty token → 403")
+tr.StillRunningAfter = server
+tr.StillRunningAfter = ts_edge
+
+tr = Test.AddTestRun("EC: POST with valid token → 200 (method-agnostic)")
+ps = tr.Processes.Default
+ps.Command = (
+    'curl -s -v -X POST -x localhost:{} '
+    '"http://edgehost/someasset.ts?cr-access-token={}"'
+).format(_EC_PORT, _EC_TOKEN_VALID)
+ps.ReturnCode = 0
+ps.Streams.stderr = Testers.ContainsExpression("HTTP/1.1 200", "POST with valid token → 200")
+tr.StillRunningAfter = server
+tr.StillRunningAfter = ts_edge
+
+tr = Test.AddTestRun("EC: OPTIONS without token → 403")
+ps = tr.Processes.Default
+ps.Command = (
+    'curl -s -v -X OPTIONS -x localhost:{} "http://edgehost/someasset.ts"'
+).format(_EC_PORT)
+ps.ReturnCode = 0
+ps.Streams.stderr = Testers.ContainsExpression("HTTP/1.1 403", "OPTIONS without token → 403")
+tr.StillRunningAfter = server
+tr.StillRunningAfter = ts_edge
+
+# --- Cookie edge cases ---
+_ec_big_cookie = "; ".join(
+    ["adtracker{}=val{}".format(i, i) for i in range(20)] +
+    ["cr-session-token={}".format(_EC_TOKEN_VALID)])
+
+tr = Test.AddTestRun("EC: Valid token among 20 irrelevant cookies → 200")
+ps = tr.Processes.Default
+ps.Command = (
+    'curl -s -v -x localhost:{port} "http://edgehost/someasset.ts" '
+    '-H "Cookie: {cookie}"'
+).format(port=_EC_PORT, cookie=_ec_big_cookie)
+ps.ReturnCode = 0
+ps.Streams.stderr = Testers.ContainsExpression("HTTP/1.1 200", "Valid token in large cookie header → 200")
+tr.StillRunningAfter = server
+tr.StillRunningAfter = ts_edge
+
+tr = Test.AddTestRun("EC: Session token at beginning of cookie header → 200")
+ps = tr.Processes.Default
+ps.Command = (
+    'curl -s -v -x localhost:{port} "http://edgehost/someasset.ts" '
+    '-H "Cookie: cr-session-token={token}; other=val"'
+).format(port=_EC_PORT, token=_EC_TOKEN_VALID)
+ps.ReturnCode = 0
+ps.Streams.stderr = Testers.ContainsExpression("HTTP/1.1 200", "Token at start of cookie → 200")
+tr.StillRunningAfter = server
+tr.StillRunningAfter = ts_edge
+
+tr = Test.AddTestRun("EC: Only irrelevant cookies (no session token) → 403")
+ps = tr.Processes.Default
+ps.Command = (
+    'curl -s -v -x localhost:{port} "http://edgehost/someasset.ts" '
+    '-H "Cookie: analytics=abc; prefs=dark; lang=en"'
+).format(port=_EC_PORT)
+ps.ReturnCode = 0
+ps.Streams.stderr = Testers.ContainsExpression("HTTP/1.1 403", "Only irrelevant cookies → 403")
+tr.StillRunningAfter = server
+tr.StillRunningAfter = ts_edge
+
+# --- URL param positioning ---
+tr = Test.AddTestRun("EC: Token after other query params → 200")
+ps = tr.Processes.Default
+ps.Command = (
+    'curl -s -v -x localhost:{port} '
+    '"http://edgehost/someasset.ts?quality=high&bitrate=1000&cr-access-token={token}"'
+).format(port=_EC_PORT, token=_EC_TOKEN_VALID)
+ps.ReturnCode = 0
+ps.Streams.stderr = Testers.ContainsExpression("HTTP/1.1 200", "Token after other params → 200")
+tr.StillRunningAfter = server
+tr.StillRunningAfter = ts_edge
+
+tr = Test.AddTestRun("EC: Token in middle of query string → 200")
+ps = tr.Processes.Default
+ps.Command = (
+    'curl -s -v -x localhost:{port} '
+    '"http://edgehost/someasset.ts?before=1&cr-access-token={token}&after=2"'
+).format(port=_EC_PORT, token=_EC_TOKEN_VALID)
+ps.ReturnCode = 0
+ps.Streams.stderr = Testers.ContainsExpression("HTTP/1.1 200", "Token in middle of query string → 200")
+tr.StillRunningAfter = server
+tr.StillRunningAfter = ts_edge
+
+# --- Multi-issuer: realloc code path in config.c ---
+tr = Test.AddTestRun("EC: Multi-issuer CSS auth_directive → 200 (realloc path)")
+ps = tr.Processes.Default
+ps.StartBefore(ts_multi_ec)
+ps.Command = 'curl -s -v -x localhost:{} "http://multihost/style.css"'.format(_EC_PORT_MULTI)
+ps.ReturnCode = 0
+ps.Streams.stderr = Testers.ContainsExpression("HTTP/1.1 200", "CSS allowed by issuer-css")
+tr.StillRunningAfter = server
+tr.StillRunningAfter = ts_multi_ec
+
+tr = Test.AddTestRun("EC: Multi-issuer JS auth_directive → 200")
+ps = tr.Processes.Default
+ps.Command = 'curl -s -v -x localhost:{} "http://multihost/app.js"'.format(_EC_PORT_MULTI)
+ps.ReturnCode = 0
+ps.Streams.stderr = Testers.ContainsExpression("HTTP/1.1 200", "JS allowed by issuer-js")
+tr.StillRunningAfter = server
+tr.StillRunningAfter = ts_multi_ec
+
+tr = Test.AddTestRun("EC: Multi-issuer no matching directive → 403")
+ps = tr.Processes.Default
+ps.Command = 'curl -s -v -x localhost:{} "http://multihost/data.json"'.format(_EC_PORT_MULTI)
+ps.ReturnCode = 0
+ps.Streams.stderr = Testers.ContainsExpression("HTTP/1.1 403", "JSON not allowed → 403")
+tr.StillRunningAfter = server
+tr.StillRunningAfter = ts_multi_ec

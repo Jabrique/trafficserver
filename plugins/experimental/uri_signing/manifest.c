@@ -100,12 +100,21 @@ detect_manifest_type(const char *uri, const char *content_type)
     return MANIFEST_TYPE_UNKNOWN;
   }
 
-  /* Check file extension */
-  size_t uri_len = strlen(uri);
-  if (uri_len >= 5 && strcmp(uri + uri_len - 5, ".m3u8") == 0) {
+  /* Find path end (before query string '?' or fragment '#') */
+  size_t uri_len  = strlen(uri);
+  size_t path_len = uri_len;
+  for (size_t i = 0; i < uri_len; i++) {
+    if (uri[i] == '?' || uri[i] == '#') {
+      path_len = i;
+      break;
+    }
+  }
+
+  /* Check file extension at end of path (not full URI) */
+  if (path_len >= 5 && strncmp(uri + path_len - 5, ".m3u8", 5) == 0) {
     return MANIFEST_TYPE_HLS_M3U8;
   }
-  if (uri_len >= 4 && strcmp(uri + uri_len - 4, ".mpd") == 0) {
+  if (path_len >= 4 && strncmp(uri + path_len - 4, ".mpd", 4) == 0) {
     return MANIFEST_TYPE_DASH_MPD;
   }
 
@@ -505,9 +514,9 @@ inject_token_hls(const char *manifest_body, size_t body_len, const char *token, 
     return NULL;
   }
 
-  char *output = malloc(estimated_size);
+  char *output = malloc(estimated_size + 1); /* +1 for null terminator */
   if (!output) {
-    PluginError("HLS: Failed to allocate %zu bytes for output", estimated_size);
+    PluginError("HLS: Failed to allocate %zu bytes for output", estimated_size + 1);
     return NULL;
   }
 
@@ -847,13 +856,14 @@ process_dash_node(xmlNode *node, const char *token, const char *param_name, cons
           char *url_with_token = add_token_to_dash_url_with_replace((const char *)content, token, param_name, access_token_name,
                                                                     cfg->replace_access_token);
           if (url_with_token) {
-            /* For element content, we need to use xmlEncodeSpecialChars to escape & characters */
+            /* xmlNodeSetContent on ELEMENT nodes calls xmlStringGetNodeList which
+             * parses entity references. Pre-encode with xmlEncodeSpecialChars to
+             * ensure bare & in URLs are properly represented as &amp; entities. */
             xmlChar *encoded = xmlEncodeSpecialChars(cur->doc, (const xmlChar *)url_with_token);
             if (encoded) {
               xmlNodeSetContent(cur, encoded);
               xmlFree(encoded);
             } else {
-              /* Fallback: set content directly (may cause XML parse issues if URL has & ) */
               xmlNodeSetContent(cur, (const xmlChar *)url_with_token);
             }
             PluginDebug("DASH: Injected token into BaseURL: %s", url_with_token);
@@ -942,9 +952,6 @@ inject_token_dash(const char *manifest_body, size_t body_len, const char *token,
 
   *new_len = 0;
 
-  /* Initialize libxml2 */
-  xmlInitParser();
-
   /* Parse the MPD XML with security options:
    * - XML_PARSE_NONET: Forbid network access (prevents SSRF)
    * - XML_PARSE_HUGE: Allow large documents
@@ -957,7 +964,6 @@ inject_token_dash(const char *manifest_body, size_t body_len, const char *token,
   xmlDocPtr doc = xmlReadMemory(manifest_body, (int)body_len, "mpd.xml", NULL, parse_options);
   if (!doc) {
     PluginError("DASH: Failed to parse MPD XML");
-    xmlCleanupParser();
     return NULL;
   }
 
@@ -966,7 +972,6 @@ inject_token_dash(const char *manifest_body, size_t body_len, const char *token,
   if (!root) {
     PluginError("DASH: MPD has no root element");
     xmlFreeDoc(doc);
-    xmlCleanupParser();
     return NULL;
   }
 
@@ -974,7 +979,6 @@ inject_token_dash(const char *manifest_body, size_t body_len, const char *token,
   if (xmlStrcmp(root->name, (const xmlChar *)"MPD") != 0) {
     PluginError("DASH: Root element is not MPD (got: %s)", (const char *)root->name);
     xmlFreeDoc(doc);
-    xmlCleanupParser();
     return NULL;
   }
 
@@ -991,7 +995,6 @@ inject_token_dash(const char *manifest_body, size_t body_len, const char *token,
   if (!xml_output || xml_size <= 0) {
     PluginError("DASH: Failed to serialize modified MPD");
     xmlFreeDoc(doc);
-    xmlCleanupParser();
     return NULL;
   }
 
@@ -1001,7 +1004,6 @@ inject_token_dash(const char *manifest_body, size_t body_len, const char *token,
     PluginError("DASH: Failed to allocate output buffer");
     xmlFree(xml_output);
     xmlFreeDoc(doc);
-    xmlCleanupParser();
     return NULL;
   }
 
@@ -1012,7 +1014,6 @@ inject_token_dash(const char *manifest_body, size_t body_len, const char *token,
   /* Cleanup */
   xmlFree(xml_output);
   xmlFreeDoc(doc);
-  xmlCleanupParser();
 
   PluginDebug("DASH: Successfully injected tokens into MPD manifest (%d bytes)", xml_size);
   return output;

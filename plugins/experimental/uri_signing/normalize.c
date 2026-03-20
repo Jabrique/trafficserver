@@ -21,6 +21,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdbool.h>
+#include <stdlib.h>
 #include <stdio.h>
 
 /* Remove Dot Algorithm outlined in RFC3986 section 5.2.4
@@ -34,8 +35,17 @@ remove_dot_segments(const char *path, int path_ct, char *ret_buffer, int buff_ct
     return -1;
   }
 
+  /* Limit path size to prevent stack overflow from attacker-crafted URLs */
+  if (path_ct > 8192) {
+    PluginDebug("Path too long for normalization: %d bytes", path_ct);
+    return -1;
+  }
+
   /* Create an input buffer that we can change */
-  char inBuff[path_ct + 1];
+  char *inBuff = malloc(path_ct + 1);
+  if (!inBuff) {
+    return -1;
+  }
   memset(inBuff, 0, path_ct + 1);
   strcpy(inBuff, path);
 
@@ -121,6 +131,7 @@ remove_dot_segments(const char *path, int path_ct, char *ret_buffer, int buff_ct
   }
 
   PluginDebug("Normalized Path: %s", ret_buffer);
+  free(inBuff);
   return strlen(ret_buffer);
 }
 
@@ -224,7 +235,11 @@ normalize_uri(const char *uri, int uri_ct, char *normal_uri, int normal_ct)
   }
 
   /* Initialize a path buffer to pass to path normalization function later on */
-  char path_buffer[normal_ct];
+  char *path_buffer = malloc(normal_ct);
+  if (!path_buffer) {
+    PluginDebug("Failed to allocate path buffer (%d bytes)", normal_ct);
+    return -1;
+  }
   memset(path_buffer, 0, normal_ct);
 
   /* Comp variables store starting/ending indexes for each uri component as uri is parsed.
@@ -374,9 +389,11 @@ normalize_uri(const char *uri, int uri_ct, char *normal_uri, int normal_ct)
   }
 
   PluginDebug("Normalized URI:  %s", normal_uri);
+  free(path_buffer);
   return 0;
 
 normalize_failure:
   PluginDebug("URI Normalization Failure. URI does not fit http or https schemes.");
+  free(path_buffer);
   return -1;
 }

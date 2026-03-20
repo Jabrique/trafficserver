@@ -104,11 +104,12 @@ generate_salt(
   char *session_id_value = NULL;
   char *user_agent_value = NULL;
   char *client_ip_value  = NULL;
+
+#ifndef URI_SIGNING_UNIT_TEST
   bool need_free_session = false;
   bool need_free_ua      = false;
   bool need_free_ip      = false;
 
-#ifndef URI_SIGNING_UNIT_TEST
   /* Extract headers from request if not provided (production mode) */
   if (cfg->bind_session_id && !session_id) {
     session_id_value  = extract_header(txn, "X-Playback-Session-Id", 21);
@@ -319,8 +320,14 @@ validate_salt(struct jwt *jwt,
     return false;
   }
 
-  /* Compare salts */
-  bool match = (strcmp(current_salt, jwt->cdnisalt) == 0);
+  /* Constant-time comparison to prevent timing side-channel attacks.
+   * Although salt = SHA-256(public inputs), we use constant-time compare
+   * as defense-in-depth. Both strings are validated 64-char hex above. */
+  volatile unsigned char diff = 0;
+  for (size_t i = 0; i < 64; i++) {
+    diff |= (unsigned char)current_salt[i] ^ (unsigned char)jwt->cdnisalt[i];
+  }
+  bool match = (diff == 0);
   if (match) {
     PluginDebug("Salt validation passed: %s", current_salt);
   } else {
