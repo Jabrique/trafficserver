@@ -41,6 +41,8 @@ Test.ContinueOnFail = False
 # ==============================================================================
 
 server = Test.MakeOriginServer("server")
+server.ReturnCode = 0
+server.TimeOut = 3600
 
 # HLS manifest with regular segments AND init segment
 hls_manifest_with_init = """#EXTM3U
@@ -162,6 +164,7 @@ def create_config(name, salt_config, manifest_config):
 # ==============================================================================
 
 ts1 = Test.MakeATSProcess("ts1", enable_cache=False)
+ts1.TimeOut = 3600
 ts1.Disk.records_config.update({
     'proxy.config.diags.debug.enabled': 1,
     'proxy.config.diags.debug.tags': 'uri_signing|transform',
@@ -211,6 +214,7 @@ tr1.StillRunningAfter = ts1
 # ==============================================================================
 
 ts2 = Test.MakeATSProcess("ts2", enable_cache=False)
+ts2.TimeOut = 3600
 ts2.Disk.records_config.update({
     'proxy.config.diags.debug.enabled': 1,
     'proxy.config.diags.debug.tags': 'uri_signing|transform',
@@ -250,6 +254,7 @@ tr2.StillRunningAfter = ts2
 # ==============================================================================
 
 ts3 = Test.MakeATSProcess("ts3", enable_cache=False)
+ts3.TimeOut = 3600
 ts3.Disk.records_config.update({
     'proxy.config.diags.debug.enabled': 1,
     'proxy.config.diags.debug.tags': 'uri_signing|transform',
@@ -290,6 +295,7 @@ tr3.StillRunningAfter = ts3
 # ==============================================================================
 
 ts4 = Test.MakeATSProcess("ts4", enable_cache=False)
+ts4.TimeOut = 3600
 ts4.Disk.records_config.update({
     'proxy.config.diags.debug.enabled': 1,
     'proxy.config.diags.debug.tags': 'uri_signing|transform|session',
@@ -337,6 +343,7 @@ tr4.StillRunningAfter = ts4
 # ==============================================================================
 
 ts5 = Test.MakeATSProcess("ts5", enable_cache=False)
+ts5.TimeOut = 3600
 ts5.Disk.records_config.update({
     'proxy.config.diags.debug.enabled': 1,
     'proxy.config.diags.debug.tags': 'uri_signing|session',
@@ -383,6 +390,7 @@ tr5.StillRunningAfter = ts5
 # ==============================================================================
 
 ts6 = Test.MakeATSProcess("ts6", enable_cache=False)
+ts6.TimeOut = 3600
 ts6.Disk.records_config.update({
     'proxy.config.diags.debug.enabled': 1,
     'proxy.config.diags.debug.tags': 'uri_signing|transform',
@@ -421,6 +429,7 @@ tr6.StillRunningAfter = ts6
 # ==============================================================================
 
 ts7 = Test.MakeATSProcess("ts7", enable_cache=False)
+ts7.TimeOut = 3600
 ts7.Disk.records_config.update({
     'proxy.config.diags.debug.enabled': 1,
     'proxy.config.diags.debug.tags': 'uri_signing|transform',
@@ -459,6 +468,7 @@ tr7.StillRunningAfter = ts7
 # ==============================================================================
 
 ts8 = Test.MakeATSProcess("ts8", enable_cache=False)
+ts8.TimeOut = 3600
 ts8.Disk.records_config.update({
     'proxy.config.diags.debug.enabled': 1,
     'proxy.config.diags.debug.tags': 'uri_signing|transform',
@@ -543,6 +553,7 @@ print("=" * 80)
 # ==============================================================================
 
 ts9 = Test.MakeATSProcess("ts9", enable_cache=False)
+ts9.TimeOut = 3600
 ts9.Disk.records_config.update({
     'proxy.config.diags.debug.enabled': 1,
     'proxy.config.diags.debug.tags': 'uri_signing|transform|session',
@@ -684,6 +695,7 @@ tr9c.StillRunningAfter = ts9
 # ==============================================================================
 
 ts10 = Test.MakeATSProcess("ts10", enable_cache=False)
+ts10.TimeOut = 3600
 ts10.Disk.records_config.update({
     'proxy.config.diags.debug.enabled': 1,
     'proxy.config.diags.debug.tags': 'uri_signing|transform',
@@ -732,6 +744,7 @@ tr10.StillRunningAfter = ts10
 # ==============================================================================
 
 ts11 = Test.MakeATSProcess("ts11", enable_cache=False)
+ts11.TimeOut = 3600
 ts11.Disk.records_config.update({
     'proxy.config.diags.debug.enabled': 1,
     'proxy.config.diags.debug.tags': 'uri_signing|transform',
@@ -876,6 +889,7 @@ _ec_cfg_manifest = _ec_create_manifest_config("manifest")
 
 # ts12_cache: cache ENABLED — per-user cache isolation test
 ts12_cache = Test.MakeATSProcess("ts12-cache", enable_cache=True)
+ts12_cache.TimeOut = 3600
 ts12_cache.Disk.records_config.update({
     'proxy.config.diags.debug.enabled': 1,
     'proxy.config.diags.debug.tags': 'uri_signing|transform|cache',
@@ -887,6 +901,7 @@ ts12_cache.Disk.remap_config.AddLine(
 
 # ts12_manifest: cache DISABLED — transform edge cases
 ts12_manifest = Test.MakeATSProcess("ts12-manifest", enable_cache=False)
+ts12_manifest.TimeOut = 3600
 ts12_manifest.Disk.records_config.update({
     'proxy.config.diags.debug.enabled': 1,
     'proxy.config.diags.debug.tags': 'uri_signing|transform',

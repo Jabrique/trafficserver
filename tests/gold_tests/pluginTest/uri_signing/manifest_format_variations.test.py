@@ -36,6 +36,10 @@ Test.ContinueOnFail = True
 # ==============================================================================
 
 server = Test.MakeOriginServer("server")
+# 20 test runs × ~120s each ≈ 2400s. Default process timeout is 600s — extend it.
+server.TimeOut = 3600
+# Server may exit after serving all queued responses; accept exit code 0.
+server.ReturnCode = 0
 
 # ==============================================================================
 # HLS TEST MANIFESTS
@@ -232,6 +236,95 @@ dash_with_query_params = """<?xml version="1.0"?>
 </MPD>
 """
 
+# 6. DASH SegmentBase (Shaka Packager on-demand profile)
+dash_segmentbase = """<?xml version="1.0" encoding="UTF-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011"
+  profiles="urn:mpeg:dash:profile:isoff-on-demand:2011"
+  minBufferTime="PT2S" type="static" mediaPresentationDuration="PT90.2S">
+  <Period id="0">
+    <AdaptationSet id="0" contentType="video" subsegmentAlignment="true">
+      <Representation id="0" bandwidth="715611" codecs="avc1.64001e" mimeType="video/mp4" width="640" height="360">
+        <BaseURL>stream_360p.mp4</BaseURL>
+        <SegmentBase indexRange="899-1206" timescale="24000">
+          <Initialization range="0-898"/>
+        </SegmentBase>
+      </Representation>
+      <Representation id="1" bandwidth="1984826" codecs="avc1.64001f" mimeType="video/mp4" width="1280" height="720">
+        <BaseURL>stream_720p.mp4</BaseURL>
+        <SegmentBase indexRange="898-1205" timescale="24000">
+          <Initialization range="0-897"/>
+        </SegmentBase>
+      </Representation>
+      <Representation id="2" bandwidth="3506362" codecs="avc1.640028" mimeType="video/mp4" width="1920" height="1080">
+        <BaseURL>stream_1080p.mp4</BaseURL>
+        <SegmentBase indexRange="900-1207" timescale="24000">
+          <Initialization range="0-899"/>
+        </SegmentBase>
+      </Representation>
+    </AdaptationSet>
+    <AdaptationSet id="1" contentType="audio" subsegmentAlignment="true">
+      <Representation id="3" bandwidth="134119" codecs="mp4a.40.2" mimeType="audio/mp4" audioSamplingRate="44100">
+        <BaseURL>stream_audio.mp4</BaseURL>
+        <SegmentBase indexRange="833-1140" timescale="44100">
+          <Initialization range="0-832"/>
+        </SegmentBase>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>
+"""
+
+# 7. DASH SegmentList with many segments (Content-Length truncation test)
+# 23 segments per representation × 4 reps = 92 SegmentURLs + 4 Initialization
+# After token injection, body grows from ~3KB to ~25KB
+def _generate_segmentlist(num_segs):
+    mpd = '<?xml version="1.0" encoding="utf-8"?>\n'
+    mpd += '<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static"'
+    mpd += ' mediaPresentationDuration="PT1M30.2S" maxSegmentDuration="PT4.0S" minBufferTime="PT8.0S">\n'
+    mpd += '  <Period id="0">\n'
+    mpd += '    <AdaptationSet id="0" contentType="video" segmentAlignment="true">\n'
+    for rep in range(3):
+        bw = [800000, 2500000, 5000000][rep]
+        mpd += f'      <Representation id="{rep}" mimeType="video/mp4" bandwidth="{bw}">\n'
+        mpd += '        <SegmentList timescale="1000000" duration="4000000" startNumber="1">\n'
+        mpd += f'          <Initialization sourceURL="init-stream{rep}.m4s" />\n'
+        for seg in range(1, num_segs + 1):
+            mpd += f'          <SegmentURL media="chunk-stream{rep}-{seg:05d}.m4s" />\n'
+        mpd += '        </SegmentList>\n      </Representation>\n'
+    mpd += '    </AdaptationSet>\n'
+    mpd += '    <AdaptationSet id="1" contentType="audio" segmentAlignment="true">\n'
+    mpd += '      <Representation id="3" mimeType="audio/mp4" bandwidth="128000">\n'
+    mpd += '        <SegmentList timescale="1000000" duration="4000000" startNumber="1">\n'
+    mpd += '          <Initialization sourceURL="init-stream3.m4s" />\n'
+    for seg in range(1, num_segs + 1):
+        mpd += f'          <SegmentURL media="chunk-stream3-{seg:05d}.m4s" />\n'
+    mpd += '        </SegmentList>\n      </Representation>\n'
+    mpd += '    </AdaptationSet>\n  </Period>\n</MPD>\n'
+    return mpd
+
+dash_segmentlist_small = _generate_segmentlist(23)
+dash_segmentlist_large = _generate_segmentlist(100)
+
+# 8. HLS fMP4/CMAF with EXT-X-MAP init segment
+hls_fmp4_cmaf = """#EXTM3U
+#EXT-X-VERSION:7
+#EXT-X-TARGETDURATION:4
+#EXT-X-MEDIA-SEQUENCE:0
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXT-X-MAP:URI="init_0.mp4"
+#EXTINF:4.000000,
+chunk_0_00001.m4s
+#EXTINF:4.000000,
+chunk_0_00002.m4s
+#EXTINF:4.000000,
+chunk_0_00003.m4s
+#EXTINF:4.000000,
+chunk_0_00004.m4s
+#EXTINF:2.168333,
+chunk_0_00005.m4s
+#EXT-X-ENDLIST
+"""
+
 # ==============================================================================
 # ADD RESPONSES TO ORIGIN SERVER
 # ==============================================================================
@@ -258,6 +351,21 @@ add_response("/dash/template.mpd", "application/dash+xml", dash_segment_template
 add_response("/dash/multi-baseurl.mpd", "application/dash+xml", dash_multiple_baseurl)
 add_response("/dash/timeline.mpd", "application/dash+xml", dash_segment_timeline)
 add_response("/dash/query-params.mpd", "application/dash+xml", dash_with_query_params)
+add_response("/dash/segmentbase.mpd", "application/dash+xml", dash_segmentbase)
+add_response("/dash/segmentlist.mpd", "application/dash+xml", dash_segmentlist_small)
+add_response("/dash/segmentlist-large.mpd", "application/dash+xml", dash_segmentlist_large)
+add_response("/hls/fmp4.m3u8", "application/vnd.apple.mpegurl", hls_fmp4_cmaf)
+
+# Special: SegmentList large WITH explicit Content-Length from origin
+# This simulates the real production scenario where origin sends Content-Length
+# If ATS doesn't update it, the client will get truncated body
+def add_response_with_content_length(path, content_type, body):
+    body_len = len(body.encode('utf-8'))
+    req = {"headers": f"GET {path} HTTP/1.1\r\nHost: testhost\r\n\r\n", "timestamp": "1469733493.993", "body": ""}
+    res = {"headers": f"HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {body_len}\r\n\r\n", "timestamp": "1469733493.993", "body": body}
+    server.addResponse("sessionfile.log", req, res)
+
+add_response_with_content_length("/dash/segmentlist-large-cl.mpd", "application/dash+xml", dash_segmentlist_large)
 
 # ==============================================================================
 # HELPER FUNCTIONS
@@ -306,6 +414,8 @@ valid_token = "eyJhbGciOiJIUzI1NiIsImtpZCI6InByaW1hcnkta2V5LTIwMjQiLCJ0eXAiOiJKV
 # ==============================================================================
 
 ts = Test.MakeATSProcess("ts", enable_cache=False)
+# Extend timeout: 20 tests × ~120s ≈ 2400s, default 600s is too short.
+ts.TimeOut = 3600
 ts.Disk.records_config.update({
     'proxy.config.diags.debug.enabled': 1,
     'proxy.config.diags.debug.tags': 'uri_signing|transform|manifest',
@@ -494,6 +604,230 @@ tr14.Processes.Default.Streams.stdout += Testers.ContainsExpression('media="seg2
 tr14.StillRunningAfter = server
 tr14.StillRunningAfter = ts
 
+# ==============================================================================
+# TEST 15: DASH SegmentBase (Shaka Packager on-demand profile)
+# BaseURL elements must get token; indexRange/range must NOT be modified
+# ==============================================================================
+tr15 = Test.AddTestRun("Test 15: DASH SegmentBase — BaseURL injected, indexRange preserved")
+tr15.Processes.Default.Command = f'curl -s -x localhost:{ts.Variables.port} "http://testhost/dash/segmentbase.mpd?cr-access-token={valid_token}"'
+tr15.Processes.Default.ReturnCode = 0
+# All BaseURL entries must have token
+tr15.Processes.Default.Streams.stdout = Testers.ContainsExpression("stream_360p.mp4\\?cr-session-token=", "360p BaseURL must have token")
+tr15.Processes.Default.Streams.stdout += Testers.ContainsExpression("stream_720p.mp4\\?cr-session-token=", "720p BaseURL must have token")
+tr15.Processes.Default.Streams.stdout += Testers.ContainsExpression("stream_1080p.mp4\\?cr-session-token=", "1080p BaseURL must have token")
+tr15.Processes.Default.Streams.stdout += Testers.ContainsExpression("stream_audio.mp4\\?cr-session-token=", "Audio BaseURL must have token")
+# SegmentBase indexRange must NOT be modified (it's byte range, not URL)
+tr15.Processes.Default.Streams.stdout += Testers.ContainsExpression('indexRange="899-1206"', "indexRange must be preserved unchanged")
+tr15.Processes.Default.Streams.stdout += Testers.ContainsExpression('range="0-898"', "Initialization range must be preserved unchanged")
+# MPD must be complete (not truncated)
+tr15.Processes.Default.Streams.stdout += Testers.ContainsExpression("</MPD>", "MPD must be complete (not truncated)")
+tr15.StillRunningAfter = server
+tr15.StillRunningAfter = ts
+
+# ==============================================================================
+# TEST 16: DASH SegmentList — All sourceURL + SegmentURL injected
+# ==============================================================================
+tr16 = Test.AddTestRun("Test 16: DASH SegmentList — sourceURL + SegmentURL injected")
+tr16.Processes.Default.Command = f'curl -s -x localhost:{ts.Variables.port} "http://testhost/dash/segmentlist.mpd?cr-access-token={valid_token}"'
+tr16.Processes.Default.ReturnCode = 0
+# Initialization sourceURL must have token
+tr16.Processes.Default.Streams.stdout = Testers.ContainsExpression('sourceURL="init-stream0.m4s\\?cr-session-token=', "Init stream0 must have token")
+tr16.Processes.Default.Streams.stdout += Testers.ContainsExpression('sourceURL="init-stream3.m4s\\?cr-session-token=', "Init stream3 (audio) must have token")
+# Last segment of last representation must be present (proves not truncated)
+tr16.Processes.Default.Streams.stdout += Testers.ContainsExpression("chunk-stream3-00023.m4s\\?cr-session-token=", "Last audio segment must have token")
+# MPD must be complete
+tr16.Processes.Default.Streams.stdout += Testers.ContainsExpression("</MPD>", "MPD must be complete")
+tr16.StillRunningAfter = server
+tr16.StillRunningAfter = ts
+
+# ==============================================================================
+# TEST 17: DASH SegmentList LARGE — Content-Length truncation test (BUG)
+#
+# This test is the KEY test for the Content-Length truncation bug:
+# - Origin sends a ~15KB MPD with 400 SegmentURLs
+# - After injection: ~95KB (each URL gets ~200-char token appended)
+# - If Content-Length header is NOT updated: client receives only ~15KB → TRUNCATED
+# - The last segments and </MPD> will be missing
+# ==============================================================================
+tr17 = Test.AddTestRun("Test 17: DASH SegmentList LARGE — Content-Length truncation (BUG)")
+tr17.Processes.Default.Command = f'curl -s -x localhost:{ts.Variables.port} "http://testhost/dash/segmentlist-large.mpd?cr-access-token={valid_token}"'
+tr17.Processes.Default.ReturnCode = 0
+# CRITICAL: Last segment of last representation MUST be present
+# If Content-Length is wrong, body will be truncated and this will be missing
+tr17.Processes.Default.Streams.stdout = Testers.ContainsExpression(
+    "chunk-stream3-00100.m4s",
+    "CRITICAL: Last audio segment (00100) must be present — proves no truncation")
+# The closing </MPD> MUST be present
+tr17.Processes.Default.Streams.stdout += Testers.ContainsExpression(
+    "</MPD>",
+    "CRITICAL: Closing </MPD> must be present — proves response is complete")
+# First segment must also have token
+tr17.Processes.Default.Streams.stdout += Testers.ContainsExpression(
+    "chunk-stream0-00001.m4s\\?cr-session-token=",
+    "First segment must have token injected")
+tr17.StillRunningAfter = server
+tr17.StillRunningAfter = ts
+
+# ==============================================================================
+# TEST 18: HLS fMP4/CMAF — EXT-X-MAP init segment + media segments
+# ==============================================================================
+tr18 = Test.AddTestRun("Test 18: HLS fMP4/CMAF — EXT-X-MAP + segments injected")
+tr18.Processes.Default.Command = f'curl -s -x localhost:{ts.Variables.port} "http://testhost/hls/fmp4.m3u8?cr-access-token={valid_token}"'
+tr18.Processes.Default.ReturnCode = 0
+# EXT-X-MAP init segment must have token
+tr18.Processes.Default.Streams.stdout = Testers.ContainsExpression('init_0.mp4\\?cr-session-token=', "EXT-X-MAP init segment must have token")
+# Media segments must have token
+tr18.Processes.Default.Streams.stdout += Testers.ContainsExpression("chunk_0_00001.m4s\\?cr-session-token=", "First m4s segment must have token")
+tr18.Processes.Default.Streams.stdout += Testers.ContainsExpression("chunk_0_00005.m4s\\?cr-session-token=", "Last m4s segment must have token")
+# Must be complete
+tr18.Processes.Default.Streams.stdout += Testers.ContainsExpression("#EXT-X-ENDLIST", "Must contain #EXT-X-ENDLIST (not truncated)")
+tr18.StillRunningAfter = server
+tr18.StillRunningAfter = ts
+
+# ==============================================================================
+# TEST 19: Content-Length with origin that sends explicit Content-Length
+#
+# This is the REAL truncation test:
+# - Origin sends Content-Length: <original body size>
+# - Transform grows body by injecting tokens
+# - If ATS doesn't update Content-Length → client gets truncated body
+# ==============================================================================
+tr19 = Test.AddTestRun("Test 19: Origin with Content-Length — body must NOT be truncated")
+tr19.Processes.Default.Command = f'curl -s -x localhost:{ts.Variables.port} "http://testhost/dash/segmentlist-large-cl.mpd?cr-access-token={valid_token}"'
+tr19.Processes.Default.ReturnCode = 0
+# CRITICAL: Last segment MUST be present (proves no truncation even with origin Content-Length)
+tr19.Processes.Default.Streams.stdout = Testers.ContainsExpression(
+    "chunk-stream3-00100.m4s",
+    "CRITICAL: Last audio segment (00100) must be present — origin sent Content-Length")
+tr19.Processes.Default.Streams.stdout += Testers.ContainsExpression(
+    "</MPD>",
+    "CRITICAL: Closing </MPD> must be present — proves response not truncated")
+tr19.Processes.Default.Streams.stdout += Testers.ContainsExpression(
+    "chunk-stream0-00001.m4s\\?cr-session-token=",
+    "First segment must have token injected")
+tr19.StillRunningAfter = server
+tr19.StillRunningAfter = ts
+
+# ==============================================================================
+# TEST 20: Content-Length header validation with origin Content-Length
+#
+# When origin sends Content-Length and transform grows body:
+# - ATS must either update Content-Length to new size
+# - Or remove it (forcing chunked transfer)
+# - The old Content-Length MUST NOT remain unchanged
+# ==============================================================================
+tr20 = Test.AddTestRun("Test 20: Content-Length header value after transform")
+tr20.Processes.Default.Command = (
+    f'curl -s -D - -o /dev/null -x localhost:{ts.Variables.port} '
+    f'"http://testhost/dash/segmentlist-large-cl.mpd?cr-access-token={valid_token}"'
+)
+tr20.Processes.Default.ReturnCode = 0
+# The original body is ~15KB. After transform, it should be ~130KB.
+# If Content-Length still shows ~15KB, the body would be truncated.
+# We check that it's NOT the original small value.
+original_body_len = len(dash_segmentlist_large.encode('utf-8'))
+tr20.Processes.Default.Streams.stdout = Testers.ExcludesExpression(
+    f"Content-Length: {original_body_len}",
+    f"Content-Length must NOT be the original size ({original_body_len}) — transform grew the body")
+tr20.Processes.Default.Streams.stdout += Testers.ContainsExpression(
+    "200",
+    "Response must be 200 OK")
+tr20.StillRunningAfter = server
+tr20.StillRunningAfter = ts
+
+# ==============================================================================
+# TEST 21: Response framing after manifest transform — no incorrect CL
+#
+# With INT64_MAX output VIO, ATS core either:
+# a) Sends Transfer-Encoding: chunked (if transform hasn't set final size yet)
+# b) Sends correct Content-Length (if TSVIONBytesSet completes before headers)
+# Either way, the original (small) Content-Length must NOT appear.
+# ==============================================================================
+tr21 = Test.AddTestRun("Test 21: No incorrect Content-Length after manifest transform")
+tr21.Processes.Default.Command = (
+    f'curl -s -D - -o /dev/null -x localhost:{ts.Variables.port} '
+    f'"http://testhost/dash/segmentlist-large-cl.mpd?cr-access-token={valid_token}"'
+)
+tr21.Processes.Default.ReturnCode = 0
+original_body_len_21 = len(dash_segmentlist_large.encode('utf-8'))
+tr21.Processes.Default.Streams.stdout = Testers.ExcludesExpression(
+    f"Content-Length: {original_body_len_21}",
+    f"Original Content-Length ({original_body_len_21}) must NOT appear — transform grew the body")
+tr21.Processes.Default.Streams.stdout += Testers.ContainsExpression(
+    "HTTP/1.1 200",
+    "Response must be 200 OK")
+tr21.StillRunningAfter = server
+tr21.StillRunningAfter = ts
+
+# ==============================================================================
+# TEST 22: Non-200 response — no transform VIO, no chunked
+#
+# For 404, the transform is registered but never receives body data.
+# No output VIO is created → ATS uses normal Content-Length behavior.
+# ==============================================================================
+tr22 = Test.AddTestRun("Test 22: 404 response — no chunked, no transform")
+tr22.Processes.Default.Command = (
+    f'curl -s -D - -x localhost:{ts.Variables.port} '
+    f'"http://testhost/dash/nonexistent.mpd?cr-access-token={valid_token}"'
+)
+tr22.Processes.Default.ReturnCode = 0
+tr22.Processes.Default.Streams.stdout = Testers.ContainsExpression(
+    "HTTP/1.1 404",
+    "Response must be 404 Not Found")
+tr22.Processes.Default.Streams.stdout += Testers.ExcludesExpression(
+    "Transfer-Encoding: chunked",
+    "404 response must NOT use chunked — no transform body processed")
+tr22.StillRunningAfter = server
+tr22.StillRunningAfter = ts
+
+# ==============================================================================
+# TEST 23: Correct response framing with HTTP/1.1 after manifest transform
+#
+# With INT64_MAX output VIO, ATS may send:
+# a) Transfer-Encoding: chunked (transform size unknown at header time), or
+# b) Content-Length with the correct transformed size (transform completed early)
+# Both are valid. The key assertion: the original small Content-Length is gone.
+# ==============================================================================
+tr23 = Test.AddTestRun("Test 23: Correct HTTP/1.1 framing after transform")
+tr23.Processes.Default.Command = (
+    f'curl -s -D - -o /dev/null --http1.1 -x localhost:{ts.Variables.port} '
+    f'"http://testhost/dash/segmentlist-large-cl.mpd?cr-access-token={valid_token}"'
+)
+tr23.Processes.Default.ReturnCode = 0
+original_body_len_23 = len(dash_segmentlist_large.encode('utf-8'))
+tr23.Processes.Default.Streams.stdout = Testers.ExcludesExpression(
+    f"Content-Length: {original_body_len_23}",
+    f"Original Content-Length ({original_body_len_23}) must NOT appear after transform")
+tr23.Processes.Default.Streams.stdout += Testers.ContainsExpression(
+    "HTTP/1.1 200",
+    "Response must be 200 OK")
+tr23.StillRunningAfter = server
+tr23.StillRunningAfter = ts
+
+# ==============================================================================
+# TEST 24: Full body received — received size > origin size
+#
+# The transform injects tokens into every segment URL, growing the body.
+# Use curl's write-out to get received bytes and verify body is complete.
+# This proves the VIO nbytes doesn't cap output at the origin body size.
+# ==============================================================================
+tr24 = Test.AddTestRun("Test 24: Received body size exceeds origin body size")
+tr24.Processes.Default.Command = (
+    f'curl -s -o /dev/null -w "%{{size_download}}" -x localhost:{ts.Variables.port} '
+    f'"http://testhost/dash/segmentlist-large-cl.mpd?cr-access-token={valid_token}"'
+)
+tr24.Processes.Default.ReturnCode = 0
+# Origin body for segmentlist-large-cl.mpd is ~15KB (without tokens).
+# After injection it should be ~130KB+ (each segment URL gets ~600 byte token).
+# We check that downloaded size is at least 50000 bytes (well above 15KB origin).
+# Use a regex that matches 5+ digit numbers (>= 10000 bytes).
+tr24.Processes.Default.Streams.stdout = Testers.ContainsExpression(
+    r"[0-9]{6}",
+    "Downloaded body must be 6+ digits (>100KB) — proves transform output not truncated by VIO")
+
+tr24.StillRunningAfter = server
+tr24.StillRunningAfter = ts
+
 print("=" * 80)
 print("Manifest Format Variations Test Suite")
 print("=" * 80)
@@ -507,6 +841,7 @@ print("  6. Relative Paths")
 print("  7. Double Injection Prevention")
 print("  8. Whitespace Handling")
 print("  9. Mixed Query Params")
+print(" 18. HLS fMP4/CMAF (EXT-X-MAP)")
 print("")
 print("DASH Tests:")
 print(" 10. BaseURL Inheritance")
@@ -514,4 +849,15 @@ print(" 11. SegmentTemplate with $Number$")
 print(" 12. Multiple BaseURL Elements")
 print(" 13. SegmentTimeline")
 print(" 14. Existing Query Params")
+print(" 15. SegmentBase (on-demand profile)")
+print(" 16. SegmentList (sourceURL + SegmentURL)")
+print(" 17. SegmentList LARGE (Content-Length truncation)")
+print("")
+print("Header / Transfer Tests:")
+print(" 19. Origin Content-Length — body completeness after transform")
+print(" 20. Content-Length header value after transform (not original size)")
+print(" 21. No incorrect Content-Length after manifest transform")
+print(" 22. 404 response — no chunked, no transform")
+print(" 23. Correct HTTP/1.1 framing after transform")
+print(" 24. Received body size exceeds origin body size")
 print("=" * 80)

@@ -563,6 +563,8 @@ _ec_add("/headtest.ts", "head-body-data", "edgehost")
 _ec_add("/nonexistent", "Not Found", "edgehost", "404 Not Found")
 _ec_add(_EC_LONG_PATH, "long-url-response", "edgehost")
 _ec_add("/someasset.ts", "post-response", "edgehost", method="POST")
+_ec_add("/someasset.ts?quality=high&bitrate=1000", "somebody", "edgehost")
+_ec_add("/someasset.ts?before=1&after=2", "somebody", "edgehost")
 
 # Origin responses for multihost (multi-issuer tests)
 _ec_add("/style.css", "body{}", "multihost")
@@ -595,11 +597,11 @@ _ec_config_edge = _ec_write_config("edge", {
 
 _ec_config_multi = _ec_write_config("multi", {
     "issuer-css": {
-        "auth_directives": [{"auth": "allow", "uri": "regex:.*\\.css"}],
+        "auth_directives": [{"auth": "allow", "uri": "regex:.*\\.css$"}],
         "keys": [{"alg": "HS256", "k": "SECRET00", "kid": "0", "kty": "oct"}]
     },
     "issuer-js": {
-        "auth_directives": [{"auth": "allow", "uri": "regex:.*\\.js"}],
+        "auth_directives": [{"auth": "allow", "uri": "regex:.*\\.js$"}],
         "keys": [{"alg": "HS256", "k": "SECRET01", "kid": "1", "kty": "oct"}]
     }
 })
@@ -770,7 +772,7 @@ tr.StillRunningAfter = ts_edge
 tr = Test.AddTestRun("EC: POST with valid token → 200 (method-agnostic)")
 ps = tr.Processes.Default
 ps.Command = (
-    'curl -s -v -X POST -x localhost:{} '
+    'curl -s -v -X POST -H "Content-Length: 0" -x localhost:{} '
     '"http://edgehost/someasset.ts?cr-access-token={}"'
 ).format(_EC_PORT, _EC_TOKEN_VALID)
 ps.ReturnCode = 0

@@ -107,16 +107,19 @@ handle_transform(TSCont contp)
   /* Initialize output VIO on first call */
   if (!data->output_vio) {
     TSVConn output_vconn;
-    int64_t initial_towrite;
 
     /* Create IO buffers */
     data->output_buffer = TSIOBufferCreate();
     data->output_reader = TSIOBufferReaderAlloc(data->output_buffer);
 
-    /* Get output connection and set up write VIO */
+    /* Use INT64_MAX because we don't know the final output size yet.
+     * The transform injects tokens which grows the body beyond the original
+     * Content-Length. ATS core interprets INT64_MAX as unknown size, which
+     * sets transform_response_cl = UNDEFINED, enabling chunked encoding
+     * for HTTP/1.1 and preventing Content-Length mismatch for HTTP/2.
+     * The actual size is set via TSVIONBytesSet() after injection completes. */
     output_vconn     = TSTransformOutputVConnGet(contp);
-    initial_towrite  = TSVIONTodoGet(write_vio);
-    data->output_vio = TSVConnWrite(output_vconn, contp, data->output_reader, initial_towrite);
+    data->output_vio = TSVConnWrite(output_vconn, contp, data->output_reader, INT64_MAX);
 
     PluginDebug("Transform: Output VIO initialized");
   }
