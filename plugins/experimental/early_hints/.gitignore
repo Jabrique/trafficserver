@@ -1,0 +1,4 @@
+*.o
+test_early_hints
+test_transform
+*.old

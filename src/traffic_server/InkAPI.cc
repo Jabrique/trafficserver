@@ -24,6 +24,7 @@
 #include <atomic>
 #include <string_view>
 #include <string>
+#include <vector>
 
 #include "tscore/ink_platform.h"
 #include "tscore/ink_base64.h"
@@ -8557,6 +8558,114 @@ TSHttpTxnClientStreamPriorityGet(TSHttpTxn txnp, TSHttpPriority *priority)
   priority_out->priority_type     = HTTP_PRIORITY_TYPE_HTTP_2;
   priority_out->stream_dependency = stream->get_transaction_priority_dependence();
   priority_out->weight            = stream->get_transaction_priority_weight();
+
+  return TS_SUCCESS;
+}
+
+TSReturnCode
+TSHttpTxnSendEarlyHints(TSHttpTxn txnp, const char **link_values, int num_links)
+{
+  sdk_assert(sdk_sanity_check_txn(txnp) == TS_SUCCESS);
+
+  if (link_values == nullptr || num_links <= 0) {
+    return TS_ERROR;
+  }
+
+  auto *sm     = reinterpret_cast<HttpSM *>(txnp);
+  auto *stream = dynamic_cast<Http2Stream *>(sm->ua_txn);
+  if (stream == nullptr) {
+    return TS_ERROR;
+  }
+
+  auto *h2_proxy_ssn = static_cast<Http2ClientSession *>(stream->get_proxy_ssn());
+  if (h2_proxy_ssn == nullptr) {
+    return TS_ERROR;
+  }
+
+  SCOPED_MUTEX_LOCK(lock, h2_proxy_ssn->mutex, this_ethread());
+  if (h2_proxy_ssn->connection_state.is_state_closed()) {
+    return TS_ERROR;
+  }
+
+  if (h2_proxy_ssn->connection_state.remote_hpack_handle == nullptr) {
+    return TS_ERROR;
+  }
+
+  // Build the 103 Early Hints response header
+  HTTPHdr early_hdr;
+  early_hdr.create(HTTP_TYPE_RESPONSE);
+  http2_init_pseudo_headers(early_hdr);
+  early_hdr.version_set(HTTPVersion(1, 1));
+  early_hdr.status_set(HTTP_STATUS_EARLY_HINTS);
+  early_hdr.reason_set("Early Hints", 11);
+
+  for (int i = 0; i < num_links; i++) {
+    if (link_values[i] == nullptr) {
+      continue;
+    }
+    int len          = static_cast<int>(strlen(link_values[i]));
+    MIMEField *field = early_hdr.field_create("Link", 4);
+    early_hdr.field_attach(field);
+    field->value_set(early_hdr.m_heap, early_hdr.m_http->m_fields_impl, link_values[i], len);
+  }
+
+  // Convert to H2 pseudo-headers (:status) and HPACK-encode
+  http2_convert_header_from_1_1_to_2(&early_hdr);
+
+  uint32_t buf_len = early_hdr.length_get() * 2;
+  std::vector<uint8_t> hdr_buf(buf_len);
+  uint8_t *buf = hdr_buf.data();
+
+  uint32_t header_blocks_size = 0;
+  Http2ErrorCode result =
+    http2_encode_header_blocks(&early_hdr, buf, buf_len, &header_blocks_size, *(h2_proxy_ssn->connection_state.remote_hpack_handle),
+                               h2_proxy_ssn->connection_state.client_settings.get(HTTP2_SETTINGS_HEADER_TABLE_SIZE));
+
+  early_hdr.destroy();
+
+  if (result != Http2ErrorCode::HTTP2_ERROR_NO_ERROR) {
+    return TS_ERROR;
+  }
+
+  // Determine max frame payload (HTTP/2 default: 16384)
+  uint32_t max_frame_size = h2_proxy_ssn->connection_state.client_settings.get(HTTP2_SETTINGS_MAX_FRAME_SIZE);
+  if (max_frame_size == 0) {
+    max_frame_size = HTTP2_MAX_FRAME_SIZE;
+  }
+
+  // Send HEADERS frame — NOT END_STREAM (informational response)
+  uint8_t flags           = 0;
+  uint32_t payload_length = 0;
+
+  if (header_blocks_size <= max_frame_size) {
+    payload_length = header_blocks_size;
+    flags |= HTTP2_FLAGS_HEADERS_END_HEADERS;
+  } else {
+    payload_length = max_frame_size;
+  }
+
+  // Validate stream state transition
+  if (!stream->change_state(HTTP2_FRAME_TYPE_HEADERS, flags)) {
+    return TS_ERROR;
+  }
+
+  Http2HeadersFrame headers(stream->get_id(), flags, buf, payload_length);
+  h2_proxy_ssn->connection_state.session->xmit(headers);
+  uint64_t sent = payload_length;
+
+  // Send CONTINUATION frames if header block exceeded single frame
+  flags = 0;
+  while (sent < header_blocks_size) {
+    uint32_t cont_len = std::min(max_frame_size, static_cast<uint32_t>(header_blocks_size - sent));
+    if (sent + cont_len == header_blocks_size) {
+      flags |= HTTP2_FLAGS_CONTINUATION_END_HEADERS;
+    }
+    stream->change_state(HTTP2_FRAME_TYPE_CONTINUATION, flags);
+
+    Http2ContinuationFrame continuation(stream->get_id(), flags, buf + sent, cont_len);
+    h2_proxy_ssn->connection_state.session->xmit(continuation);
+    sent += cont_len;
+  }
 
   return TS_SUCCESS;
 }
