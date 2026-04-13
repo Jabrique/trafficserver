@@ -884,8 +884,187 @@ TEST_CASE("QA: font auto-crossorigin does not override use-credentials", "[html_
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// QA Audit: Exhaustive comment sub-state × character-class transition tests
+// ─── Deduplication: multiple cross-origin preloads collapsing to same origin ─────────────────
+//
+// Non-whitelisted cross-origin preloads are downgraded to preconnects, stripping
+// the resource path and keeping only the scheme+host origin.  When a page has
+// multiple <link rel="preload"> tags pointing to different paths on the same
+// cross-origin domain (e.g. bundled JS chunks), every tag collapses to the
+// identical "<origin>; rel=preconnect" string.  Without dedup the plugin would
+// forward duplicate preconnect entries, wasting hint budget.
+
+TEST_CASE("HtmlScanner: multiple cross-origin preloads to same domain produce single preconnect", "[html_scanner][build][dedup]")
+{
+  SECTION("three script preloads on different paths — same origin → single preconnect")
+  {
+    std::string html = "<html><head>"
+                       "<link rel=\"preload\" href=\"https://cdn.example.com/js/a.js\" as=\"script\">"
+                       "<link rel=\"preload\" href=\"https://cdn.example.com/js/b.js\" as=\"script\">"
+                       "<link rel=\"preload\" href=\"https://cdn.example.com/js/c.js\" as=\"script\">"
+                       "</head></html>";
+    auto links = scan_html(html);
+    // All three collapse to the same origin URL — dedup must yield exactly one entry
+    REQUIRE(links.size() == 1);
+    CHECK(links[0] == "<https://cdn.example.com>; rel=preconnect; crossorigin=anonymous");
+  }
+
+  SECTION("script and stylesheet preloads to same cross-origin domain → single preconnect")
+  {
+    std::string html = "<html><head>"
+                       "<link rel=\"preload\" href=\"https://assets.example.com/app.js\" as=\"script\">"
+                       "<link rel=\"preload\" href=\"https://assets.example.com/main.css\" as=\"style\">"
+                       "</head></html>";
+    auto links = scan_html(html);
+    // Different resource types, same cross-origin domain → both collapse to identical preconnect
+    REQUIRE(links.size() == 1);
+    CHECK(links[0] == "<https://assets.example.com>; rel=preconnect; crossorigin=anonymous");
+  }
+
+  SECTION("cross-origin preloads to two distinct domains → two distinct preconnects")
+  {
+    std::string html = "<html><head>"
+                       "<link rel=\"preload\" href=\"https://cdn1.example.com/a.js\" as=\"script\">"
+                       "<link rel=\"preload\" href=\"https://cdn1.example.com/b.js\" as=\"script\">"
+                       "<link rel=\"preload\" href=\"https://cdn2.example.com/c.js\" as=\"script\">"
+                       "</head></html>";
+    auto links = scan_html(html);
+    // cdn1 and cdn2 are distinct origins — one preconnect per origin, no cross-dedup
+    REQUIRE(links.size() == 2);
+    bool has_cdn1 = false, has_cdn2 = false;
+    for (const auto &l : links) {
+      if (l.find("cdn1.example.com") != std::string::npos) {
+        has_cdn1 = true;
+      }
+      if (l.find("cdn2.example.com") != std::string::npos) {
+        has_cdn2 = true;
+      }
+    }
+    CHECK(has_cdn1);
+    CHECK(has_cdn2);
+  }
+
+  SECTION("same-origin preloads on different paths are NOT deduplicated")
+  {
+    std::string html = "<html><head>"
+                       "<link rel=\"preload\" href=\"/js/a.js\" as=\"script\">"
+                       "<link rel=\"preload\" href=\"/js/b.js\" as=\"script\">"
+                       "</head></html>";
+    auto links = scan_html(html);
+    // Same-origin: each path is a distinct resource — both entries must be preserved
+    REQUIRE(links.size() == 2);
+  }
+
+  SECTION("seven script preloads to same CDN origin → single preconnect")
+  {
+    // Common pattern: JS bundler emits many chunk preload tags all on one CDN domain.
+    std::string base = "https://cdn.example.com/wp-content/dist/";
+    std::string html = "<html><head>";
+    for (int i = 0; i < 7; ++i) {
+      html += "<link rel=\"preload\" href=\"" + base + std::to_string(i) + ".js\" as=\"script\">";
+    }
+    html += "</head></html>";
+    auto links = scan_html(html);
+    REQUIRE(links.size() == 1);
+    CHECK(links[0] == "<https://cdn.example.com>; rel=preconnect; crossorigin=anonymous");
+  }
+}
+
+// ─── Deduplication: edge cases ───────────────────────────────────────────────────────────────
+
+TEST_CASE("HtmlScanner dedup: same URL, different rel types are NOT deduplicated", "[html_scanner][build][dedup]")
+{
+  // The scanner's dedup check includes a rel-type guard (is_preconnect == ex_preconnect)
+  // so that a preload and preconnect for the same URL key are both preserved.
+  // In practice with HTML link tags this requires a whitelisted preload to the
+  // bare origin URL AND a non-whitelisted cross-origin preload from a different
+  // resource on the SAME domain — the whitelist keeps one as preload (full origin URL),
+  // while a resource path preload on the non-whitelisted path would produce the
+  // same origin as preconnect.
+  //
+  // The simpler observable case: whitelisted preload (full-URL rel=preload) +
+  // non-whitelisted preload on a different domain (rel=preconnect) are both kept,
+  // confirming dedup operates per-URL key and does not cross domains.
+  const char *argv[] = {"from", "to", "--mode", "auto-learn", "--crossorigin-whitelist", "static.example.com"};
+  EarlyHintsConfig config;
+  config.init(6, argv);
+
+  SECTION("whitelisted preload (rel=preload) + non-whitelisted on different domain (rel=preconnect) — both preserved")
+  {
+    std::string html = "<html><head>"
+                       "<link rel=\"preload\" href=\"https://static.example.com/app.js\" as=\"script\" crossorigin>"
+                       "<link rel=\"preload\" href=\"https://cdn.example.com/vendor.js\" as=\"script\">"
+                       "</head></html>";
+    HtmlScanner scanner(131072, 10, &config);
+    scanner.feed(html.c_str(), static_cast<int64_t>(html.size()));
+    auto links = scanner.get_links();
+    // static.example.com is whitelisted → preload with full URL (rel=preload)
+    // cdn.example.com is not whitelisted → preconnect to origin (rel=preconnect)
+    // Different URL keys AND different rel types → dedup must never fire → both kept
+    REQUIRE(links.size() == 2);
+    bool has_preload = false, has_preconnect = false;
+    for (const auto &l : links) {
+      if (l.find("rel=preload") != std::string::npos) {
+        has_preload = true;
+      }
+      if (l.find("rel=preconnect") != std::string::npos) {
+        has_preconnect = true;
+      }
+    }
+    CHECK(has_preload);
+    CHECK(has_preconnect);
+  }
+}
+
+TEST_CASE("HtmlScanner dedup: max_links interacts correctly with deduplication", "[html_scanner][build][dedup]")
+{
+  SECTION("dedup prevents duplicates from consuming the hint budget")
+  {
+    // Without dedup, 7 cdn1 preloads would fill max_links=3 with 3 identical preconnects.
+    // With dedup they collapse to 1, leaving room for cdn2 and cdn3.
+    std::string html = "<html><head>";
+    for (int i = 0; i < 7; ++i) {
+      html += "<link rel=\"preload\" href=\"https://cdn1.example.com/chunk" + std::to_string(i) + ".js\" as=\"script\">";
+    }
+    for (int i = 0; i < 3; ++i) {
+      html += "<link rel=\"preload\" href=\"https://cdn2.example.com/chunk" + std::to_string(i) + ".js\" as=\"script\">";
+    }
+    for (int i = 0; i < 3; ++i) {
+      html += "<link rel=\"preload\" href=\"https://cdn3.example.com/chunk" + std::to_string(i) + ".js\" as=\"script\">";
+    }
+    html += "</head></html>";
+
+    auto links = scan_html(html, 131072, 3); // max_links = 3
+    // cdn1 → 1 preconnect, cdn2 → 1 preconnect, cdn3 → 1 preconnect = 3 total (fills budget)
+    REQUIRE(links.size() == 3);
+    bool has_cdn1 = false, has_cdn2 = false, has_cdn3 = false;
+    for (const auto &l : links) {
+      if (l.find("cdn1.example.com") != std::string::npos) {
+        has_cdn1 = true;
+      }
+      if (l.find("cdn2.example.com") != std::string::npos) {
+        has_cdn2 = true;
+      }
+      if (l.find("cdn3.example.com") != std::string::npos) {
+        has_cdn3 = true;
+      }
+    }
+    CHECK(has_cdn1);
+    CHECK(has_cdn2);
+    CHECK(has_cdn3);
+  }
+
+  SECTION("max_links=1 with multiple cross-origin preloads → exactly one preconnect")
+  {
+    std::string html = "<html><head>"
+                       "<link rel=\"preload\" href=\"https://cdn1.example.com/a.js\" as=\"script\">"
+                       "<link rel=\"preload\" href=\"https://cdn2.example.com/b.js\" as=\"script\">"
+                       "</head></html>";
+    auto links = scan_html(html, 131072, 1); // max_links = 1
+    REQUIRE(links.size() == 1);
+    // First seen domain wins
+    CHECK(links[0].find("cdn1.example.com") != std::string::npos);
+  }
+}
 //
 // Complete transition table for IN_COMMENT (comment_dashes_ 0–6) and
 // IN_BOGUS_COMMENT.  Each SECTION targets exactly one (sub-state, input class)

@@ -388,6 +388,26 @@ HtmlScanner::build_link_header(const std::string &tag)
     result += "; fetchpriority=" + fetchpriority_;
   }
 
+  // Deduplicate: non-whitelisted cross-origin preloads are downgraded to preconnects
+  // using only the scheme+host origin, so N preload tags on different paths of the
+  // same domain all produce the identical "<origin>; rel=preconnect" string.
+  // Skip any result whose <URL> + rel type combination is already in links_.
+  {
+    size_t url_end = result.find('>');
+    if (url_end != std::string::npos) {
+      std::string_view url_key = std::string_view(result).substr(0, url_end + 1);
+      bool is_preconnect       = result.find("rel=preconnect") != std::string::npos;
+      for (const auto &existing : links_) {
+        if (existing.size() > url_key.size() && existing.compare(0, url_key.size(), url_key.data(), url_key.size()) == 0) {
+          bool ex_preconnect = existing.find("rel=preconnect") != std::string::npos;
+          if (is_preconnect == ex_preconnect) {
+            return; // same origin URL + same rel type already queued
+          }
+        }
+      }
+    }
+  }
+
   links_.push_back(std::move(result));
 }
 

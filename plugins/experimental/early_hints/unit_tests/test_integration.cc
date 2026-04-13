@@ -918,3 +918,107 @@ TEST_CASE("Integration: Cache update overwrites stale scanner results", "[integr
   CHECK(retrieved[0].find("/v2.js") != std::string::npos);
   CHECK(is_valid_link_value(retrieved[0]));
 }
+
+// ─── Origin-forward dedup: simulate the dedup logic from early_hints.cc ──────
+//
+// The origin-forward dedup in early_hints.cc is inside an ATS-callback and
+// cannot be invoked without a running ATS process.  We simulate its logic here
+// using split_link_header_value + the same URL-key+rel-type check to verify
+// correctness for edge cases not covered by the integration test.
+
+#include "../link_parser.h"
+
+// Mirrors the dedup logic in early_hints.cc handle_read_response_hdr().
+static std::vector<std::string>
+simulate_origin_forward(const std::vector<std::string> &raw_header_values, int max_links = 10)
+{
+  std::vector<std::string> origin_links;
+  for (const auto &full_val : raw_header_values) {
+    int remaining = max_links - static_cast<int>(origin_links.size());
+    auto segments = split_link_header_value(full_val, remaining);
+    for (auto &seg : segments) {
+      if (is_valid_link_value(seg)) {
+        size_t url_end = seg.find('>');
+        bool is_dup    = false;
+        if (url_end != std::string::npos) {
+          std::string_view url_key = std::string_view(seg).substr(0, url_end + 1);
+          bool is_preconnect       = seg.find("rel=preconnect") != std::string::npos;
+          for (const auto &existing : origin_links) {
+            if (existing.size() > url_key.size() && existing.compare(0, url_key.size(), url_key.data(), url_key.size()) == 0 &&
+                (existing.find("rel=preconnect") != std::string::npos) == is_preconnect) {
+              is_dup = true;
+              break;
+            }
+          }
+        }
+        if (!is_dup) {
+          origin_links.push_back(std::move(seg));
+        }
+        if (static_cast<int>(origin_links.size()) >= max_links) {
+          break;
+        }
+      }
+    }
+    if (static_cast<int>(origin_links.size()) >= max_links) {
+      break;
+    }
+  }
+  return origin_links;
+}
+
+TEST_CASE("Origin-forward dedup: comma-separated duplicate values in one Link field", "[integration][origin_forward][dedup]")
+{
+  SECTION("two identical comma-separated segments → only one stored")
+  {
+    // Simulates: Link: </cdn/app.js>; rel=preload; as=script, </cdn/app.js>; rel=preload; as=script
+    std::vector<std::string> headers = {"</cdn/app.js>; rel=preload; as=script, "
+                                        "</cdn/app.js>; rel=preload; as=script"};
+    auto result                      = simulate_origin_forward(headers);
+    REQUIRE(result.size() == 1);
+    CHECK(result[0].find("/cdn/app.js") != std::string::npos);
+    CHECK(result[0].find("rel=preload") != std::string::npos);
+  }
+
+  SECTION("three comma-separated identical segments → only one stored")
+  {
+    std::vector<std::string> headers = {"</cdn/x.js>; rel=preload; as=script, "
+                                        "</cdn/x.js>; rel=preload; as=script, "
+                                        "</cdn/x.js>; rel=preload; as=script"};
+    auto result                      = simulate_origin_forward(headers);
+    REQUIRE(result.size() == 1);
+  }
+
+  SECTION("two distinct comma-separated values → both stored")
+  {
+    std::vector<std::string> headers = {"</cdn/app.js>; rel=preload; as=script, "
+                                        "</cdn/style.css>; rel=preload; as=style"};
+    auto result                      = simulate_origin_forward(headers);
+    REQUIRE(result.size() == 2);
+  }
+}
+
+TEST_CASE("Origin-forward dedup: same URL, different rel types are NOT deduplicated", "[integration][origin_forward][dedup]")
+{
+  SECTION("preload and preconnect for same URL — both preserved")
+  {
+    // Origin sends same URL once as preload and once as preconnect.
+    // rel types differ → dedup must NOT fire → both entries kept.
+    std::vector<std::string> headers = {
+      "</cdn/app.js>; rel=preload; as=script",
+      "</cdn/app.js>; rel=preconnect",
+    };
+    auto result = simulate_origin_forward(headers);
+    REQUIRE(result.size() == 2);
+    bool has_preload = false, has_preconnect = false;
+    for (const auto &l : result) {
+      if (l.find("rel=preload") != std::string::npos) {
+        has_preload = true;
+      }
+      if (l.find("rel=preconnect") != std::string::npos) {
+        has_preconnect = true;
+      }
+    }
+    CHECK(has_preload);
+    CHECK(has_preconnect);
+  }
+}

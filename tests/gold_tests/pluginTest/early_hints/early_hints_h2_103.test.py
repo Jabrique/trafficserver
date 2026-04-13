@@ -64,9 +64,21 @@ microserver.addResponse(
             "</head><body><p>Auto-learn H2 test</p></body></html>\r\n"
     })
 
-# ----
-# Setup ATS — manual mode with H2 enabled
-# ----
+# HTML page served with duplicate Link headers from origin (origin-forward dedup test)
+microserver.addResponse(
+    "sessionfile.log", {
+        "headers": "GET /dup-link.html HTTP/1.1\r\nHost: www.example.com\r\n\r\n",
+        "body": ""
+    }, {
+        "headers":
+            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/html\r\n"
+            "Link: </cdn/app.js>; rel=preload; as=script\r\n"
+            "Link: </cdn/app.js>; rel=preload; as=script\r\n"
+            "\r\n",
+        "body": "<html><body>Duplicate Link headers</body></html>\r\n"
+    })
+
+
 ts = Test.MakeATSProcess("ts", select_ports=True, enable_tls=True, enable_cache=False)
 
 ts.addDefaultSSLFiles()
@@ -84,6 +96,13 @@ ts.Disk.remap_config.AddLines([
     'map /auto.html http://127.0.0.1:{0}/auto.html'.format(microserver.Variables.Port) +
     ' @plugin=early_hints.so'
     ' @pparam=--mode @pparam=auto-learn'
+    ' @pparam=--min-hit-count @pparam=1'
+    ' @pparam=--no-skip-bots'
+    ' @pparam=--no-navigate-only'
+    ' @pparam=--debug-header @pparam=X-Early-Hints-Status',
+    'map /dup-link.html http://127.0.0.1:{0}/dup-link.html'.format(microserver.Variables.Port) +
+    ' @plugin=early_hints.so'
+    ' @pparam=--mode @pparam=origin-forward'
     ' @pparam=--min-hit-count @pparam=1'
     ' @pparam=--no-skip-bots'
     ' @pparam=--no-navigate-only'
@@ -211,3 +230,37 @@ tr6.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr6.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
     "103", "H1 client must not see 103 status")
 tr6.StillRunningAfter = microserver
+
+# ----
+# Test Case 6: Origin-forward dedup — origin sends duplicate Link headers
+#
+# When origin returns the same Link header field twice (e.g. a mis-configured
+# origin or middleware that appends headers idempotently), the plugin must store
+# only one copy in its cache.  The H2 103 response is the cleanest signal: it
+# contains only what the plugin injected from cache, so counting "link:" lines
+# in the 103 frame shows whether dedup worked.
+#
+# Step 1 — H1 warm-up: learn the (duplicate) origin headers and populate cache.
+# Step 2 — H2 verify:  nghttp output filtered to the 103 frame must show
+#           exactly 1 "link:" entry for </cdn/app.js> (not 2).
+# ----
+tr_dedup_learn = Test.AddTestRun("Origin-forward dedup: warm-up request — learn duplicate origin Link headers")
+tr_dedup_learn.Processes.Default.Command = (
+    "curl -s -D /dev/null -o /dev/null --http1.1 --insecure"
+    " 'https://127.0.0.1:{0}/dup-link.html'".format(ts.Variables.ssl_port))
+tr_dedup_learn.Processes.Default.ReturnCode = 0
+tr_dedup_learn.StillRunningAfter = microserver
+
+tr_dedup_verify = Test.AddTestRun(
+    "Origin-forward dedup: H2 103 must contain exactly 1 link (not 2) for duplicate origin headers")
+# sed -n '/status: 103/,/status: 200/{/link:/p}' isolates link: lines in the 103 frame
+tr_dedup_verify.Processes.Default.Command = (
+    "sleep 1 && nghttp -v --no-dep"
+    " 'https://127.0.0.1:{0}/dup-link.html' 2>&1 |"
+    " sed -n '/status: 103/,/status: 200/{{/link:/p}}' |"
+    " grep -c 'cdn/app.js'".format(ts.Variables.ssl_port))
+tr_dedup_verify.Processes.Default.ReturnCode = 0
+tr_dedup_verify.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
+    "^1$",
+    "Duplicate origin Link headers must be deduplicated: 103 must contain exactly 1 link entry")
+tr_dedup_verify.StillRunningAfter = microserver

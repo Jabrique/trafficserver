@@ -573,7 +573,27 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
           auto segments = split_link_header_value(full_val, remaining);
           for (auto &seg : segments) {
             if (is_valid_link_value(seg)) {
-              origin_links.push_back(std::move(seg));
+              // Deduplicate: origins occasionally emit the same Link header field
+              // more than once (e.g. middleware that appends headers idempotently).
+              // Store only the first occurrence of each <URL> + rel type pair.
+              size_t url_end = seg.find('>');
+              bool is_dup    = false;
+              if (url_end != std::string::npos) {
+                std::string_view url_key = std::string_view(seg).substr(0, url_end + 1);
+                bool is_preconnect       = seg.find("rel=preconnect") != std::string::npos;
+                for (const auto &existing : origin_links) {
+                  if (existing.size() > url_key.size() &&
+                      existing.compare(0, url_key.size(), url_key.data(), url_key.size()) == 0) {
+                    if ((seg.find("rel=preconnect") != std::string::npos) == is_preconnect) {
+                      is_dup = true;
+                      break;
+                    }
+                  }
+                }
+              }
+              if (!is_dup) {
+                origin_links.push_back(std::move(seg));
+              }
               if (static_cast<int>(origin_links.size()) >= config->max_links()) {
                 break;
               }
