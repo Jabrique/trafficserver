@@ -186,7 +186,7 @@ EarlyHintsConfig::parse_mode(const char *mode_str)
 }
 
 bool
-EarlyHintsConfig::is_whitelisted_domain(const std::string &domain) const
+EarlyHintsConfig::match_domain_list(const std::string &domain, const std::vector<std::string> &list)
 {
   // DNS domains are case-insensitive — normalize to lowercase for comparison
   std::string domain_lower;
@@ -196,7 +196,6 @@ EarlyHintsConfig::is_whitelisted_domain(const std::string &domain) const
   }
 
   // Strip userinfo (RFC 3986 §3.2.1): "user@host" → "host"
-  // Also strip port: "host:8080" → "host"
   size_t at_pos = domain_lower.find('@');
   if (at_pos != std::string::npos) {
     domain_lower = domain_lower.substr(at_pos + 1);
@@ -214,7 +213,7 @@ EarlyHintsConfig::is_whitelisted_domain(const std::string &domain) const
     }
   }
 
-  for (const auto &pattern : crossorigin_whitelist_) {
+  for (const auto &pattern : list) {
     std::string pattern_lower;
     pattern_lower.reserve(pattern.size());
     for (char c : pattern) {
@@ -236,6 +235,18 @@ EarlyHintsConfig::is_whitelisted_domain(const std::string &domain) const
 }
 
 bool
+EarlyHintsConfig::is_whitelisted_domain(const std::string &domain) const
+{
+  return match_domain_list(domain, crossorigin_whitelist_);
+}
+
+bool
+EarlyHintsConfig::is_preload_domain(const std::string &domain) const
+{
+  return match_domain_list(domain, preload_whitelist_);
+}
+
+bool
 EarlyHintsConfig::init(int argc, const char *argv[])
 {
   // clang-format off
@@ -254,6 +265,7 @@ EarlyHintsConfig::init(int argc, const char *argv[])
     {const_cast<char *>("scan-limit"),               required_argument, nullptr, 's'},
     {const_cast<char *>("min-hit-count"),            required_argument, nullptr, 'h'},
     {const_cast<char *>("crossorigin-whitelist"),    required_argument, nullptr, 'w'},
+    {const_cast<char *>("preload-whitelist"),         required_argument, nullptr, 'W'},
     {const_cast<char *>("max-cache-entries"),        required_argument, nullptr, 'c'},
     {nullptr, 0, nullptr, 0},
   };
@@ -391,6 +403,30 @@ EarlyHintsConfig::init(int argc, const char *argv[])
       }
       break;
     }
+    case 'W': {
+      std::string domains(optarg);
+      size_t pos = 0;
+      while (pos < domains.size()) {
+        size_t comma = domains.find(',', pos);
+        if (comma == std::string::npos) {
+          comma = domains.size();
+        }
+        size_t start = pos;
+        while (start < comma && (domains[start] == ' ' || domains[start] == '\t')) {
+          start++;
+        }
+        size_t end = comma;
+        while (end > start && (domains[end - 1] == ' ' || domains[end - 1] == '\t')) {
+          end--;
+        }
+        std::string d = domains.substr(start, end - start);
+        if (!d.empty()) {
+          preload_whitelist_.push_back(d);
+        }
+        pos = comma + 1;
+      }
+      break;
+    }
     case 'c':
       if (!safe_parse_int(optarg, &max_cache_entries_)) {
         TSError("[%s] invalid --max-cache-entries value: %s", PLUGIN_NAME, optarg);
@@ -425,9 +461,10 @@ EarlyHintsConfig::init(int argc, const char *argv[])
   TSDebug(
     PLUGIN_NAME,
     "config: mode=0x%02x max_links=%d header_size_limit=%d skip_bots=%d navigate_only=%d "
-    "scan_limit=%d min_hit_count=%d max_cache_entries=%d manual_links=%zu crossorigin_whitelist=%zu persist=%s persist_dir=%s",
+    "scan_limit=%d min_hit_count=%d max_cache_entries=%d manual_links=%zu crossorigin_whitelist=%zu "
+    "preload_whitelist=%zu persist=%s persist_dir=%s",
     mode_, max_links_, header_size_limit_, skip_bots_, navigate_only_, scan_limit_, min_hit_count_, max_cache_entries_,
-    manual_links_.size(), crossorigin_whitelist_.size(), persist_enabled_ ? "on" : "off",
+    manual_links_.size(), crossorigin_whitelist_.size(), preload_whitelist_.size(), persist_enabled_ ? "on" : "off",
     persist_dir_.empty() ? "(auto)" : persist_dir_.c_str());
 
   return true;

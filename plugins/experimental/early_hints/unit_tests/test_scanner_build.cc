@@ -1089,3 +1089,160 @@ TEST_CASE("HtmlScanner dedup: max_links interacts correctly with deduplication",
 // before `probe` is encountered.
 
 // ─── State 0 (comment body) ─────────────────────────────────────────────────
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// --preload-whitelist: no-CORS cross-origin preload tests
+// ═══════════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("HtmlScanner: --preload-whitelist emits no-cors preload", "[html_scanner][build][preload-whitelist]")
+{
+  SECTION("script cross-origin in preload-whitelist → rel=preload as=script without crossorigin")
+  {
+    const char *argv[] = {"from", "to", "--mode", "auto-learn", "--preload-whitelist", "cdn.example.com"};
+    EarlyHintsConfig config;
+    config.init(6, argv);
+
+    HtmlScanner scanner(131072, 10, &config);
+    std::string html = R"(<html><head><script src="https://cdn.example.com/app.js"></script></head></html>)";
+    scanner.feed(html.c_str(), static_cast<int64_t>(html.size()));
+
+    auto links = scanner.get_links();
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=preload") != std::string::npos);
+    CHECK(links[0].find("as=script") != std::string::npos);
+    CHECK(links[0].find("cdn.example.com/app.js") != std::string::npos);
+    CHECK(links[0].find("crossorigin") == std::string::npos);
+  }
+
+  SECTION("stylesheet cross-origin in preload-whitelist → rel=preload as=style without crossorigin")
+  {
+    const char *argv[] = {"from", "to", "--mode", "auto-learn", "--preload-whitelist", "cdn.example.com"};
+    EarlyHintsConfig config;
+    config.init(6, argv);
+
+    HtmlScanner scanner(131072, 10, &config);
+    std::string html =
+      R"(<html><head><link rel="stylesheet" href="https://cdn.example.com/style.css"></head></html>)";
+    scanner.feed(html.c_str(), static_cast<int64_t>(html.size()));
+
+    auto links = scanner.get_links();
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=preload") != std::string::npos);
+    CHECK(links[0].find("as=style") != std::string::npos);
+    CHECK(links[0].find("cdn.example.com/style.css") != std::string::npos);
+    CHECK(links[0].find("crossorigin") == std::string::npos);
+  }
+
+  SECTION("preload as=image cross-origin in preload-whitelist → rel=preload as=image without crossorigin")
+  {
+    const char *argv[] = {"from", "to", "--mode", "auto-learn", "--preload-whitelist", "img.example.com"};
+    EarlyHintsConfig config;
+    config.init(6, argv);
+
+    HtmlScanner scanner(131072, 10, &config);
+    std::string html =
+      R"(<html><head><link rel="preload" href="https://img.example.com/hero.webp" as="image"></head></html>)";
+    scanner.feed(html.c_str(), static_cast<int64_t>(html.size()));
+
+    auto links = scanner.get_links();
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=preload") != std::string::npos);
+    CHECK(links[0].find("as=image") != std::string::npos);
+    CHECK(links[0].find("img.example.com/hero.webp") != std::string::npos);
+    CHECK(links[0].find("crossorigin") == std::string::npos);
+  }
+
+  SECTION("domain in BOTH whitelists → crossorigin-whitelist wins (has crossorigin=anonymous)")
+  {
+    const char *argv[] = {"from",
+                          "to",
+                          "--mode",
+                          "auto-learn",
+                          "--crossorigin-whitelist",
+                          "cdn.example.com",
+                          "--preload-whitelist",
+                          "cdn.example.com"};
+    EarlyHintsConfig config;
+    config.init(8, argv);
+
+    HtmlScanner scanner(131072, 10, &config);
+    std::string html =
+      R"(<html><head><link rel="preload" href="https://cdn.example.com/app.js" as="script"></head></html>)";
+    scanner.feed(html.c_str(), static_cast<int64_t>(html.size()));
+
+    auto links = scanner.get_links();
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=preload") != std::string::npos);
+    CHECK(links[0].find("crossorigin=anonymous") != std::string::npos);
+  }
+
+  SECTION("modulepreload with domain in preload-whitelist only → falls to preconnect")
+  {
+    const char *argv[] = {"from", "to", "--mode", "auto-learn", "--preload-whitelist", "cdn.example.com"};
+    EarlyHintsConfig config;
+    config.init(6, argv);
+
+    HtmlScanner scanner(131072, 10, &config);
+    std::string html =
+      R"(<html><head><link rel="modulepreload" href="https://cdn.example.com/mod.js"></head></html>)";
+    scanner.feed(html.c_str(), static_cast<int64_t>(html.size()));
+
+    auto links = scanner.get_links();
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=preconnect") != std::string::npos);
+    CHECK(links[0].find("rel=preload") == std::string::npos);
+  }
+
+  SECTION("wildcard *.cdn.example.com in preload-whitelist matches sub.cdn.example.com")
+  {
+    const char *argv[] = {"from", "to", "--mode", "auto-learn", "--preload-whitelist", "*.cdn.example.com"};
+    EarlyHintsConfig config;
+    config.init(6, argv);
+
+    HtmlScanner scanner(131072, 10, &config);
+    std::string html =
+      R"(<html><head><link rel="preload" href="https://sub.cdn.example.com/lib.js" as="script"></head></html>)";
+    scanner.feed(html.c_str(), static_cast<int64_t>(html.size()));
+
+    auto links = scanner.get_links();
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=preload") != std::string::npos);
+    CHECK(links[0].find("as=script") != std::string::npos);
+    CHECK(links[0].find("crossorigin") == std::string::npos);
+  }
+
+  SECTION("domain not in either whitelist → still preconnect (no regression)")
+  {
+    const char *argv[] = {"from", "to", "--mode", "auto-learn", "--preload-whitelist", "cdn.example.com"};
+    EarlyHintsConfig config;
+    config.init(6, argv);
+
+    HtmlScanner scanner(131072, 10, &config);
+    std::string html =
+      R"(<html><head><link rel="preload" href="https://unknown.example.com/app.js" as="script"></head></html>)";
+    scanner.feed(html.c_str(), static_cast<int64_t>(html.size()));
+
+    auto links = scanner.get_links();
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=preconnect") != std::string::npos);
+  }
+
+  SECTION("font in preload-whitelist → safety net adds crossorigin=anonymous automatically")
+  {
+    const char *argv[] = {"from", "to", "--mode", "auto-learn", "--preload-whitelist", "fonts.example.com"};
+    EarlyHintsConfig config;
+    config.init(6, argv);
+
+    HtmlScanner scanner(131072, 10, &config);
+    std::string html =
+      R"(<html><head><link rel="preload" href="https://fonts.example.com/font.woff2" as="font"></head></html>)";
+    scanner.feed(html.c_str(), static_cast<int64_t>(html.size()));
+
+    auto links = scanner.get_links();
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=preload") != std::string::npos);
+    CHECK(links[0].find("as=font") != std::string::npos);
+    // Font safety net at line 363-366 auto-adds crossorigin=anonymous even in preload-whitelist
+    CHECK(links[0].find("crossorigin=anonymous") != std::string::npos);
+  }
+}

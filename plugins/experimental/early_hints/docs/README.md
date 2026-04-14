@@ -93,10 +93,33 @@ map /path http://origin @plugin=early_hints.so @pparam=--mode @pparam=auto-learn
 | `--no-skip-bots` | — | — | Send 103 to all user agents including bots |
 | `--navigate-only` | ON | — | Only send 103 for `Sec-Fetch-Mode: navigate` |
 | `--no-navigate-only` | — | — | Send 103 for all request types |
-| `--crossorigin-whitelist <domains>` | — | — | Comma-separated domains for cross-origin preloads |
+| `--crossorigin-whitelist <domains>` | — | — | Comma-separated domains for cross-origin preloads (CORS mode) |
+| `--preload-whitelist <domains>` | — | — | Comma-separated domains for cross-origin preloads (no-CORS mode) |
 | `--debug-header <name>` | — | — | Add debug response header to all responses |
 | `--persist-dir <path>` | ATS runtime dir | — | Custom directory for cache persistence files |
 | `--no-persist` | — | — | Disable disk persistence entirely |
+
+### Cross-Origin Resolution (Three-Tier)
+
+When auto-learn mode scans HTML and encounters a cross-origin resource, the plugin applies a three-tier resolution:
+
+| Priority | Config | Output | Use Case |
+|----------|--------|--------|----------|
+| 1 (highest) | `--crossorigin-whitelist` | `rel=preload; as=X; crossorigin=anonymous` | Fonts, ES modules (CORS fetch mode) |
+| 2 | `--preload-whitelist` | `rel=preload; as=X` | Scripts, CSS, images (no-CORS fetch mode) |
+| 3 (default) | Neither | `rel=preconnect` | Connection warmup only |
+
+If a domain appears in **both** whitelists, `--crossorigin-whitelist` takes priority.
+
+**`<link rel="modulepreload">`**: ES modules always require CORS. `--preload-whitelist` does NOT apply — use `--crossorigin-whitelist` for modules. If a module's domain is only in `--preload-whitelist`, it falls through to `rel=preconnect`.
+
+**Fonts**: The plugin always adds `crossorigin=anonymous` for `as=font` resources regardless of which whitelist the domain is in (W3C CSS Fonts spec requirement to prevent double-fetch).
+
+Example:
+```
+@pparam=--crossorigin-whitelist @pparam=fonts.googleapis.com
+@pparam=--preload-whitelist @pparam=cdn.example.com,*.cdn.net
+```
 
 ### Crossorigin Whitelist
 

@@ -295,11 +295,15 @@ HtmlScanner::build_link_header(const std::string &tag)
         size_t scheme_sep  = origin.find("://");
         std::string domain = (scheme_sep != std::string::npos) ? origin.substr(scheme_sep + 3) : origin;
         if (config_ && config_->is_whitelisted_domain(domain)) {
-          // Whitelisted cross-origin: allow preload with crossorigin
+          // crossorigin-whitelist: allow preload with crossorigin
           result = "<" + href_ + ">; rel=preload; as=" + as_;
           if (crossorigin_value_.empty()) {
             crossorigin_value_ = "anonymous";
           }
+        } else if (config_ && config_->is_preload_domain(domain)) {
+          // preload-whitelist: full preload without crossorigin (no-cors fetch mode)
+          result = "<" + href_ + ">; rel=preload; as=" + as_;
+          crossorigin_value_.clear();
         } else {
           // Non-whitelisted cross-origin: use preconnect (safe)
           result = "<" + origin + ">; rel=preconnect";
@@ -315,9 +319,25 @@ HtmlScanner::build_link_header(const std::string &tag)
       // <link rel="stylesheet" href="..."> → preload as style
       if (is_crossorigin(href_)) {
         std::string origin = extract_origin(href_);
-        result             = "<" + origin + ">; rel=preconnect";
-        if (crossorigin_value_.empty()) {
-          crossorigin_value_ = "anonymous";
+        size_t scheme_sep  = origin.find("://");
+        std::string domain = (scheme_sep != std::string::npos) ? origin.substr(scheme_sep + 3) : origin;
+        if (config_ && config_->is_whitelisted_domain(domain)) {
+          // crossorigin-whitelist: preload with crossorigin
+          result = "<" + href_ + ">; rel=preload; as=style";
+          as_    = "style";
+          if (crossorigin_value_.empty()) {
+            crossorigin_value_ = "anonymous";
+          }
+        } else if (config_ && config_->is_preload_domain(domain)) {
+          // preload-whitelist: full preload without crossorigin
+          result = "<" + href_ + ">; rel=preload; as=style";
+          as_    = "style";
+          crossorigin_value_.clear();
+        } else {
+          result = "<" + origin + ">; rel=preconnect";
+          if (crossorigin_value_.empty()) {
+            crossorigin_value_ = "anonymous";
+          }
         }
       } else {
         result = "<" + href_ + ">; rel=preload; as=style";
@@ -344,9 +364,25 @@ HtmlScanner::build_link_header(const std::string &tag)
     }
     if (is_crossorigin(href_)) {
       std::string origin = extract_origin(href_);
-      result             = "<" + origin + ">; rel=preconnect";
-      if (crossorigin_value_.empty()) {
-        crossorigin_value_ = "anonymous";
+      size_t scheme_sep  = origin.find("://");
+      std::string domain = (scheme_sep != std::string::npos) ? origin.substr(scheme_sep + 3) : origin;
+      if (config_ && config_->is_whitelisted_domain(domain)) {
+        // crossorigin-whitelist: preload with crossorigin
+        result = "<" + href_ + ">; rel=preload; as=script";
+        as_    = "script";
+        if (crossorigin_value_.empty()) {
+          crossorigin_value_ = "anonymous";
+        }
+      } else if (config_ && config_->is_preload_domain(domain)) {
+        // preload-whitelist: full preload without crossorigin
+        result = "<" + href_ + ">; rel=preload; as=script";
+        as_    = "script";
+        crossorigin_value_.clear();
+      } else {
+        result = "<" + origin + ">; rel=preconnect";
+        if (crossorigin_value_.empty()) {
+          crossorigin_value_ = "anonymous";
+        }
       }
     } else {
       result = "<" + href_ + ">; rel=preload; as=script";

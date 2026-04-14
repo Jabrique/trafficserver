@@ -118,6 +118,13 @@ public:
   }
 
   bool is_whitelisted_domain(const std::string &domain) const;
+  bool is_preload_domain(const std::string &domain) const;
+
+  const std::vector<std::string> &
+  preload_whitelist() const
+  {
+    return preload_whitelist_;
+  }
 
 private:
   uint8_t mode_          = MODE_ORIGIN_FORWARD;
@@ -131,8 +138,10 @@ private:
   int max_cache_entries_ = 10000;
   std::vector<std::string> manual_links_;
   std::vector<std::string> crossorigin_whitelist_;
+  std::vector<std::string> preload_whitelist_;
   bool persist_enabled_ = true;
   std::string persist_dir_;
 
   bool parse_mode(const char *mode_str);
+  static bool match_domain_list(const std::string &domain, const std::vector<std::string> &list);
 };

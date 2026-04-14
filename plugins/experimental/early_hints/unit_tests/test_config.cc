@@ -66,6 +66,7 @@ TEST_CASE("Config default values", "[config]")
     CHECK(config.max_cache_entries() == 10000);
     CHECK(config.manual_links().empty());
     CHECK(config.crossorigin_whitelist().empty());
+    CHECK(config.preload_whitelist().empty());
   }
 }
 
@@ -1994,5 +1995,72 @@ TEST_CASE("Config whitelist: IPv6 with userinfo prefix", "[config][whitelist][au
     CHECK(config.is_whitelisted_domain("admin:pass@cdn.example.com"));
     // Without userinfo still matches
     CHECK(config.is_whitelisted_domain("cdn.example.com"));
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// --preload-whitelist config parsing and is_preload_domain()
+// ═══════════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("Config preload whitelist", "[config]")
+{
+  SECTION("comma-separated domains parsed correctly")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--preload-whitelist", "cdn.example.com,static.example.com"}));
+    REQUIRE(config.preload_whitelist().size() == 2);
+    CHECK(config.preload_whitelist()[0] == "cdn.example.com");
+    CHECK(config.preload_whitelist()[1] == "static.example.com");
+  }
+
+  SECTION("is_preload_domain exact match")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--preload-whitelist", "cdn.example.com"}));
+    CHECK(config.is_preload_domain("cdn.example.com"));
+    CHECK_FALSE(config.is_preload_domain("other.example.com"));
+  }
+
+  SECTION("is_preload_domain wildcard match")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--preload-whitelist", "*.example.com"}));
+    CHECK(config.is_preload_domain("cdn.example.com"));
+    CHECK(config.is_preload_domain("static.example.com"));
+    CHECK_FALSE(config.is_preload_domain("example.com"));
+    CHECK_FALSE(config.is_preload_domain("evil.com"));
+  }
+
+  SECTION("is_preload_domain case insensitive")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--preload-whitelist", "CDN.Example.COM"}));
+    CHECK(config.is_preload_domain("cdn.example.com"));
+    CHECK(config.is_preload_domain("CDN.EXAMPLE.COM"));
+  }
+
+  SECTION("domain in neither list returns false for both")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--crossorigin-whitelist", "fonts.example.com", "--preload-whitelist", "cdn.example.com"}));
+    CHECK_FALSE(config.is_whitelisted_domain("unknown.com"));
+    CHECK_FALSE(config.is_preload_domain("unknown.com"));
+  }
+
+  SECTION("preload_whitelist accessor returns empty by default")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--mode", "auto-learn"}));
+    CHECK(config.preload_whitelist().empty());
+  }
+
+  SECTION("both whitelists can be set independently")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--crossorigin-whitelist", "fonts.googleapis.com", "--preload-whitelist", "cdn.example.com"}));
+    CHECK(config.is_whitelisted_domain("fonts.googleapis.com"));
+    CHECK_FALSE(config.is_whitelisted_domain("cdn.example.com"));
+    CHECK(config.is_preload_domain("cdn.example.com"));
+    CHECK_FALSE(config.is_preload_domain("fonts.googleapis.com"));
   }
 }
