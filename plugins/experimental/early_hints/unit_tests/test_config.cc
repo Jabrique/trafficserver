@@ -163,6 +163,106 @@ TEST_CASE("Config manual links", "[config]")
   }
 }
 
+// ==================== Compact pparam=--option=value format (Todo 3) ====================
+// getopt_long natively handles --option=value. These tests verify it works via parse_config.
+
+TEST_CASE("Compact pparam --option=value format", "[config][compact-pparam]")
+{
+  SECTION("--mode=manual with --link=value")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--mode=manual", "--link=</app.js>; rel=preload; as=script"}));
+    CHECK((config.mode() & EarlyHintsConfig::MODE_MANUAL) != 0);
+    REQUIRE(config.manual_links().size() == 1);
+    CHECK(config.manual_links()[0] == "</app.js>; rel=preload; as=script");
+  }
+
+  SECTION("--mode=auto-learn compact")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--mode=auto-learn"}));
+    CHECK((config.mode() & EarlyHintsConfig::MODE_AUTO_LEARN) != 0);
+  }
+
+  SECTION("--mode=manual,auto-learn,origin-forward combined compact")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--mode=manual,auto-learn,origin-forward", "--link=</a.js>; rel=preload; as=script"}));
+    CHECK((config.mode() & EarlyHintsConfig::MODE_MANUAL) != 0);
+    CHECK((config.mode() & EarlyHintsConfig::MODE_AUTO_LEARN) != 0);
+    CHECK((config.mode() & EarlyHintsConfig::MODE_ORIGIN_FORWARD) != 0);
+  }
+
+  SECTION("--max-links=5 compact")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--max-links=5"}));
+    CHECK(config.max_links() == 5);
+  }
+
+  SECTION("--scan-limit=262144 compact")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--scan-limit=262144"}));
+    CHECK(config.scan_limit() == 262144);
+  }
+
+  SECTION("--min-hit-count=3 compact")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--min-hit-count=3"}));
+    CHECK(config.min_hit_count() == 3);
+  }
+
+  SECTION("--header-size-limit=4096 compact")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--header-size-limit=4096"}));
+    CHECK(config.header_size_limit() == 4096);
+  }
+
+  SECTION("--max-cache-entries=50000 compact")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--max-cache-entries=50000"}));
+    CHECK(config.max_cache_entries() == 50000);
+  }
+
+  SECTION("--debug-header=X-EH compact")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--debug-header=X-EH"}));
+    CHECK(std::string(config.debug_header()) == "X-EH");
+  }
+
+  SECTION("--crossorigin-whitelist=a.com,b.com compact")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--crossorigin-whitelist=a.com,b.com"}));
+    CHECK(config.is_whitelisted_domain("a.com"));
+    CHECK(config.is_whitelisted_domain("b.com"));
+  }
+
+  SECTION("mixed compact and standard format")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--mode=manual", "--link", "</style.css>; rel=preload; as=style", "--max-links=5"}));
+    CHECK((config.mode() & EarlyHintsConfig::MODE_MANUAL) != 0);
+    REQUIRE(config.manual_links().size() == 1);
+    CHECK(config.max_links() == 5);
+  }
+
+  SECTION("multiple --link= compact")
+  {
+    EarlyHintsConfig config;
+    CHECK(
+      parse_config(config, {"--mode=manual", "--link=</a.js>; rel=preload; as=script", "--link=</b.css>; rel=preload; as=style"}));
+    REQUIRE(config.manual_links().size() == 2);
+    CHECK(config.manual_links()[0] == "</a.js>; rel=preload; as=script");
+    CHECK(config.manual_links()[1] == "</b.css>; rel=preload; as=style");
+  }
+}
+
 TEST_CASE("Config numeric parameters", "[config]")
 {
   SECTION("max-links valid range")
@@ -2062,5 +2162,261 @@ TEST_CASE("Config preload whitelist", "[config]")
     CHECK_FALSE(config.is_whitelisted_domain("cdn.example.com"));
     CHECK(config.is_preload_domain("cdn.example.com"));
     CHECK_FALSE(config.is_preload_domain("fonts.googleapis.com"));
+  }
+}
+
+// ==================== as= validation for rel=preload (Todo 2) ====================
+// has_valid_as_for_preload() returns true when as= is valid OR when rel is not preload/modulepreload.
+// Returns false when rel=preload/modulepreload present but as= missing or invalid.
+// In soft-warn mode: link is still accepted but warning is logged.
+
+TEST_CASE("has_valid_as_for_preload validation", "[config][as-validation]")
+{
+  SECTION("rel=preload with valid as=script returns true") { CHECK(has_valid_as_for_preload("</app.js>; rel=preload; as=script")); }
+
+  SECTION("rel=preload with valid as=style returns true")
+  {
+    CHECK(has_valid_as_for_preload("</style.css>; rel=preload; as=style"));
+  }
+
+  SECTION("rel=preload with valid as=image returns true")
+  {
+    CHECK(has_valid_as_for_preload("</hero.webp>; rel=preload; as=image"));
+  }
+
+  SECTION("rel=preload with valid as=font returns true") { CHECK(has_valid_as_for_preload("</font.woff2>; rel=preload; as=font")); }
+
+  SECTION("rel=preload with valid as=fetch returns true") { CHECK(has_valid_as_for_preload("</api/data>; rel=preload; as=fetch")); }
+
+  SECTION("all valid as= values accepted for rel=preload")
+  {
+    // Fetch spec §8 destination values
+    const char *valid[] = {"audio",  "document", "embed", "fetch", "font",  "frame",  "iframe",      "image",
+                           "object", "script",   "style", "track", "video", "worker", "sharedworker"};
+    for (const char *as_val : valid) {
+      std::string link = std::string("</res>; rel=preload; as=") + as_val;
+      INFO("Testing as=" << as_val);
+      CHECK(has_valid_as_for_preload(link));
+    }
+  }
+
+  SECTION("rel=preload WITHOUT as= returns false") { CHECK_FALSE(has_valid_as_for_preload("</app.js>; rel=preload")); }
+
+  SECTION("rel=preload with as= missing value returns false")
+  {
+    CHECK_FALSE(has_valid_as_for_preload("</app.js>; rel=preload; as="));
+  }
+
+  SECTION("rel=preload with invalid as= value returns false")
+  {
+    CHECK_FALSE(has_valid_as_for_preload("</app.js>; rel=preload; as=banana"));
+  }
+
+  SECTION("rel=modulepreload WITHOUT as= returns false")
+  {
+    CHECK_FALSE(has_valid_as_for_preload("</module.mjs>; rel=modulepreload"));
+  }
+
+  SECTION("rel=modulepreload with valid as=script returns true")
+  {
+    CHECK(has_valid_as_for_preload("</module.mjs>; rel=modulepreload; as=script"));
+  }
+
+  SECTION("rel=preconnect WITHOUT as= returns true (as= not required)")
+  {
+    CHECK(has_valid_as_for_preload("</cdn>; rel=preconnect"));
+  }
+
+  SECTION("rel=stylesheet WITHOUT as= returns true (as= not required)")
+  {
+    CHECK(has_valid_as_for_preload("</style.css>; rel=stylesheet"));
+  }
+
+  SECTION("quoted rel=\"preload\" without as= returns false")
+  {
+    CHECK_FALSE(has_valid_as_for_preload(R"(</app.js>; rel="preload")"));
+  }
+
+  SECTION("quoted rel='preload' without as= returns false")
+  {
+    CHECK_FALSE(has_valid_as_for_preload(R"(</app.js>; rel='preload')"));
+  }
+
+  SECTION("as= value is case-insensitive")
+  {
+    CHECK(has_valid_as_for_preload("</app.js>; rel=preload; as=Script"));
+    CHECK(has_valid_as_for_preload("</app.js>; rel=preload; as=STYLE"));
+    CHECK(has_valid_as_for_preload("</app.js>; rel=preload; as=Image"));
+  }
+
+  SECTION("as= before rel=preload accepted (order-independent)")
+  {
+    CHECK(has_valid_as_for_preload("</app.js>; as=script; rel=preload"));
+  }
+
+  SECTION("as= with extra whitespace still parsed") { CHECK(has_valid_as_for_preload("</app.js>; rel=preload; as=script ")); }
+}
+
+TEST_CASE("Soft-warn: link accepted despite missing as=", "[config][as-validation][soft-warn]")
+{
+  SECTION("rel=preload without as= still stored in manual_links (soft warn)")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--mode", "manual", "--link", "</app.js>; rel=preload"}));
+    REQUIRE(config.manual_links().size() == 1);
+    CHECK(config.manual_links()[0] == "</app.js>; rel=preload");
+  }
+
+  SECTION("rel=preload with invalid as= still stored (soft warn)")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--mode", "manual", "--link", "</app.js>; rel=preload; as=banana"}));
+    REQUIRE(config.manual_links().size() == 1);
+  }
+
+  SECTION("rel=preload with valid as= stored normally")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--mode", "manual", "--link", "</app.js>; rel=preload; as=script"}));
+    REQUIRE(config.manual_links().size() == 1);
+  }
+}
+
+// ==================== merge_hint_links (Todo 4) ====================
+// Merges manual links + cached links with URL deduplication.
+
+TEST_CASE("merge_hint_links: basic merging", "[config][merge]")
+{
+  SECTION("manual only — no cached links")
+  {
+    std::vector<std::string> manual = {"</a.js>; rel=preload; as=script", "</b.css>; rel=preload; as=style"};
+    auto result                     = merge_hint_links(manual, nullptr, 10);
+    REQUIRE(result.size() == 2);
+    CHECK(result[0] == "</a.js>; rel=preload; as=script");
+    CHECK(result[1] == "</b.css>; rel=preload; as=style");
+  }
+
+  SECTION("cached only — no manual links")
+  {
+    std::vector<std::string> empty_manual;
+    std::vector<std::string> cached = {"</x.js>; rel=preload; as=script"};
+    auto result                     = merge_hint_links(empty_manual, &cached, 10);
+    REQUIRE(result.size() == 1);
+    CHECK(result[0] == "</x.js>; rel=preload; as=script");
+  }
+
+  SECTION("manual + cached — no overlap")
+  {
+    std::vector<std::string> manual = {"</a.js>; rel=preload; as=script"};
+    std::vector<std::string> cached = {"</b.css>; rel=preload; as=style"};
+    auto result                     = merge_hint_links(manual, &cached, 10);
+    REQUIRE(result.size() == 2);
+    CHECK(result[0] == "</a.js>; rel=preload; as=script");
+    CHECK(result[1] == "</b.css>; rel=preload; as=style");
+  }
+
+  SECTION("manual has priority — appears first")
+  {
+    std::vector<std::string> manual = {"</manual.js>; rel=preload; as=script"};
+    std::vector<std::string> cached = {"</cached.css>; rel=preload; as=style"};
+    auto result                     = merge_hint_links(manual, &cached, 10);
+    REQUIRE(result.size() == 2);
+    CHECK(result[0] == "</manual.js>; rel=preload; as=script");
+    CHECK(result[1] == "</cached.css>; rel=preload; as=style");
+  }
+}
+
+TEST_CASE("merge_hint_links: deduplication", "[config][merge]")
+{
+  SECTION("duplicate URL deduped — manual wins")
+  {
+    std::vector<std::string> manual = {"</app.js>; rel=preload; as=script"};
+    std::vector<std::string> cached = {"</app.js>; rel=preload; as=script"};
+    auto result                     = merge_hint_links(manual, &cached, 10);
+    REQUIRE(result.size() == 1);
+    CHECK(result[0] == "</app.js>; rel=preload; as=script");
+  }
+
+  SECTION("same URL different rel — deduped (preload subsumes preconnect, manual wins)")
+  {
+    std::vector<std::string> manual = {"</cdn.com>; rel=preconnect"};
+    std::vector<std::string> cached = {"</cdn.com>; rel=preload; as=script"};
+    auto result                     = merge_hint_links(manual, &cached, 10);
+    REQUIRE(result.size() == 1);
+    CHECK(result[0] == "</cdn.com>; rel=preconnect");
+  }
+
+  SECTION("same URL different params — deduped by URL portion")
+  {
+    std::vector<std::string> manual = {"</app.js>; rel=preload; as=script"};
+    std::vector<std::string> cached = {"</app.js>; rel=preload; as=script; crossorigin=anonymous"};
+    auto result                     = merge_hint_links(manual, &cached, 10);
+    REQUIRE(result.size() == 1);
+    CHECK(result[0] == "</app.js>; rel=preload; as=script");
+  }
+
+  SECTION("dedup within cached set itself")
+  {
+    std::vector<std::string> empty_manual;
+    std::vector<std::string> cached = {"</a.js>; rel=preload; as=script", "</a.js>; rel=preload; as=script"};
+    auto result                     = merge_hint_links(empty_manual, &cached, 10);
+    REQUIRE(result.size() == 1);
+  }
+}
+
+TEST_CASE("merge_hint_links: max_links cap", "[config][merge]")
+{
+  SECTION("max_links caps combined output")
+  {
+    std::vector<std::string> manual = {"</a.js>; rel=preload; as=script", "</b.css>; rel=preload; as=style"};
+    std::vector<std::string> cached = {"</c.woff2>; rel=preload; as=font"};
+    auto result                     = merge_hint_links(manual, &cached, 2);
+    CHECK(result.size() == 2);
+    CHECK(result[0] == "</a.js>; rel=preload; as=script");
+    CHECK(result[1] == "</b.css>; rel=preload; as=style");
+  }
+
+  SECTION("max_links=1 returns only first manual link")
+  {
+    std::vector<std::string> manual = {"</a.js>; rel=preload; as=script", "</b.css>; rel=preload; as=style"};
+    std::vector<std::string> cached = {"</c.woff2>; rel=preload; as=font"};
+    auto result                     = merge_hint_links(manual, &cached, 1);
+    REQUIRE(result.size() == 1);
+    CHECK(result[0] == "</a.js>; rel=preload; as=script");
+  }
+
+  SECTION("max_links allows cached links when manual under cap")
+  {
+    std::vector<std::string> manual = {"</a.js>; rel=preload; as=script"};
+    std::vector<std::string> cached = {"</b.css>; rel=preload; as=style", "</c.woff2>; rel=preload; as=font"};
+    auto result                     = merge_hint_links(manual, &cached, 2);
+    CHECK(result.size() == 2);
+    CHECK(result[0] == "</a.js>; rel=preload; as=script");
+    CHECK(result[1] == "</b.css>; rel=preload; as=style");
+  }
+}
+
+TEST_CASE("merge_hint_links: edge cases", "[config][merge]")
+{
+  SECTION("both empty — returns empty")
+  {
+    std::vector<std::string> empty_manual;
+    auto result = merge_hint_links(empty_manual, nullptr, 10);
+    CHECK(result.empty());
+  }
+
+  SECTION("cached is empty vector — returns manual only")
+  {
+    std::vector<std::string> manual = {"</a.js>; rel=preload; as=script"};
+    std::vector<std::string> empty_cached;
+    auto result = merge_hint_links(manual, &empty_cached, 10);
+    REQUIRE(result.size() == 1);
+  }
+
+  SECTION("max_links=0 — returns empty")
+  {
+    std::vector<std::string> manual = {"</a.js>; rel=preload; as=script"};
+    auto result                     = merge_hint_links(manual, nullptr, 0);
+    CHECK(result.empty());
   }
 }

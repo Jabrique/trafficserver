@@ -142,6 +142,133 @@ is_valid_link_value(const std::string &link)
 }
 
 bool
+has_valid_as_for_preload(const std::string &link)
+{
+  if (link.empty()) {
+    return true;
+  }
+
+  // Extract params portion (after '>')
+  size_t url_end = link.find('>');
+  if (url_end == std::string::npos || url_end + 1 >= link.size()) {
+    return true; // No params — nothing to validate
+  }
+
+  std::string params;
+  params.reserve(link.size() - url_end);
+  for (size_t i = url_end + 1; i < link.size(); ++i) {
+    params += static_cast<char>(std::tolower(static_cast<unsigned char>(link[i])));
+  }
+
+  // Check if rel=preload or rel=modulepreload is present
+  auto has_rel = [&](const char *rel_str) -> bool {
+    size_t rel_len = strlen(rel_str);
+    size_t pos     = 0;
+    while ((pos = params.find(rel_str, pos)) != std::string::npos) {
+      bool before_ok = (pos == 0) || params[pos - 1] == ';' || params[pos - 1] == ' ' || params[pos - 1] == '\t';
+      size_t end     = pos + rel_len;
+      bool after_ok  = end >= params.size() || params[end] == ';' || params[end] == ' ' || params[end] == '\t' ||
+                      params[end] == '"' || params[end] == '\'';
+      if (before_ok && after_ok) {
+        return true;
+      }
+      pos += rel_len;
+    }
+    return false;
+  };
+
+  bool needs_as = has_rel("rel=preload") || has_rel("rel=modulepreload") || params.find("rel=\"preload\"") != std::string::npos ||
+                  params.find("rel='preload'") != std::string::npos || params.find("rel=\"modulepreload\"") != std::string::npos ||
+                  params.find("rel='modulepreload'") != std::string::npos;
+
+  if (!needs_as) {
+    return true; // rel=preconnect, rel=stylesheet etc — as= not required
+  }
+
+  // Valid fetch destinations per Fetch spec §8
+  static const char *valid_as[] = {"audio",  "document", "embed",        "fetch", "font",  "frame", "iframe", "image",
+                                   "object", "script",   "sharedworker", "style", "track", "video", "worker"};
+
+  // Search for as=<value> with word boundaries
+  for (const char *as_val : valid_as) {
+    std::string needle = std::string("as=") + as_val;
+    size_t pos         = 0;
+    while ((pos = params.find(needle, pos)) != std::string::npos) {
+      bool before_ok = (pos == 0) || params[pos - 1] == ';' || params[pos - 1] == ' ' || params[pos - 1] == '\t';
+      size_t end     = pos + needle.size();
+      bool after_ok  = end >= params.size() || params[end] == ';' || params[end] == ' ' || params[end] == '\t';
+      if (before_ok && after_ok) {
+        return true;
+      }
+      pos += needle.size();
+    }
+  }
+
+  return false;
+}
+
+// Extracts URL key from a Link header value: everything up to and including '>'.
+// Used for deduplication — two links with the same <URL> are duplicates regardless of rel type,
+// because rel=preload subsumes rel=preconnect for the same resource.
+static std::string
+extract_dedup_key(const std::string &link)
+{
+  size_t url_end = link.find('>');
+  if (url_end != std::string::npos) {
+    return link.substr(0, url_end + 1);
+  }
+  return link;
+}
+
+std::vector<std::string>
+merge_hint_links(const std::vector<std::string> &manual_links, const std::vector<std::string> *cached_links, int max_links)
+{
+  std::vector<std::string> result;
+  if (max_links <= 0) {
+    return result;
+  }
+
+  result.reserve(static_cast<size_t>(max_links));
+
+  // Track URL keys for deduplication
+  std::vector<std::string> seen_keys;
+  seen_keys.reserve(static_cast<size_t>(max_links));
+
+  auto add_link = [&](const std::string &link) -> bool {
+    if (static_cast<int>(result.size()) >= max_links) {
+      return false;
+    }
+    std::string key = extract_dedup_key(link);
+    for (const auto &seen : seen_keys) {
+      if (seen == key) {
+        return true; // duplicate, skip but continue
+      }
+    }
+    seen_keys.push_back(std::move(key));
+    result.push_back(link);
+    return true;
+  };
+
+  // Manual links first (priority)
+  for (const auto &link : manual_links) {
+    if (!add_link(link)) {
+      return result;
+    }
+  }
+
+  // Cached links appended with dedup
+  if (cached_links) {
+    for (const auto &link : *cached_links) {
+      if (!add_link(link)) {
+        return result;
+      }
+    }
+  }
+
+  return result;
+}
+
+bool
 EarlyHintsConfig::parse_mode(const char *mode_str)
 {
   mode_ = 0;
@@ -314,6 +441,11 @@ EarlyHintsConfig::init(int argc, const char *argv[])
         TSError("[%s] invalid --link value: %s", PLUGIN_NAME, optarg);
         return false;
       }
+      if (!has_valid_as_for_preload(std::string(optarg))) {
+        TSError("[%s] WARNING: --link has rel=preload without valid as= attribute, "
+                "browser will ignore preload (double-fetch risk): %s",
+                PLUGIN_NAME, optarg);
+      }
       manual_links_.emplace_back(optarg);
       break;
     case 'x':
@@ -458,14 +590,13 @@ EarlyHintsConfig::init(int argc, const char *argv[])
     return false;
   }
 
-  TSDebug(
-    PLUGIN_NAME,
-    "config: mode=0x%02x max_links=%d header_size_limit=%d skip_bots=%d navigate_only=%d "
-    "scan_limit=%d min_hit_count=%d max_cache_entries=%d manual_links=%zu crossorigin_whitelist=%zu "
-    "preload_whitelist=%zu persist=%s persist_dir=%s",
-    mode_, max_links_, header_size_limit_, skip_bots_, navigate_only_, scan_limit_, min_hit_count_, max_cache_entries_,
-    manual_links_.size(), crossorigin_whitelist_.size(), preload_whitelist_.size(), persist_enabled_ ? "on" : "off",
-    persist_dir_.empty() ? "(auto)" : persist_dir_.c_str());
+  TSDebug(PLUGIN_NAME,
+          "config: mode=0x%02x max_links=%d header_size_limit=%d skip_bots=%d navigate_only=%d "
+          "scan_limit=%d min_hit_count=%d max_cache_entries=%d manual_links=%zu crossorigin_whitelist=%zu "
+          "preload_whitelist=%zu persist=%s persist_dir=%s",
+          mode_, max_links_, header_size_limit_, skip_bots_, navigate_only_, scan_limit_, min_hit_count_, max_cache_entries_,
+          manual_links_.size(), crossorigin_whitelist_.size(), preload_whitelist_.size(), persist_enabled_ ? "on" : "off",
+          persist_dir_.empty() ? "(auto)" : persist_dir_.c_str());
 
   return true;
 }

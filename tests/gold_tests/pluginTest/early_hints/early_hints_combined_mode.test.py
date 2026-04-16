@@ -81,8 +81,32 @@ microserver.addResponse(
             "</head><body>Three-mode test</body></html>\r\n"
     })
 
-# ----
-# Setup ATS
+# Page for compact pparam format test (simple response)
+microserver.addResponse(
+    "sessionfile.log", {
+        "headers": "GET /compact.html HTTP/1.1\r\nHost: www.example.com\r\n\r\n",
+        "body": ""
+    }, {
+        "headers": "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/html\r\n\r\n",
+        "body": "<html><body>Compact pparam test</body></html>\r\n"
+    })
+
+# Page for dedup test: origin sends same URL that exists in manual config
+microserver.addResponse(
+    "sessionfile.log", {
+        "headers": "GET /dedup.html HTTP/1.1\r\nHost: www.example.com\r\n\r\n",
+        "body": ""
+    }, {
+        "headers":
+            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/html\r\n"
+            "Link: </shared-style.css>; rel=preload; as=style\r\n"
+            "\r\n",
+        "body":
+            "<html><head>"
+            "<link rel=\"preload\" href=\"/shared-style.css\" as=\"style\">"
+            "</head><body>Dedup test</body></html>\r\n"
+    })
+
 # ----
 ts = Test.MakeATSProcess("ts", select_ports=True, enable_tls=True, enable_cache=False)
 
@@ -113,6 +137,25 @@ ts.Disk.remap_config.AddLines([
     ' @plugin=early_hints.so'
     ' @pparam=--mode @pparam=manual,auto-learn,origin-forward'
     ' @pparam=--link @pparam=</manual-critical.css>;rel=preload;as=style'
+    ' @pparam=--min-hit-count @pparam=1'
+    ' @pparam=--no-skip-bots'
+    ' @pparam=--no-navigate-only'
+    ' @pparam=--debug-header @pparam=X-Early-Hints-Status',
+
+    # Compact pparam format: uses --option=value syntax (getopt_long native)
+    'map /compact.html http://127.0.0.1:{0}/compact.html'.format(microserver.Variables.Port) +
+    ' @plugin=early_hints.so'
+    ' @pparam=--mode=manual'
+    ' @pparam=--link=</compact-style.css>;rel=preload;as=style'
+    ' @pparam=--no-skip-bots'
+    ' @pparam=--no-navigate-only'
+    ' @pparam=--debug-header=X-Early-Hints-Status',
+
+    # Dedup test: manual link has same URL as origin Link + HTML <link>
+    'map /dedup.html http://127.0.0.1:{0}/dedup.html'.format(microserver.Variables.Port) +
+    ' @plugin=early_hints.so'
+    ' @pparam=--mode @pparam=manual,auto-learn,origin-forward'
+    ' @pparam=--link @pparam=</shared-style.css>;rel=preload;as=style'
     ' @pparam=--min-hit-count @pparam=1'
     ' @pparam=--no-skip-bots'
     ' @pparam=--no-navigate-only'
@@ -235,5 +278,60 @@ tr6.Processes.Default.ReturnCode = 0
 tr6.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "x-early-hints-status: sent", "H2 should get 103 from three-mode cache")
 tr6.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "manual-critical.css", "Manual link should be in cached hints")
+    "manual-critical.css", "Manual link should be in merged hints")
+# After merge fix: auto-learned and origin-forwarded links must also appear
+tr6.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
+    "trimode-app.js", "Auto-learned link should be in merged hints (not overridden by manual)")
+tr6.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
+    "origin-font.woff2", "Origin-forwarded link should be in merged hints")
 tr6.StillRunningAfter = microserver
+
+# ----
+# Test Case 6: Compact pparam format — @pparam=--mode=manual works
+# ----
+tr7 = Test.AddTestRun("Compact pparam - --mode=manual --link=value")
+tr7.Processes.Default.Command = (
+    "curl -s -D - -o /dev/null"
+    " --http1.1"
+    " --insecure"
+    " 'https://127.0.0.1:{0}/compact.html'".format(ts.Variables.ssl_port))
+tr7.Processes.Default.ReturnCode = 0
+tr7.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
+    "200 OK", "Should receive 200 OK")
+tr7.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
+    "compact-style.css", "Link from compact pparam format should appear in 200")
+tr7.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
+    "X-Early-Hints-Status:", "Plugin loaded successfully via compact pparam format")
+tr7.StillRunningAfter = microserver
+
+# ----
+# Test Case 7: Dedup — first request learns same URL that manual already has
+# ----
+tr8 = Test.AddTestRun("Dedup - first request learns duplicate URL from origin + HTML")
+tr8.Processes.Default.Command = (
+    "curl -s -D - -o /dev/null"
+    " --http1.1"
+    " --insecure"
+    " 'https://127.0.0.1:{0}/dedup.html'".format(ts.Variables.ssl_port))
+tr8.Processes.Default.ReturnCode = 0
+tr8.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
+    "200 OK", "Should receive 200 OK")
+tr8.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
+    "shared-style.css", "Manual link should appear in first 200 response")
+tr8.StillRunningAfter = microserver
+
+# ----
+# Test Case 8: Dedup — second H2 request: merged output deduplicates same URL
+# ----
+tr9 = Test.AddTestRun("Dedup - H2 merged output deduplicates shared URL")
+tr9.Processes.Default.Command = (
+    "sleep 1 && curl -s -D - -o /dev/null"
+    " --http2"
+    " --insecure"
+    " 'https://127.0.0.1:{0}/dedup.html'".format(ts.Variables.ssl_port))
+tr9.Processes.Default.ReturnCode = 0
+tr9.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
+    "x-early-hints-status: sent", "H2 should get 103")
+tr9.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
+    "shared-style.css", "Deduped link should still appear")
+tr9.StillRunningAfter = microserver

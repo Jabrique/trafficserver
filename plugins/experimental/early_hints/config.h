@@ -25,6 +25,17 @@
 
 #define PLUGIN_NAME "early_hints"
 
+// Validates that a Link header value with rel=preload or rel=modulepreload
+// also contains a valid as= attribute (Fetch spec §8 destinations).
+// Returns true if as= is valid, or if rel is not preload/modulepreload.
+bool has_valid_as_for_preload(const std::string &link);
+
+// Merges link vectors from manual config and auto-learned cache.
+// Manual links added first (priority), cached links appended with URL deduplication.
+// Result capped at max_links.
+std::vector<std::string> merge_hint_links(const std::vector<std::string> &manual_links,
+                                          const std::vector<std::string> *cached_links, int max_links);
+
 class EarlyHintsConfig
 {
 public:

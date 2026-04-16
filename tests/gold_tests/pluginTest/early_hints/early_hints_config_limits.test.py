@@ -116,6 +116,16 @@ microserver.addResponse(
         "body": ""
     })
 
+# Page for as= validation test (response body irrelevant — manual mode)
+microserver.addResponse(
+    "sessionfile.log", {
+        "headers": "GET /as-warn.html HTTP/1.1\r\nHost: www.example.com\r\n\r\n",
+        "body": ""
+    }, {
+        "headers": "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/html\r\n\r\n",
+        "body": "<html><body>as= validation test</body></html>\r\n"
+    })
+
 # ----
 # Setup ATS with multiple remap rules for different configs
 # ----
@@ -193,6 +203,15 @@ ts.Disk.remap_config.AddLines([
     ' @pparam=--no-skip-bots'
     ' @pparam=--no-navigate-only'
     ' @pparam=--debug-header @pparam=X-Early-Hints-Status',
+
+    # as= validation: rel=preload without as= (soft-warn, link still accepted)
+    'map /as-warn.html http://127.0.0.1:{0}/as-warn.html'.format(microserver.Variables.Port) +
+    ' @plugin=early_hints.so'
+    ' @pparam=--mode @pparam=manual'
+    ' @pparam=--link @pparam=</no-as-resource.css>;rel=preload'
+    ' @pparam=--no-skip-bots'
+    ' @pparam=--no-navigate-only'
+    ' @pparam=--debug-header @pparam=X-Early-Hints-Status',
 ])
 
 ts.Disk.records_config.update({
@@ -202,6 +221,13 @@ ts.Disk.records_config.update({
     'proxy.config.ssl.server.private_key.path': '{0}'.format(ts.Variables.SSLDir),
     'proxy.config.http2.active_timeout_in': 3,
 })
+
+# Override default diags_log check: we expect a WARNING from as= soft-warn (logged via TSError)
+ts.Disk.diags_log.Content = Testers.ContainsExpression(
+    "WARNING.*--link has rel=preload without valid as=",
+    "Plugin should log as= soft-warn for /no-as-resource.css")
+ts.Disk.diags_log.Content += Testers.ExcludesExpression(
+    "FATAL:", "Diags log should not contain FATAL errors")
 
 # ----
 # Test Case 0: max-links=1 — only first link appears
@@ -371,3 +397,23 @@ tr10.Processes.Default.ReturnCode = 0
 tr10.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "200 OK", "HEAD request should return 200 without crash")
 tr10.StillRunningAfter = microserver
+
+# ----
+# Test Case 10: as= validation — rel=preload without as= still accepted (soft-warn)
+# Link appears in 200 response because soft-warn does not reject the link.
+# ----
+tr11 = Test.AddTestRun("as= validation - rel=preload without as= still works")
+tr11.Processes.Default.Command = (
+    "curl -s -D - -o /dev/null"
+    " --http1.1"
+    " --insecure"
+    " 'https://127.0.0.1:{0}/as-warn.html'".format(ts.Variables.ssl_port))
+tr11.Processes.Default.ReturnCode = 0
+tr11.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
+    "200 OK", "Should receive 200 OK")
+# Link is still accepted despite missing as= (soft-warn behavior)
+tr11.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
+    "no-as-resource.css", "Link without as= should still appear in 200 (soft-warn, not reject)")
+tr11.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
+    "X-Early-Hints-Status:", "Plugin should engage for as= validation test")
+tr11.StillRunningAfter = microserver

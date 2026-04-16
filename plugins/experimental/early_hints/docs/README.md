@@ -72,11 +72,21 @@ Modes can be combined with commas:
 
 ## Configuration
 
-The plugin is configured per remap rule using `@pparam`:
+The plugin is configured per remap rule using `@pparam`. Two formats are supported:
 
+**Standard format** (two `@pparam` per option — one for key, one for value):
 ```
-map /path http://origin @plugin=early_hints.so @pparam=--mode @pparam=auto-learn [more options...]
+map /path http://origin @plugin=early_hints.so @pparam=--mode @pparam=auto-learn @pparam=--max-links @pparam=15
 ```
+
+**Compact format** (single `@pparam` with `=` separator — works because `getopt_long` natively handles `--option=value`):
+```
+map /path http://origin @plugin=early_hints.so @pparam=--mode=auto-learn @pparam=--max-links=15
+```
+
+Both formats are equivalent and can be mixed. The compact format is shorter but requires the t3c pparam validation fix for `--link` values containing multiple `=` signs (e.g., `as=script`).
+
+> **Note:** For `--link` values with `as=` attributes, the compact format `@pparam=--link=<URL>;rel=preload;as=style` requires the t3c-check-refs `SplitN` fix. The standard format `@pparam=--link @pparam=<URL>;rel=preload;as=style` also requires this fix. Both work after the fix is applied.
 
 ### Options Reference
 
@@ -440,20 +450,35 @@ View with: `traffic_ctl metric match early_hints`
 ### Basic Auto-Learn
 
 ```
+# Standard format
 map https://www.example.com https://origin.example.com \
     @plugin=early_hints.so \
     @pparam=--mode @pparam=auto-learn \
     @pparam=--debug-header @pparam=X-Early-Hints
+
+# Compact format (equivalent)
+map https://www.example.com https://origin.example.com \
+    @plugin=early_hints.so \
+    @pparam=--mode=auto-learn \
+    @pparam=--debug-header=X-Early-Hints
 ```
 
 ### Manual Mode with Specific Resources
 
 ```
+# Standard format
 map https://www.example.com https://origin.example.com \
     @plugin=early_hints.so \
     @pparam=--mode @pparam=manual \
     @pparam=--link @pparam=</critical.css>;rel=preload;as=style \
     @pparam=--link @pparam=</app.js>;rel=preload;as=script
+
+# Compact format (equivalent)
+map https://www.example.com https://origin.example.com \
+    @plugin=early_hints.so \
+    @pparam=--mode=manual \
+    @pparam=--link=</critical.css>;rel=preload;as=style \
+    @pparam=--link=</app.js>;rel=preload;as=script
 ```
 
 ### Combined Auto-Learn + Origin Forward with CDN Whitelist
@@ -461,10 +486,10 @@ map https://www.example.com https://origin.example.com \
 ```
 map https://www.example.com https://origin.example.com \
     @plugin=early_hints.so \
-    @pparam=--mode @pparam=auto-learn,origin-forward \
-    @pparam=--crossorigin-whitelist @pparam=cdn.example.com,fonts.googleapis.com \
-    @pparam=--min-hit-count @pparam=3 \
-    @pparam=--max-links @pparam=15
+    @pparam=--mode=auto-learn,origin-forward \
+    @pparam=--crossorigin-whitelist=cdn.example.com,fonts.googleapis.com \
+    @pparam=--min-hit-count=3 \
+    @pparam=--max-links=15
 ```
 
 ### High-Traffic with Tuned Cache
@@ -472,10 +497,10 @@ map https://www.example.com https://origin.example.com \
 ```
 map https://www.example.com https://origin.example.com \
     @plugin=early_hints.so \
-    @pparam=--mode @pparam=auto-learn \
-    @pparam=--max-cache-entries @pparam=50000 \
-    @pparam=--min-hit-count @pparam=5 \
-    @pparam=--scan-limit @pparam=65536
+    @pparam=--mode=auto-learn \
+    @pparam=--max-cache-entries=50000 \
+    @pparam=--min-hit-count=5 \
+    @pparam=--scan-limit=65536
 ```
 
 ### Disable Persistence (Ephemeral Cache)
@@ -483,6 +508,6 @@ map https://www.example.com https://origin.example.com \
 ```
 map https://www.example.com https://origin.example.com \
     @plugin=early_hints.so \
-    @pparam=--mode @pparam=auto-learn \
+    @pparam=--mode=auto-learn \
     @pparam=--no-persist
 ```

@@ -1121,8 +1121,7 @@ TEST_CASE("HtmlScanner: --preload-whitelist emits no-cors preload", "[html_scann
     config.init(6, argv);
 
     HtmlScanner scanner(131072, 10, &config);
-    std::string html =
-      R"(<html><head><link rel="stylesheet" href="https://cdn.example.com/style.css"></head></html>)";
+    std::string html = R"(<html><head><link rel="stylesheet" href="https://cdn.example.com/style.css"></head></html>)";
     scanner.feed(html.c_str(), static_cast<int64_t>(html.size()));
 
     auto links = scanner.get_links();
@@ -1140,8 +1139,7 @@ TEST_CASE("HtmlScanner: --preload-whitelist emits no-cors preload", "[html_scann
     config.init(6, argv);
 
     HtmlScanner scanner(131072, 10, &config);
-    std::string html =
-      R"(<html><head><link rel="preload" href="https://img.example.com/hero.webp" as="image"></head></html>)";
+    std::string html = R"(<html><head><link rel="preload" href="https://img.example.com/hero.webp" as="image"></head></html>)";
     scanner.feed(html.c_str(), static_cast<int64_t>(html.size()));
 
     auto links = scanner.get_links();
@@ -1154,20 +1152,13 @@ TEST_CASE("HtmlScanner: --preload-whitelist emits no-cors preload", "[html_scann
 
   SECTION("domain in BOTH whitelists → crossorigin-whitelist wins (has crossorigin=anonymous)")
   {
-    const char *argv[] = {"from",
-                          "to",
-                          "--mode",
-                          "auto-learn",
-                          "--crossorigin-whitelist",
-                          "cdn.example.com",
-                          "--preload-whitelist",
-                          "cdn.example.com"};
+    const char *argv[] = {
+      "from", "to", "--mode", "auto-learn", "--crossorigin-whitelist", "cdn.example.com", "--preload-whitelist", "cdn.example.com"};
     EarlyHintsConfig config;
     config.init(8, argv);
 
     HtmlScanner scanner(131072, 10, &config);
-    std::string html =
-      R"(<html><head><link rel="preload" href="https://cdn.example.com/app.js" as="script"></head></html>)";
+    std::string html = R"(<html><head><link rel="preload" href="https://cdn.example.com/app.js" as="script"></head></html>)";
     scanner.feed(html.c_str(), static_cast<int64_t>(html.size()));
 
     auto links = scanner.get_links();
@@ -1183,8 +1174,7 @@ TEST_CASE("HtmlScanner: --preload-whitelist emits no-cors preload", "[html_scann
     config.init(6, argv);
 
     HtmlScanner scanner(131072, 10, &config);
-    std::string html =
-      R"(<html><head><link rel="modulepreload" href="https://cdn.example.com/mod.js"></head></html>)";
+    std::string html = R"(<html><head><link rel="modulepreload" href="https://cdn.example.com/mod.js"></head></html>)";
     scanner.feed(html.c_str(), static_cast<int64_t>(html.size()));
 
     auto links = scanner.get_links();
@@ -1200,8 +1190,7 @@ TEST_CASE("HtmlScanner: --preload-whitelist emits no-cors preload", "[html_scann
     config.init(6, argv);
 
     HtmlScanner scanner(131072, 10, &config);
-    std::string html =
-      R"(<html><head><link rel="preload" href="https://sub.cdn.example.com/lib.js" as="script"></head></html>)";
+    std::string html = R"(<html><head><link rel="preload" href="https://sub.cdn.example.com/lib.js" as="script"></head></html>)";
     scanner.feed(html.c_str(), static_cast<int64_t>(html.size()));
 
     auto links = scanner.get_links();
@@ -1218,8 +1207,7 @@ TEST_CASE("HtmlScanner: --preload-whitelist emits no-cors preload", "[html_scann
     config.init(6, argv);
 
     HtmlScanner scanner(131072, 10, &config);
-    std::string html =
-      R"(<html><head><link rel="preload" href="https://unknown.example.com/app.js" as="script"></head></html>)";
+    std::string html = R"(<html><head><link rel="preload" href="https://unknown.example.com/app.js" as="script"></head></html>)";
     scanner.feed(html.c_str(), static_cast<int64_t>(html.size()));
 
     auto links = scanner.get_links();
@@ -1234,8 +1222,7 @@ TEST_CASE("HtmlScanner: --preload-whitelist emits no-cors preload", "[html_scann
     config.init(6, argv);
 
     HtmlScanner scanner(131072, 10, &config);
-    std::string html =
-      R"(<html><head><link rel="preload" href="https://fonts.example.com/font.woff2" as="font"></head></html>)";
+    std::string html = R"(<html><head><link rel="preload" href="https://fonts.example.com/font.woff2" as="font"></head></html>)";
     scanner.feed(html.c_str(), static_cast<int64_t>(html.size()));
 
     auto links = scanner.get_links();

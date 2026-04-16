@@ -277,8 +277,12 @@ static bool
 send_103_response(TSHttpTxn txnp, const std::vector<std::string> &links, int max_links, int header_size_limit)
 {
   if (links.empty()) {
+    TSDebug(PLUGIN_NAME, "send_103: no links to send (empty vector)");
     return false;
   }
+
+  TSDebug(PLUGIN_NAME, "send_103: building response from %zu candidate links (max_links=%d, header_size_limit=%d)", links.size(),
+          max_links, header_size_limit);
 
   // Build array of Link values respecting limits.
   // Size accounting: "Link: " (6) + value + "\r\n" (2) = 8 overhead per header.
@@ -289,28 +293,36 @@ send_103_response(TSHttpTxn txnp, const std::vector<std::string> &links, int max
 
   for (const auto &link : links) {
     if (count >= max_links) {
+      TSDebug(PLUGIN_NAME, "send_103: max_links limit reached (%d), skipping remaining %zu links", max_links,
+              links.size() - static_cast<size_t>(count));
       break;
     }
     int link_size = static_cast<int>(link.size()) + 8; // "Link: " + value + "\r\n"
     if (total_size + link_size > header_size_limit) {
+      TSDebug(PLUGIN_NAME, "send_103: skipping oversized link (%d bytes would exceed %d/%d limit): %s", link_size,
+              total_size + link_size, header_size_limit, link.c_str());
       continue; // skip oversized link, try remaining smaller ones
     }
+    TSDebug(PLUGIN_NAME, "send_103: link[%d] selected (%d bytes, total=%d/%d): %s", count, link_size, total_size + link_size,
+            header_size_limit, link.c_str());
     link_ptrs.push_back(link.c_str());
     total_size += link_size;
     count++;
   }
 
   if (link_ptrs.empty()) {
+    TSDebug(PLUGIN_NAME, "send_103: all links filtered out (size/limit constraints)");
     return false;
   }
 
+  TSDebug(PLUGIN_NAME, "send_103: calling TSHttpTxnSendEarlyHints with %d links (%d bytes total)", count, total_size);
   TSReturnCode rc = TSHttpTxnSendEarlyHints(txnp, link_ptrs.data(), static_cast<int>(link_ptrs.size()));
   if (rc == TS_SUCCESS) {
     TSStatIntIncrement(stat_103_sent, 1);
-    TSDebug(PLUGIN_NAME, "sent 103 with %d Link headers", count);
+    TSDebug(PLUGIN_NAME, "sent 103 Early Hints with %d Link headers (%d bytes)", count, total_size);
     return true;
   } else {
-    TSDebug(PLUGIN_NAME, "failed to send 103 (non-H2 client?)");
+    TSDebug(PLUGIN_NAME, "failed to send 103: TSHttpTxnSendEarlyHints returned TS_ERROR (client may not support H2)");
     return false;
   }
 }
@@ -393,7 +405,11 @@ early_hints_transform_do(TSCont contp)
       data->cache->put(data->cache_key, data->scanner->get_links());
       data->cache_written = true;
       TSStatIntIncrement(stat_hints_learned, 1);
-      TSDebug(PLUGIN_NAME, "learned %zu links for %s", data->scanner->get_links().size(), data->cache_key.c_str());
+      TSDebug(PLUGIN_NAME, "learned %zu links for %s via HTML scanning", data->scanner->get_links().size(),
+              data->cache_key.c_str());
+      for (size_t i = 0; i < data->scanner->get_links().size(); ++i) {
+        TSDebug(PLUGIN_NAME, "  learned link[%zu]: %s", i, data->scanner->get_links()[i].c_str());
+      }
     }
     TSVIONBytesSet(data->output_vio, data->bytes_written);
     TSVIOReenable(data->output_vio);
@@ -428,7 +444,8 @@ early_hints_transform_do(TSCont contp)
     int64_t copied = TSIOBufferCopy(data->output_buffer, input_reader, avail, 0);
     if (copied <= 0 && avail > 0) {
       // Copy failed — mark errored and finalize output VIO so downstream doesn't stall.
-      TSDebug(PLUGIN_NAME, "TSIOBufferCopy failed for %lld avail bytes", (long long)avail);
+      TSDebug(PLUGIN_NAME, "TSIOBufferCopy failed for %s: avail=%lld bytes, scanner may have incomplete data",
+              data->cache_key.c_str(), (long long)avail);
       data->errored = true;
       TSIOBufferReaderConsume(input_reader, avail);
       TSVIONBytesSet(data->output_vio, data->bytes_written);
@@ -470,7 +487,11 @@ early_hints_transform_do(TSCont contp)
       data->cache->put(data->cache_key, data->scanner->get_links());
       data->cache_written = true;
       TSStatIntIncrement(stat_hints_learned, 1);
-      TSDebug(PLUGIN_NAME, "learned %zu links for %s (final)", data->scanner->get_links().size(), data->cache_key.c_str());
+      TSDebug(PLUGIN_NAME, "learned %zu links for %s via HTML scanning (final flush)", data->scanner->get_links().size(),
+              data->cache_key.c_str());
+      for (size_t i = 0; i < data->scanner->get_links().size(); ++i) {
+        TSDebug(PLUGIN_NAME, "  learned link[%zu]: %s", i, data->scanner->get_links()[i].c_str());
+      }
     }
     TSVIONBytesSet(data->output_vio, data->bytes_written);
     TSVIOReenable(data->output_vio);
@@ -548,13 +569,13 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
     TSMLoc server_hdr_loc;
 
     if (TSHttpTxnServerRespGet(txnp, &server_bufp, &server_hdr_loc) != TS_SUCCESS) {
-      TSDebug(PLUGIN_NAME, "failed to get server response");
+      TSDebug(PLUGIN_NAME, "READ_RESPONSE_HDR: failed to get server response for %s", req_data->cache_key.c_str());
       break;
     }
 
     TSHttpStatus status = TSHttpHdrStatusGet(server_bufp, server_hdr_loc);
     if (status != TS_HTTP_STATUS_OK) {
-      TSDebug(PLUGIN_NAME, "skipping non-200 response (status=%d)", status);
+      TSDebug(PLUGIN_NAME, "READ_RESPONSE_HDR: skipping non-200 response (status=%d) for %s", status, req_data->cache_key.c_str());
       TSHandleMLocRelease(server_bufp, TS_NULL_MLOC, server_hdr_loc);
       break;
     }
@@ -592,7 +613,10 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
                 }
               }
               if (!is_dup) {
+                TSDebug(PLUGIN_NAME, "origin-forward: accepted link: %s", seg.c_str());
                 origin_links.push_back(std::move(seg));
+              } else {
+                TSDebug(PLUGIN_NAME, "origin-forward: dedup skipped duplicate link: %s", seg.c_str());
               }
               if (static_cast<int>(origin_links.size()) >= config->max_links()) {
                 break;
@@ -619,6 +643,11 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
         cache->put(req_data->cache_key, origin_links);
         TSStatIntIncrement(stat_hints_learned, 1);
         TSDebug(PLUGIN_NAME, "learned %zu origin Link headers for %s", origin_links.size(), req_data->cache_key.c_str());
+        for (size_t i = 0; i < origin_links.size(); ++i) {
+          TSDebug(PLUGIN_NAME, "  origin link[%zu]: %s", i, origin_links[i].c_str());
+        }
+      } else {
+        TSDebug(PLUGIN_NAME, "origin-forward: no valid Link headers found in origin response for %s", req_data->cache_key.c_str());
       }
     }
 
@@ -648,7 +677,8 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
           const char *ce_str = TSMimeHdrFieldValueStringGet(server_bufp, server_hdr_loc, ce_field, -1, &ce_len);
           if (ce_str && ce_len > 0 && !(ce_len == 8 && strncasecmp(ce_str, "identity", 8) == 0)) {
             is_compressed = true;
-            TSDebug(PLUGIN_NAME, "skipping auto-learn: response is compressed (Content-Encoding present)");
+            TSDebug(PLUGIN_NAME, "auto-learn: skipping for %s, response is compressed (Content-Encoding: %.*s)",
+                    req_data->cache_key.c_str(), ce_len, ce_str);
           }
           TSHandleMLocRelease(server_bufp, server_hdr_loc, ce_field);
         }
@@ -664,14 +694,15 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
 
         TSVConn connp = TSTransformCreate(early_hints_transform, txnp);
         if (!connp) {
-          TSDebug(PLUGIN_NAME, "TSTransformCreate failed, skipping HTML scanning");
+          TSDebug(PLUGIN_NAME, "TSTransformCreate failed for %s, skipping HTML scanning", req_data->cache_key.c_str());
           delete tdata->scanner;
           tdata->~TransformData();
           TSfree(tdata);
         } else {
           TSContDataSet(connp, tdata);
           TSHttpTxnHookAdd(txnp, TS_HTTP_RESPONSE_TRANSFORM_HOOK, connp);
-          TSDebug(PLUGIN_NAME, "added HTML scanning transform for %s", req_data->cache_key.c_str());
+          TSDebug(PLUGIN_NAME, "added HTML scanning transform for %s (scan_limit=%d)", req_data->cache_key.c_str(),
+                  config->scan_limit());
         }
       }
     }
@@ -685,6 +716,7 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
     TSMLoc resp_hdr_loc;
 
     if (TSHttpTxnClientRespGet(txnp, &resp_bufp, &resp_hdr_loc) != TS_SUCCESS) {
+      TSDebug(PLUGIN_NAME, "SEND_RESPONSE_HDR: TSHttpTxnClientRespGet failed for %s", req_data->cache_key.c_str());
       break;
     }
 
@@ -692,30 +724,55 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
     // Adding them to 4xx/5xx/3xx is misleading — the resources don't apply.
     TSHttpStatus resp_status = TSHttpHdrStatusGet(resp_bufp, resp_hdr_loc);
     if (resp_status >= 200 && resp_status < 300) {
-      // Add Link headers to final 2xx response (for browser compatibility)
-      // Reuse links already looked up in TSRemapDoRemap to avoid double cache lookup.
-      // For auto-learn, cached_links may be null if this is the first request (learning
-      // happened during the transform), so re-query the cache as fallback.
-      const std::vector<std::string> *links_ptr = nullptr;
-      if (config->mode() & EarlyHintsConfig::MODE_MANUAL) {
-        links_ptr = &config->manual_links();
-      } else if (req_data->cached_links) {
-        links_ptr = req_data->cached_links.get();
-      } else if (!req_data->cache_key.empty()) {
-        // Fallback: transform may have just populated the cache during this request.
-        // Use min_hit_count=1 intentionally: if the transform just learned during THIS request,
-        // learn_count is 1. Using config->min_hit_count() (default 2) would prevent showing
-        // links in the 200 response on the first learning request. The 103 in TSRemapDoRemap
-        // still respects config->min_hit_count() — this fallback is only for 200 compatibility.
-        req_data->cached_links = cache->get(req_data->cache_key, 1);
+      // Build merged links from all active modes — same approach as TSRemapDoRemap.
+      // For auto-learn/origin-forward, try cached links from remap first;
+      // if not available, fallback to fresh cache lookup (transform may have just learned).
+      const std::vector<std::string> *cached_ptr = nullptr;
+
+      if (config->mode() & (EarlyHintsConfig::MODE_AUTO_LEARN | EarlyHintsConfig::MODE_ORIGIN_FORWARD)) {
         if (req_data->cached_links) {
-          links_ptr = req_data->cached_links.get();
+          TSDebug(PLUGIN_NAME, "SEND_RESPONSE_HDR: using cached links (from remap) for %s", req_data->cache_key.c_str());
+          cached_ptr = req_data->cached_links.get();
+        } else if (!req_data->cache_key.empty()) {
+          // Fallback: transform may have just populated the cache during this request.
+          // Use min_hit_count=1 intentionally: if the transform just learned during THIS request,
+          // learn_count is 1. Using config->min_hit_count() (default 2) would prevent showing
+          // links in the 200 response on the first learning request. The 103 in TSRemapDoRemap
+          // still respects config->min_hit_count() — this fallback is only for 200 compatibility.
+          TSDebug(PLUGIN_NAME, "SEND_RESPONSE_HDR: fallback cache lookup for %s (transform may have just learned)",
+                  req_data->cache_key.c_str());
+          req_data->cached_links = cache->get(req_data->cache_key, 1);
+          if (req_data->cached_links) {
+            TSDebug(PLUGIN_NAME, "SEND_RESPONSE_HDR: fallback cache hit for %s, %zu links", req_data->cache_key.c_str(),
+                    req_data->cached_links->size());
+            cached_ptr = req_data->cached_links.get();
+          } else {
+            TSDebug(PLUGIN_NAME, "SEND_RESPONSE_HDR: fallback cache miss for %s", req_data->cache_key.c_str());
+          }
         }
       }
 
-      if (links_ptr && !links_ptr->empty()) {
-        add_link_headers_to_response(resp_bufp, resp_hdr_loc, *links_ptr, config->max_links(), config->header_size_limit());
+      // Merge: manual links first (priority), then cached links with URL dedup
+      std::vector<std::string> empty_vec;
+      const std::vector<std::string> &manual_ref =
+        (config->mode() & EarlyHintsConfig::MODE_MANUAL) ? config->manual_links() : empty_vec;
+
+      std::vector<std::string> merged = merge_hint_links(manual_ref, cached_ptr, config->max_links());
+
+      TSDebug(PLUGIN_NAME, "SEND_RESPONSE_HDR: merged %zu links for %s (manual=%zu, cached=%zu)", merged.size(),
+              req_data->cache_key.c_str(), (config->mode() & EarlyHintsConfig::MODE_MANUAL) ? config->manual_links().size() : 0ul,
+              cached_ptr ? cached_ptr->size() : 0ul);
+
+      if (!merged.empty()) {
+        TSDebug(PLUGIN_NAME, "SEND_RESPONSE_HDR: adding %zu Link headers to 200 response for %s", merged.size(),
+                req_data->cache_key.c_str());
+        add_link_headers_to_response(resp_bufp, resp_hdr_loc, merged, config->max_links(), config->header_size_limit());
+      } else {
+        TSDebug(PLUGIN_NAME, "SEND_RESPONSE_HDR: no links to add for %s", req_data->cache_key.c_str());
       }
+    } else {
+      TSDebug(PLUGIN_NAME, "SEND_RESPONSE_HDR: skipping Link headers for non-2xx response (status=%d) to %s", resp_status,
+              req_data->cache_key.c_str());
     }
 
     // Add debug header for ALL response codes (intentionally outside the 2xx check).
@@ -866,7 +923,29 @@ TSRemapNewInstance(int argc, char *argv[], void **ih, char *errbuf, int errbuf_s
   TSContDataSet(contp, static_cast<void *>(inst));
   *ih = static_cast<void *>(contp);
 
-  TSDebug(PLUGIN_NAME, "new instance created: mode=0x%02x", config->mode());
+  TSDebug(PLUGIN_NAME, "new instance created: mode=0x%02x, max_links=%d, header_size_limit=%d, skip_bots=%d, navigate_only=%d",
+          config->mode(), config->max_links(), config->header_size_limit(), config->skip_bots(), config->navigate_only());
+  TSDebug(PLUGIN_NAME, "  scan_limit=%d, min_hit_count=%d, max_cache_entries=%d, persist=%d", config->scan_limit(),
+          config->min_hit_count(), config->max_cache_entries(), config->persist_enabled());
+  TSDebug(PLUGIN_NAME, "  debug_header=%s", config->debug_header() ? config->debug_header() : "(none)");
+  if (config->mode() & EarlyHintsConfig::MODE_MANUAL) {
+    TSDebug(PLUGIN_NAME, "  manual mode: %zu configured links", config->manual_links().size());
+    for (size_t i = 0; i < config->manual_links().size(); ++i) {
+      TSDebug(PLUGIN_NAME, "    manual link[%zu]: %s", i, config->manual_links()[i].c_str());
+    }
+  }
+  if (!config->crossorigin_whitelist().empty()) {
+    TSDebug(PLUGIN_NAME, "  crossorigin whitelist: %zu domains", config->crossorigin_whitelist().size());
+    for (const auto &d : config->crossorigin_whitelist()) {
+      TSDebug(PLUGIN_NAME, "    whitelisted: %s", d.c_str());
+    }
+  }
+  if (!config->preload_whitelist().empty()) {
+    TSDebug(PLUGIN_NAME, "  preload whitelist: %zu domains", config->preload_whitelist().size());
+    for (const auto &d : config->preload_whitelist()) {
+      TSDebug(PLUGIN_NAME, "    preload domain: %s", d.c_str());
+    }
+  }
   return TS_SUCCESS;
 }
 
@@ -895,12 +974,14 @@ TSRemapStatus
 TSRemapDoRemap(void *ih, TSHttpTxn rh, TSRemapRequestInfo * /* rri ATS_UNUSED */)
 {
   if (!ih) {
+    TSDebug(PLUGIN_NAME, "TSRemapDoRemap: ih is NULL, skipping");
     return TSREMAP_NO_REMAP;
   }
 
   TSCont contp         = static_cast<TSCont>(ih);
   PluginInstance *inst = static_cast<PluginInstance *>(TSContDataGet(contp));
   if (!inst || !inst->config || !inst->cache) {
+    TSDebug(PLUGIN_NAME, "TSRemapDoRemap: instance data missing (inst=%p)", static_cast<void *>(inst));
     return TSREMAP_NO_REMAP;
   }
   EarlyHintsConfig *config = inst->config;
@@ -917,6 +998,7 @@ TSRemapDoRemap(void *ih, TSHttpTxn rh, TSRemapRequestInfo * /* rri ATS_UNUSED */
   TSMBuffer req_bufp;
   TSMLoc req_hdr_loc;
   if (TSHttpTxnClientReqGet(rh, &req_bufp, &req_hdr_loc) != TS_SUCCESS) {
+    TSDebug(PLUGIN_NAME, "TSRemapDoRemap: TSHttpTxnClientReqGet failed");
     return TSREMAP_NO_REMAP;
   }
 
@@ -927,6 +1009,7 @@ TSRemapDoRemap(void *ih, TSHttpTxn rh, TSRemapRequestInfo * /* rri ATS_UNUSED */
     (method_len == static_cast<int>(strlen(TS_HTTP_METHOD_HEAD)) && strncmp(method, TS_HTTP_METHOD_HEAD, method_len) == 0);
 
   if (!is_get_head) {
+    TSDebug(PLUGIN_NAME, "TSRemapDoRemap: skipping non-GET/HEAD method: %.*s", method_len, method);
     TSHandleMLocRelease(req_bufp, TS_NULL_MLOC, req_hdr_loc);
     return TSREMAP_NO_REMAP;
   }
@@ -943,6 +1026,7 @@ TSRemapDoRemap(void *ih, TSHttpTxn rh, TSRemapRequestInfo * /* rri ATS_UNUSED */
     }
     TSHandleMLocRelease(req_bufp, req_hdr_loc, url_loc);
   }
+  TSDebug(PLUGIN_NAME, "TSRemapDoRemap: cache_key=%s, mode=0x%02x", cache_key.c_str(), config->mode());
 
   // Check if another remap plugin instance already claimed this transaction (first-wins).
   // This prevents hook duplication, config contamination, and duplicate 103 responses.
@@ -964,7 +1048,7 @@ TSRemapDoRemap(void *ih, TSHttpTxn rh, TSRemapRequestInfo * /* rri ATS_UNUSED */
   if (TSHttpTxnClientProtocolStackContains(rh, "h2") == nullptr) {
     TSStatIntIncrement(stat_103_skipped_h1, 1);
     req_data->debug_status = "skipped-h1";
-    TSDebug(PLUGIN_NAME, "skipping: non-H2 client");
+    TSDebug(PLUGIN_NAME, "skipping 103 for %s: client is not H2 (103 requires HTTP/2 server push)", cache_key.c_str());
     goto register_hooks;
   }
 
@@ -972,7 +1056,7 @@ TSRemapDoRemap(void *ih, TSHttpTxn rh, TSRemapRequestInfo * /* rri ATS_UNUSED */
   if (config->navigate_only() && !is_navigate_request(req_bufp, req_hdr_loc)) {
     TSStatIntIncrement(stat_103_skipped_non_nav, 1);
     req_data->debug_status = "skipped-non-navigate";
-    TSDebug(PLUGIN_NAME, "skipping: non-navigate request");
+    TSDebug(PLUGIN_NAME, "skipping 103 for %s: non-navigate request (Sec-Fetch-Mode != navigate)", cache_key.c_str());
     goto register_hooks;
   }
 
@@ -980,22 +1064,40 @@ TSRemapDoRemap(void *ih, TSHttpTxn rh, TSRemapRequestInfo * /* rri ATS_UNUSED */
   if (config->skip_bots() && is_bot_user_agent(req_bufp, req_hdr_loc)) {
     TSStatIntIncrement(stat_103_skipped_bot, 1);
     req_data->debug_status = "skipped-bot";
-    TSDebug(PLUGIN_NAME, "skipping: bot User-Agent");
+    TSDebug(PLUGIN_NAME, "skipping 103 for %s: bot User-Agent detected", cache_key.c_str());
     goto register_hooks;
   }
 
-  if (config->mode() & EarlyHintsConfig::MODE_MANUAL) {
-    // Manual mode: send configured links immediately
-    if (send_103_response(rh, config->manual_links(), config->max_links(), config->header_size_limit())) {
-      req_data->debug_status = "sent";
-    } else {
-      req_data->debug_status = "send-failed";
+  // Build merged links from all active modes
+  {
+    const std::vector<std::string> *cached_ptr = nullptr;
+
+    // Look up cached links if auto-learn or origin-forward is active
+    if (config->mode() & (EarlyHintsConfig::MODE_AUTO_LEARN | EarlyHintsConfig::MODE_ORIGIN_FORWARD)) {
+      TSDebug(PLUGIN_NAME, "mode decision for %s: auto-learn/origin-forward active, looking up cache (min_hit_count=%d)",
+              cache_key.c_str(), config->min_hit_count());
+      req_data->cached_links = cache->get(cache_key, config->min_hit_count());
+      if (req_data->cached_links) {
+        TSDebug(PLUGIN_NAME, "cache hit for %s: %zu cached links found", cache_key.c_str(), req_data->cached_links->size());
+        cached_ptr = req_data->cached_links.get();
+      } else {
+        TSDebug(PLUGIN_NAME, "cache miss for %s (below min_hit_count=%d)", cache_key.c_str(), config->min_hit_count());
+      }
     }
-  } else {
-    // Auto-learn / origin-forward: lookup hints cache (single lookup, reused in SEND_RESPONSE_HDR)
-    req_data->cached_links = cache->get(cache_key, config->min_hit_count());
-    if (req_data->cached_links) {
-      if (send_103_response(rh, *req_data->cached_links, config->max_links(), config->header_size_limit())) {
+
+    // Merge: manual links first (priority), then cached links with URL dedup
+    std::vector<std::string> empty_vec;
+    const std::vector<std::string> &manual_ref =
+      (config->mode() & EarlyHintsConfig::MODE_MANUAL) ? config->manual_links() : empty_vec;
+
+    std::vector<std::string> merged = merge_hint_links(manual_ref, cached_ptr, config->max_links());
+
+    TSDebug(PLUGIN_NAME, "merged %zu links for %s (manual=%zu, cached=%zu)", merged.size(), cache_key.c_str(),
+            (config->mode() & EarlyHintsConfig::MODE_MANUAL) ? config->manual_links().size() : 0ul,
+            cached_ptr ? cached_ptr->size() : 0ul);
+
+    if (!merged.empty()) {
+      if (send_103_response(rh, merged, config->max_links(), config->header_size_limit())) {
         req_data->debug_status = "sent";
       } else {
         req_data->debug_status = "send-failed";
@@ -1003,7 +1105,7 @@ TSRemapDoRemap(void *ih, TSHttpTxn rh, TSRemapRequestInfo * /* rri ATS_UNUSED */
     } else {
       TSStatIntIncrement(stat_103_skipped_no_hints, 1);
       req_data->debug_status = "no-hints";
-      TSDebug(PLUGIN_NAME, "no hints available for %s", cache_key.c_str());
+      TSDebug(PLUGIN_NAME, "no hints available for %s after merge", cache_key.c_str());
     }
   }
 
@@ -1011,6 +1113,8 @@ register_hooks:
   TSHandleMLocRelease(req_bufp, TS_NULL_MLOC, req_hdr_loc);
 
   // Always register hooks for learning and response header modification
+  TSDebug(PLUGIN_NAME, "registering hooks for %s: READ_RESPONSE_HDR + SEND_RESPONSE_HDR + TXN_CLOSE (status=%s)", cache_key.c_str(),
+          req_data->debug_status.c_str());
   TSHttpTxnHookAdd(rh, TS_HTTP_READ_RESPONSE_HDR_HOOK, contp);
   TSHttpTxnHookAdd(rh, TS_HTTP_SEND_RESPONSE_HDR_HOOK, contp);
   TSHttpTxnHookAdd(rh, TS_HTTP_TXN_CLOSE_HOOK, contp);
