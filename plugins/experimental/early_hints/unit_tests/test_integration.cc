@@ -934,3 +934,90 @@ TEST_CASE("Origin-forward dedup: same URL, different rel types are NOT deduplica
     CHECK(has_preconnect);
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// WP3: Origin-forward dedup tautological comparison — RED tests
+//
+// Bug in dedup_link_segments() (link_parser.cc), mirroring early_hints.cc:
+//   bool is_preconnect = seg.find("rel=preconnect") != std::string::npos;
+//   for (const auto &existing : result) {
+//     if (url_match && (seg.find("rel=preconnect") != npos) == is_preconnect)
+//
+// The inner condition is (is_preconnect == is_preconnect) — ALWAYS TRUE.
+// This means: if origin sends preload + preconnect for the same URL, the
+// second entry is always incorrectly flagged as duplicate and dropped.
+//
+// Fix: change seg.find → existing.find in the inner comparison.
+//
+// These tests call dedup_link_segments() DIRECTLY (production code in
+// link_parser.cc) — NOT a test helper. RED before fix, GREEN after fix.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("WP3: dedup_link_segments() tautological comparison drops different-rel entries", "[integration][wp3][dedup]")
+{
+  SECTION("BUG: preload then preconnect for same URL — preconnect incorrectly dropped")
+  {
+    // origin sends: preload first, then preconnect for same URL.
+    // Correct dedup: different rel types → both preserved → size == 2.
+    // Buggy dedup:  tautological condition always true → preconnect dropped → size == 1.
+    std::vector<std::string> segs = {
+      "</cdn/app.js>; rel=preload; as=script",
+      "</cdn/app.js>; rel=preconnect",
+    };
+    auto result = dedup_link_segments(segs, 10);
+    // RED before fix: dedup_link_segments has seg.find bug → result.size() == 1, CHECK fails
+    // GREEN after fix: existing.find used → result.size() == 2, CHECK passes
+    CHECK(result.size() == 2);
+  }
+
+  SECTION("BUG: preconnect then preload for same URL — preload incorrectly dropped")
+  {
+    std::vector<std::string> segs = {
+      "</cdn/lib.css>; rel=preconnect",
+      "</cdn/lib.css>; rel=preload; as=style",
+    };
+    auto result = dedup_link_segments(segs, 10);
+    CHECK(result.size() == 2); // RED before fix, GREEN after
+  }
+
+  SECTION("CORRECT dedup: two identical preload entries — second must be dropped")
+  {
+    std::vector<std::string> segs = {
+      "</cdn/app.js>; rel=preload; as=script",
+      "</cdn/app.js>; rel=preload; as=script",
+    };
+    auto result = dedup_link_segments(segs, 10);
+    CHECK(result.size() == 1); // always correct — same-type dedup works in both versions
+  }
+
+  SECTION("CORRECT dedup: two identical preconnect entries — second must be dropped")
+  {
+    std::vector<std::string> segs = {
+      "</cdn/app.js>; rel=preconnect",
+      "</cdn/app.js>; rel=preconnect",
+    };
+    auto result = dedup_link_segments(segs, 10);
+    CHECK(result.size() == 1);
+  }
+
+  SECTION("Different URLs — no dedup regardless of rel type")
+  {
+    std::vector<std::string> segs = {
+      "</cdn/app.js>; rel=preload; as=script",
+      "</cdn/lib.js>; rel=preload; as=script",
+    };
+    auto result = dedup_link_segments(segs, 10);
+    CHECK(result.size() == 2);
+  }
+
+  SECTION("max_links cap respected during dedup")
+  {
+    std::vector<std::string> segs = {
+      "</a.js>; rel=preload; as=script",
+      "</b.js>; rel=preload; as=script",
+      "</c.js>; rel=preload; as=script",
+    };
+    auto result = dedup_link_segments(segs, 2);
+    CHECK(result.size() == 2);
+  }
+}
