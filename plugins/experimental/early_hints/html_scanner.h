@@ -55,7 +55,6 @@ public:
   //
   // extract_origin() and is_crossorigin() are placed in the public section so that
   // unit tests can call them directly without going through the full HTML scanning path.
-  // This makes TDD for WP2 (RFC 3986 scheme detection) possible with RED→GREEN cycles.
   static std::string extract_origin(const std::string &url);
   static bool is_crossorigin(const std::string &href);
 

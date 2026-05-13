@@ -235,7 +235,7 @@ TEST_CASE("Transform: VConn closed with null data just destroys cont", "[transfo
   CHECK(mock_cont_destroy_count == 1);
 }
 
-// ─── T4/T5: ERROR event edge cases ─────────────────────────────────────────
+// ─── ERROR event edge cases ─────────────────────────────────────────
 
 TEST_CASE("Transform: ERROR event with null data does not crash", "[transform][error]")
 {
@@ -299,7 +299,7 @@ TEST_CASE("Transform: unknown event delegates to transform_do", "[transform][def
   CHECK(data.initialized == false);
 }
 
-// ─── D1: _do with null data ────────────────────────────────────────────────
+// ─── _do with null data ────────────────────────────────────────────────
 
 TEST_CASE("Transform_do: null data is safe early return", "[transform_do]")
 {
@@ -316,7 +316,7 @@ TEST_CASE("Transform_do: null data is safe early return", "[transform_do]")
   CHECK(mock_cont_call_count == 0);
 }
 
-// ─── D3: _do with uninitialized + null output_conn ─────────────────────────
+// ─── _do with uninitialized + null output_conn ─────────────────────────
 
 TEST_CASE("Transform_do: uninitialized with null output_conn returns early", "[transform_do]")
 {

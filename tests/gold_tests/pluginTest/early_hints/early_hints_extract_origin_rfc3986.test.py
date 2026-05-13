@@ -1,5 +1,5 @@
 '''
-Test 103 Early Hints plugin — WP2 SISA: extract_origin() RFC 3986 compliance
+Test 103 Early Hints plugin — extract_origin() RFC 3986 compliance
 '''
 #  Licensed to the Apache Software Foundation (ASF) under one
 #  or more contributor license agreements.  See the NOTICE file
@@ -18,12 +18,12 @@ Test 103 Early Hints plugin — WP2 SISA: extract_origin() RFC 3986 compliance
 #  limitations under the License.
 
 Test.Summary = '''
-WP2 SISA: extract_origin() must use RFC 3986 §3.1 scheme detection.
+extract_origin() must use RFC 3986 §3.1 scheme detection.
 
 Bug: extract_origin() uses url.find("://") naively. For a URL like
 /loader?url=https://cdn.example.com/app.js — a same-origin endpoint that
 proxies external resources — is_crossorigin() correctly returns false (fixed
-in WP2 main), BUT if extract_origin() were ever called for this URL it would
+in the crossorigin fix), BUT if extract_origin() were ever called for this URL it would
 produce "/loader?url=https://cdn.example.com" (wrong) instead of returning
 the URL as-is.
 
@@ -126,7 +126,7 @@ ts.Disk.records_config.update({
 # ----
 # TC0: Learn phase — proxy app page
 # ----
-tr0 = Test.AddTestRun("WP2-SISA: Learn proxy app page")
+tr0 = Test.AddTestRun("RFC3986-origin: Learn proxy app page")
 tr0.Processes.Default.Command = (
     "curl -s -D - -o /dev/null"
     " --http2"
@@ -141,7 +141,7 @@ tr0.StillRunningAfter = microserver
 # ----
 # TC1: Serve — verify proxy URL script produces same-origin rel=preload hint
 #
-# BUG (before fix): is_crossorigin() was already fixed in WP2 main, but if
+# BUG (before fix): is_crossorigin() was already fixed, but if
 # extract_origin() were invoked defensively, it would corrupt the hint to
 # something like </loader?url=https://cdn.example.com>; rel=preconnect
 # instead of </loader?url=https://cdn.example.com/react.js>; rel=preload; as=script
@@ -151,7 +151,7 @@ tr0.StillRunningAfter = microserver
 #   NOT:  <https://cdn.example.com>; rel=preconnect  (false cross-origin)
 #   NOT:  </loader?url=https://cdn.example.com>; rel=preconnect (broken origin)
 # ----
-tr1 = Test.AddTestRun("WP2-SISA: Proxy script URL must produce full same-origin rel=preload hint")
+tr1 = Test.AddTestRun("RFC3986-origin: Proxy script URL must produce full same-origin rel=preload hint")
 tr1.Processes.Default.Command = (
     "sleep 1 ; curl -s -D - -o /dev/null"
     " --http2"
@@ -177,7 +177,7 @@ tr1.StillRunningAfter = microserver
 # ----
 # TC2+3: Regression guard — genuine cross-origin still produces correct preconnect
 # ----
-tr2 = Test.AddTestRun("WP2-SISA: Learn genuine cross-origin (regression guard)")
+tr2 = Test.AddTestRun("RFC3986-origin: Learn genuine cross-origin (regression guard)")
 tr2.Processes.Default.Command = (
     "curl -s -D - -o /dev/null"
     " --http2"
@@ -187,7 +187,7 @@ tr2.Processes.Default.ReturnCode = 0
 tr2.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression("200", "Should receive 200 OK")
 tr2.StillRunningAfter = microserver
 
-tr3 = Test.AddTestRun("WP2-SISA: Genuine cross-origin font still gets crossorigin preconnect")
+tr3 = Test.AddTestRun("RFC3986-origin: Genuine cross-origin font still gets crossorigin preconnect")
 tr3.Processes.Default.Command = (
     "sleep 1 && curl -s -D - -o /dev/null"
     " --http2"
@@ -198,5 +198,5 @@ tr3.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "x-early-hints-status: sent", "Genuine cross-origin must produce preconnect")
 tr3.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
     "fonts.gstatic.com>; rel=preconnect",
-    "Font CDN origin must appear as preconnect — regression guard for WP2 fix")
+    "Font CDN origin must appear as preconnect — regression guard")
 tr3.StillRunningAfter = microserver

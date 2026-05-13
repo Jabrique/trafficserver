@@ -1327,14 +1327,14 @@ TEST_CASE("R6: scan limit mid-body tag", "[scanner][r6]")
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// WP2: is_crossorigin + extract_origin :// false positive — RED tests
+// is_crossorigin + extract_origin: RFC 3986 false positive prevention
 // Bug: href.find("://") matches anywhere in string, so a same-origin proxy URL
 // like /proxy?url=https://cdn.example.com/x.js is treated as cross-origin.
 // Fix: detect scheme only when :// is preceded by valid RFC 3986 scheme chars
-// (ALPHA prefix), not when it appears inside a query string.
+// (ALPHA prefix at position 0), not when it appears inside a query string.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-TEST_CASE("WP2: is_crossorigin false positive on query string containing ://", "[html_scanner][wp2]")
+TEST_CASE("HtmlScanner: is_crossorigin false positive on query string containing ://", "[html_scanner][crossorigin][rfc3986]")
 {
   SECTION("proxy URL with :// in query string treated as same-origin (BUG: treated as cross-origin)")
   {
@@ -1382,7 +1382,8 @@ TEST_CASE("WP2: is_crossorigin false positive on query string containing ://", "
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// WP2 SISA: extract_origin() RFC 3986 compliance
+// extract_origin(): RFC 3986 §3.1 scheme detection — integration tests
+//
 // Bug: extract_origin() uses url.find("://") naively. For a same-origin proxy URL
 // /proxy?url=https://cdn.example.com/x.js, url.find("://") returns 16 (inside
 // query string), causing extract_origin to return "/proxy?url=https://cdn.example.com"
@@ -1397,21 +1398,8 @@ TEST_CASE("WP2: is_crossorigin false positive on query string containing ://", "
 // appears anywhere in the string.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Helper to expose extract_origin for direct testing via scanner subclass trick.
-// We use a thin wrapper since extract_origin is a private static — test via
-// build_link_header behavior when is_crossorigin is bypassed isn't directly
-// testable. Instead we test the integration: a URL with :// in a proxy query
-// must NOT produce a hint with the wrong "origin" fragment in the link value.
-//
-// NOTE: The direct unit test is done via the html output: when a link tag has
-// href="/proxy?url=https://cdn.example.com/app.js" and scanner correctly treats
-// it as same-origin (is_crossorigin=false), extract_origin is never called.
-// The risk case is: if a future change breaks is_crossorigin gating and
-// extract_origin is called with this URL, it must NOT return a bad "origin".
-// We test this through an exposed test-only method declared in html_scanner.h.
-
-TEST_CASE("WP2 SISA: extract_origin must use RFC 3986 scheme detection, not naive url.find(\"://\")",
-          "[html_scanner][wp2][extract_origin]")
+TEST_CASE("HtmlScanner: extract_origin integration — proxy URL must emit same-origin preload",
+          "[html_scanner][extract_origin][rfc3986]")
 {
   // We test extract_origin indirectly via the end-to-end scanner behaviour.
   // A proxy URL /proxy?url=https://cdn.example.com/app.js must produce:
@@ -1487,7 +1475,7 @@ TEST_CASE("WP2 SISA: extract_origin must use RFC 3986 scheme detection, not naiv
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// WP2 SISA: Direct unit tests for extract_origin() RFC 3986 compliance
+// Direct unit tests for extract_origin() RFC 3986 compliance
 //
 // These tests call HtmlScanner::extract_origin() DIRECTLY (now public).
 // They will be RED before the fix because the current implementation uses
@@ -1503,7 +1491,7 @@ TEST_CASE("WP2 SISA: extract_origin must use RFC 3986 scheme detection, not naiv
 // AFTER FIX: extract_origin uses RFC 3986 scheme detection (ALPHA prefix at pos 0).
 // ═══════════════════════════════════════════════════════════════════════════════
 
-TEST_CASE("WP2 SISA: extract_origin() direct test — RFC 3986 scheme detection", "[html_scanner][wp2][extract_origin][direct]")
+TEST_CASE("extract_origin() direct test — RFC 3986 scheme detection", "[html_scanner][rfc3986][extract_origin][direct]")
 {
   SECTION("BUG: proxy URL with :// in query string must return URL as-is")
   {

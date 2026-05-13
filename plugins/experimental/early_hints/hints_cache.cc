@@ -24,12 +24,15 @@
 #include <cstdio>
 #include <algorithm>
 
-HintsCache::HintsCache(int max_entries) : mutex_(TSMutexCreate()), max_entries_(max_entries) {}
+HintsCache::HintsCache(int max_entries) : mutex_(TSMutexCreate()), persist_mutex_(TSMutexCreate()), max_entries_(max_entries) {}
 
 HintsCache::~HintsCache()
 {
   if (mutex_) {
     TSMutexDestroy(mutex_);
+  }
+  if (persist_mutex_) {
+    TSMutexDestroy(persist_mutex_);
   }
 }
 
@@ -68,6 +71,16 @@ HintsCache::get(const std::string &key, std::vector<std::string> &links, int min
 void
 HintsCache::put(const std::string &key, const std::vector<std::string> &links)
 {
+  // Key length cap — reject keys longer than MAX_KEY_LEN.
+  // Oversized keys cannot be URL paths in practice and risk O(n) memory bloat
+  // in the persist file. Silently drop and count as a drop.
+  if (key.size() > static_cast<size_t>(MAX_KEY_LEN)) {
+    TSMutexGuard guard(mutex_);
+    drop_counter_++;
+    TSDebug("early_hints", "put: key too long (%zu > %d), dropping", key.size(), MAX_KEY_LEN);
+    return;
+  }
+
   auto new_links = std::make_shared<const LinkList>(links);
 
   {
@@ -75,10 +88,22 @@ HintsCache::put(const std::string &key, const std::vector<std::string> &links)
 
     auto it = entries_.find(key);
     if (it != entries_.end()) {
-      HintEntry &entry   = it->second;
-      entry.links        = std::move(new_links);
+      HintEntry &entry = it->second;
+
+      // Equality-check debounce.
+      // Compare new links against the currently stored links.
+      // If identical, skip the shared_ptr swap.
+      // This avoids unnecessary memory allocation on every request after warm-up.
+      if (!entry.links || *entry.links != links) {
+        entry.links = std::move(new_links);
+      }
       entry.last_updated = time(nullptr);
-      entry.learn_count++;
+
+      // learn_count cap — cap at max_learn_count() to prevent int overflow
+      // under sustained traffic. The count is persisted and used for min_hit_count.
+      if (entry.learn_count < max_learn_count()) {
+        entry.learn_count++;
+      }
     } else {
       // Enforce max entries limit — evict oldest if at capacity
       if (static_cast<int>(entries_.size()) >= max_entries_) {
@@ -98,9 +123,15 @@ HintsCache::put(const std::string &key, const std::vector<std::string> &links)
     }
   } // mutex released
 
-  // Persist to disk outside the mutex
+  // Persist is serialized by persist_mutex_ to prevent two concurrent
+  // put() calls from both entering persist_to_disk() simultaneously.
+  // persist_to_disk() itself takes a snapshot under mutex_ — double-entry is safe
+  // but wastes I/O. persist_mutex_ ensures only one persist runs at a time.
   if (!persist_path_.empty()) {
+    TSMutexGuard persist_guard(persist_mutex_);
     persist_to_disk();
+    TSMutexGuard cnt_guard(mutex_);
+    persist_count_++;
   }
 }
 
@@ -116,6 +147,13 @@ HintsCache::drops() const
 {
   TSMutexGuard guard(mutex_);
   return drop_counter_;
+}
+
+int64_t
+HintsCache::put_persist_count() const
+{
+  TSMutexGuard guard(mutex_);
+  return persist_count_;
 }
 
 std::string
@@ -278,8 +316,10 @@ HintsCache::load_from_disk()
     return false;
   }
 
-  TSMutexGuard guard(mutex_);
-  entries_.clear();
+  // Atomic swap — build new_entries OUTSIDE the lock, then swap in.
+  // This guarantees: if parsing fails mid-way, the existing cache is unaffected.
+  // The swap is atomic (hold mutex only for the pointer swap, not for I/O).
+  std::unordered_map<std::string, HintEntry> new_entries;
 
   for (uint32_t i = 0; i < entry_count; i++) {
     // Read key
@@ -287,7 +327,7 @@ HintsCache::load_from_disk()
     if (fread(&key_len, sizeof(key_len), 1, fp) != 1 || key_len == 0 || key_len > 4096) {
       TSDebug("early_hints", "load: corrupt entry %u (key_len=%u)", i, key_len);
       fclose(fp);
-      return false;
+      return false; // existing cache untouched (swap not done yet)
     }
     std::string key(key_len, '\0');
     if (fread(&key[0], key_len, 1, fp) != 1) {
@@ -300,6 +340,11 @@ HintsCache::load_from_disk()
     if (fread(&lc, sizeof(lc), 1, fp) != 1) {
       fclose(fp);
       return false;
+    }
+    // Clamp learn_count from disk to max_learn_count().
+    // Prevents overflow if file was written by a buggy version without the cap.
+    if (static_cast<int>(lc) > max_learn_count()) {
+      lc = static_cast<uint32_t>(max_learn_count());
     }
 
     // Read links
@@ -326,16 +371,24 @@ HintsCache::load_from_disk()
     }
 
     // Only insert if within capacity
-    if (static_cast<int>(entries_.size()) < max_entries_) {
+    if (static_cast<int>(new_entries.size()) < max_entries_) {
       HintEntry entry;
       entry.links        = std::make_shared<const LinkList>(std::move(links));
       entry.last_updated = time(nullptr);
       entry.learn_count  = static_cast<int>(lc);
-      entries_[key]      = std::move(entry);
+      new_entries[key]   = std::move(entry);
     }
   }
 
   fclose(fp);
+
+  // Atomic swap — hold mutex only for the map swap (not for file I/O).
+  // All parsing done above. Now swap new_entries into entries_ atomically.
+  {
+    TSMutexGuard guard(mutex_);
+    entries_ = std::move(new_entries);
+  }
+
   TSDebug("early_hints", "loaded %zu entries from %s", entries_.size(), persist_path_.c_str());
   return true;
 }

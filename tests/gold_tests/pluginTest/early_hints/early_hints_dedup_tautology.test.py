@@ -1,5 +1,5 @@
 '''
-Test 103 Early Hints plugin — WP3: origin-forward dedup tautological comparison
+Test 103 Early Hints plugin — origin-forward dedup tautological comparison
 '''
 #  Licensed to the Apache Software Foundation (ASF) under one
 #  or more contributor license agreements.  See the NOTICE file
@@ -18,7 +18,7 @@ Test 103 Early Hints plugin — WP3: origin-forward dedup tautological compariso
 #  limitations under the License.
 
 Test.Summary = '''
-WP3: origin-forward dedup tautological comparison.
+Origin-forward dedup tautological comparison.
 
 Bug in dedup_link_segments(): the inner check compares
   (seg.find("rel=preconnect") != npos) == is_preconnect
@@ -35,7 +35,7 @@ Critical scenario:
 Wait — merge_hint_links deduplicates by URL key only. So even with both cached,
 only the FIRST one (preconnect) would appear in 103 if they share the same URL.
 
-Actual user-visible impact of WP3 bug:
+Actual user-visible impact of the dedup bug:
   When origin sends ONLY rel=preconnect for an asset (no preload), that gets
   cached and served correctly.
   When origin sends BOTH rel=preconnect AND rel=preload for the SAME URL,
@@ -47,7 +47,7 @@ The measurable gold test: verify that a URL with ONLY preconnect from origin
 works correctly (regression guard), and that the dedup_link_segments fix
 does not break genuine dedup (same URL + same rel = dedup correctly).
 
-The WP3 unit tests in test_integration.cc directly prove the dedup bug
+The unit tests in test_integration.cc directly prove the dedup bug
 via dedup_link_segments() calls. The gold test serves as an end-to-end
 regression guard for the origin-forward dedup path.
 '''
@@ -147,7 +147,7 @@ ts.Disk.records_config.update({
 # ----
 # TC0: Learn — preconnect-only page
 # ----
-tr0 = Test.AddTestRun("WP3: Learn preconnect-only page")
+tr0 = Test.AddTestRun("Dedup-fix: Learn preconnect-only page")
 tr0.Processes.Default.Command = (
     "curl -s -D - -o /dev/null"
     " --http2 --insecure"
@@ -160,9 +160,9 @@ tr0.StillRunningAfter = microserver
 
 # ----
 # TC1: Serve — preconnect-only must be served in 103
-# WP3 regression guard: preconnect-only (no dedup possible) must work correctly.
+# Regression guard: preconnect-only (no dedup possible) must work correctly.
 # ----
-tr1 = Test.AddTestRun("WP3: Preconnect-only hint must be served in 103")
+tr1 = Test.AddTestRun("Dedup-fix: Preconnect-only hint must be served in 103")
 tr1.Processes.Default.Command = (
     "sleep 1 ; curl -s -D - -o /dev/null"
     " --http2 --insecure"
@@ -176,10 +176,10 @@ tr1.StillRunningAfter = microserver
 
 # ----
 # TC2: Learn — multi-asset page (different URLs, both must survive — no false dedup)
-# WP3 bug: second DIFFERENT URL was never false-deduped (dedup only fires for same URL prefix).
+# Dedup bug: second DIFFERENT URL was never false-deduped (dedup only fires for same URL prefix).
 # This is a regression guard: both preload for style.css and preload for app.js must survive.
 # ----
-tr2 = Test.AddTestRun("WP3: Learn multi-asset page (2 different URL preloads)")
+tr2 = Test.AddTestRun("Dedup-fix: Learn multi-asset page (2 different URL preloads)")
 tr2.Processes.Default.Command = (
     "curl -s -D - -o /dev/null"
     " --http2 --insecure"
@@ -188,7 +188,7 @@ tr2.Processes.Default.ReturnCode = 0
 tr2.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression("200", "Should receive 200")
 tr2.StillRunningAfter = microserver
 
-tr3 = Test.AddTestRun("WP3: Both different-URL preloads must be served in 103 (no false dedup)")
+tr3 = Test.AddTestRun("Dedup-fix: Both different-URL preloads must be served in 103 (no false dedup)")
 tr3.Processes.Default.Command = (
     "sleep 1 ; curl -s -D - -o /dev/null"
     " --http2 --insecure"

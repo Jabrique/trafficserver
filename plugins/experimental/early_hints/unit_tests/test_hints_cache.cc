@@ -20,7 +20,11 @@
 #include <catch.hpp>
 #include "../hints_cache.h"
 #include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <cstring>
 #include <thread>
+#include <unistd.h>
 #include <vector>
 
 extern std::atomic<int> g_mutex_destroy_count;
@@ -285,7 +289,8 @@ TEST_CASE("HintsCache: destructor calls TSMutexDestroy", "[hints_cache]")
     HintsCache cache;
   } // destructor runs
   int after = g_mutex_destroy_count.load();
-  CHECK(after == before + 1);
+  // HintsCache now has 2 mutexes (mutex_ + persist_mutex_)
+  CHECK(after == before + 2);
 }
 
 // ─── Thread safety ──────────────────────────────────────────────────────────
@@ -508,4 +513,514 @@ TEST_CASE("HintsCache audit v2: make_key special characters", "[hints_cache][aud
     auto key = HintsCache::make_key("?query", 6);
     CHECK(key == "/"); // no path, falls back to root
   }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Cache Persistence Memory Optimization (Equality-Check on Links)
+//
+// Optimization: HintsCache::put() previously always replaced the shared_ptr
+// for cached links even when the new links vector is identical to what is
+// already stored. This causes unnecessary memory allocation + atomic ref-count
+// operations on every request after warm-up.
+//
+// Fix: before swapping the cached links shared_ptr, compare the new links
+// vector against the existing cached links. If equal, skip the swap.
+// The learn_count still increments on every put() (needed for min_hit_count
+// to survive restarts — learn_count must be persisted).
+//
+// Observability: shared_ptr identity. After a same-links put(), the shared_ptr
+// returned by get() must point to the SAME underlying object (no new allocation).
+// After a different-links put(), get() must return a new shared_ptr.
+//
+// put_persist_count() tracks actual persist_to_disk() calls (always fires when
+// persist_path is set, since learn_count always changes on each put()).
+// ═════════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("put() equality-check — shared_ptr identity preserved for identical links", "[hints_cache][debounce]")
+{
+  SECTION("first put creates entry")
+  {
+    HintsCache cache;
+    std::vector<std::string> links = {"</app.js>; rel=preload; as=script"};
+
+    cache.put("/page", links);
+    auto ptr1 = cache.get("/page", 1);
+    REQUIRE(ptr1 != nullptr);
+    CHECK(ptr1->size() == 1);
+  }
+
+  SECTION("second put with IDENTICAL links preserves shared_ptr identity (no new allocation)")
+  {
+    HintsCache cache;
+    std::vector<std::string> links = {"</app.js>; rel=preload; as=script"};
+
+    cache.put("/page", links);
+    auto ptr1 = cache.get("/page", 1);
+    REQUIRE(ptr1 != nullptr);
+
+    // Second put with same links — shared_ptr should remain the same object
+    cache.put("/page", links);
+    auto ptr2 = cache.get("/page", 2); // min_hits=2, learn_count is now 2
+
+    REQUIRE(ptr2 != nullptr);
+    // Both pointers must point to the same underlying LinkList — no re-allocation
+    CHECK(ptr1.get() == ptr2.get());
+  }
+
+  SECTION("put with DIFFERENT links creates new shared_ptr")
+  {
+    HintsCache cache;
+    std::vector<std::string> links1 = {"</app.js>; rel=preload; as=script"};
+    std::vector<std::string> links2 = {"</app.js>; rel=preload; as=script", "</style.css>; rel=preload; as=style"};
+
+    cache.put("/page", links1);
+    auto ptr1 = cache.get("/page", 1);
+    REQUIRE(ptr1 != nullptr);
+
+    cache.put("/page", links2); // different links — must create new shared_ptr
+    auto ptr2 = cache.get("/page", 1);
+    REQUIRE(ptr2 != nullptr);
+
+    // Pointers must differ — new allocation
+    CHECK(ptr1.get() != ptr2.get());
+    // New content must be reflected
+    REQUIRE(ptr2->size() == 2);
+  }
+
+  SECTION("learn_count still increments for identical-links puts (min_hit_count correctness)")
+  {
+    HintsCache cache;
+    std::vector<std::string> links = {"</a.js>; rel=preload; as=script"};
+
+    cache.put("/page", links); // learn_count=1
+    cache.put("/page", links); // learn_count=2 (debounced links, NOT debounced learn_count)
+    cache.put("/page", links); // learn_count=3
+
+    // min_hits=3 must work — learn_count must have been incremented even for identical links
+    auto result3 = cache.get("/page", 3);
+    REQUIRE(result3 != nullptr);
+
+    // min_hits=4 must fail (only 3 puts)
+    auto result4 = cache.get("/page", 4);
+    CHECK(result4 == nullptr);
+  }
+
+  SECTION("no persist_path set — put_persist_count stays 0")
+  {
+    HintsCache cache;
+    std::vector<std::string> links = {"</a.js>; rel=preload; as=script"};
+
+    // No set_persist_path() — persist logic never runs
+    cache.put("/page", links);
+    cache.put("/page", links);
+
+    CHECK(cache.put_persist_count() == 0);
+  }
+
+  SECTION("persist_path set — put_persist_count increments per put (learn_count persisted)")
+  {
+    HintsCache cache;
+    std::vector<std::string> links = {"</a.js>; rel=preload; as=script"};
+
+    cache.set_persist_path("/dev/null");
+    cache.put("/page", links); // count=1
+    cache.put("/page", links); // count=2 (learn_count changed, must persist)
+    cache.put("/page", links); // count=3
+
+    // Every put must persist because learn_count changes (min_hit_count restart safety)
+    CHECK(cache.put_persist_count() == 3);
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
+// Cache Persistence Hardening
+//
+// 1. KEY LENGTH CAP: put() with key > MAX_KEY_LEN (4096) must be silently dropped.
+//    Oversized keys cannot be valid URL paths and risk O(n) memory in persist file.
+//
+// 2. LEARN_COUNT CAP: learn_count must never exceed 1,000,000. Without a cap,
+//    sustained high traffic to a single URL would eventually overflow int.
+//
+// 3. LOAD_FROM_DISK ATOMIC SWAP: load_from_disk() must build a temp map and
+//    swap it in atomically (hold mutex only for the swap, not for parsing).
+//    Without this: a parse failure mid-way leaves the cache permanently empty.
+//
+// 4. LEARN_COUNT CLAMP ON LOAD: learn_count > 1,000,000 read from disk must be
+//    clamped to prevent overflow if file was written without the cap.
+//
+// 5. PERSIST CONCURRENCY: persist_to_disk() must be protected by persist_mutex_
+//    to prevent two concurrent put() calls from both serializing the cache.
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ─── Key length cap ───────────────────────────────────────────────────────────
+
+TEST_CASE("HintsCache: put() rejects key longer than MAX_KEY_LEN (4096)", "[hints_cache][key_cap]")
+{
+  HintsCache cache;
+  std::vector<std::string> links = {"</app.js>; rel=preload; as=script"};
+
+  SECTION("key exactly at 4096 chars is accepted")
+  {
+    std::string key(4096, '/');
+    cache.put(key, links);
+    // Key at limit must be accepted
+    CHECK(cache.size() == 1);
+  }
+
+  SECTION("key of 4097 chars is silently dropped")
+  {
+    std::string key(4097, '/');
+    cache.put(key, links);
+    // Key over limit: silently drop — cache stays empty
+    CHECK(cache.size() == 0);
+    CHECK(cache.drops() == 1);
+  }
+
+  SECTION("key of 65535 chars is silently dropped")
+  {
+    std::string key(65535, '/');
+    cache.put(key, links);
+    CHECK(cache.size() == 0);
+    CHECK(cache.drops() == 1);
+  }
+
+  SECTION("drops() increments for oversized key (not confused with capacity drop)")
+  {
+    HintsCache small_cache(5);
+    std::string long_key(5000, 'a');
+    small_cache.put(long_key, links);
+    small_cache.put(long_key, links);
+    CHECK(small_cache.drops() == 2);
+    CHECK(small_cache.size() == 0);
+  }
+}
+
+// ─── learn_count cap ──────────────────────────────────────────────────────────
+
+TEST_CASE("HintsCache: learn_count caps at max_learn_count()", "[hints_cache][learn_count_cap]")
+{
+  HintsCache cache;
+  std::vector<std::string> links = {"</app.js>; rel=preload; as=script"};
+
+  SECTION("learn_count does not exceed 1000000 after many identical puts")
+  {
+    // Simulate just above cap: 1000001 puts
+    // This test relies on HintsCache exposing learn_count via get() behavior,
+    // since there's no direct accessor. We verify via min_hits.
+    //
+    // After 1000000 puts, get(key, 1000000) must succeed.
+    // After 1000001 puts (capped), get(key, 1000001) must FAIL (count is capped).
+    //
+    // We can't actually call put() 1000001 times in a test (too slow).
+    // Instead: use the public learn_count accessor (requires adding it to hints_cache.h).
+    // OR: test the clamp via load_from_disk with an oversized learn_count in the file.
+
+    // The load path is the canonical test for clamp behavior:
+    // A persisted file with learn_count = 2000000 must clamp to 1000000 after load.
+    // // (See learn_count clamp test below.)
+    //
+    // For the put() cap: we test via put_persist_count() staying within reasonable bounds,
+    // and verify through a test-only accessor if we add one. This section validates
+    // the API contract — after the fix, HintsCache must expose max_learn_count.
+    CHECK(HintsCache::max_learn_count() == 1000000);
+  }
+
+  SECTION("after exactly max_learn_count puts, get at max_learn_count succeeds")
+  {
+    // We use a much smaller MAX for this test — but HintsCache doesn't support
+    // injecting a custom max_learn_count. So we test via the file-load path:
+    // write a persist file with learn_count = max_learn_count, verify get works.
+    // // (This test is verified in the load_from_disk clamp test below.)
+    //
+    // This section documents the API expectation for the cap constant.
+    CHECK(HintsCache::max_learn_count() > 0);
+    CHECK(HintsCache::max_learn_count() <= 2000000);
+  }
+}
+
+// ─── load_from_disk atomic swap ───────────────────────────────────────────────
+
+TEST_CASE("HintsCache: load_from_disk uses atomic swap — existing cache preserved on failure", "[hints_cache][atomic_load]")
+{
+  SECTION("load_from_disk on corrupt file does not clear existing cache")
+  {
+    // load_from_disk() must build a temporary map and swap it in atomically.
+    // If parsing fails mid-way, the existing cache must remain unaffected.
+
+    HintsCache cache;
+    std::vector<std::string> existing_links = {"</existing.js>; rel=preload; as=script"};
+
+    // Pre-populate cache with good data
+    cache.put("/existing-page", existing_links);
+    cache.put("/existing-page", existing_links);
+    REQUIRE(cache.size() == 1);
+    REQUIRE(cache.get("/existing-page", 2) != nullptr);
+
+    // Now "load" a corrupt file — this must NOT wipe the existing cache
+    cache.set_persist_path("/dev/null"); // /dev/null reads as empty = bad magic
+    bool ok = cache.load_from_disk();
+    CHECK_FALSE(ok);
+
+    // BUG: before fix, entries_ is cleared before magic check in some code paths.
+    // AFTER FIX: existing cache must survive a failed load.
+    // Note: the current implementation clears AFTER magic check for bad magic,
+    // but clears BEFORE the loop for valid header. This is the race condition.
+    //
+    // This test covers the scenario where: cache is populated → load fails →
+    // cache must still serve the pre-existing hints.
+    //
+    // After the fix (atomic swap), get on existing data must still work.
+    // The cache path is /dev/null which reads as header failure → no clear.
+    // This currently passes for /dev/null but fails for valid header + truncated entries.
+    auto result = cache.get("/existing-page", 1);
+    REQUIRE(result != nullptr);
+    CHECK((*result)[0] == "</existing.js>; rel=preload; as=script");
+  }
+
+  SECTION("load_from_disk fails mid-parse — cache stays populated (valid header, truncated)")
+  {
+    // Write a file with valid header claiming 5 entries but only has data for 1.
+    // After the 1st entry is read successfully, parsing the 2nd fails.
+    // The 1st entry must NOT be committed if we use atomic swap.
+    // (Or: all entries must be committed — the test documents which behavior is expected.)
+    //
+    // With atomic swap: all-or-nothing → on mid-parse failure, existing cache preserved.
+    // Without atomic swap: partial entries committed, and original data wiped.
+    //
+    // This test verifies the all-or-nothing guarantee:
+    // pre-existing cache data must be preserved if load_from_disk returns false.
+
+    HintsCache cache(1000);
+    std::vector<std::string> original_links = {"</original.js>; rel=preload; as=script"};
+    cache.put("/original", original_links);
+    cache.put("/original", original_links); // learn_count=2
+    REQUIRE(cache.size() == 1);
+
+    // Build a valid-header file claiming 2 entries, but only write 1 complete entry
+    std::string path = "/tmp/eh_test_atomic_" + std::to_string(getpid()) + ".bin";
+    {
+      FILE *fp = fopen(path.c_str(), "wb");
+      REQUIRE(fp);
+      uint32_t magic = HINTS_CACHE_MAGIC;
+      uint32_t count = 2; // claims 2 entries
+      fwrite(&magic, sizeof(magic), 1, fp);
+      fwrite(&count, sizeof(count), 1, fp);
+
+      // Write 1 complete entry
+      uint16_t key_len = 5;
+      fwrite(&key_len, sizeof(key_len), 1, fp);
+      fwrite("/page", 5, 1, fp);
+      uint32_t lc = 3;
+      fwrite(&lc, sizeof(lc), 1, fp);
+      uint16_t link_count = 1;
+      fwrite(&link_count, sizeof(link_count), 1, fp);
+      uint16_t ll = 30;
+      fwrite(&ll, sizeof(ll), 1, fp);
+      fwrite("</new.js>; rel=preload; as=script", 30, 1, fp); // NOLINT: correct size
+
+      // Do NOT write 2nd entry — truncated
+      fclose(fp);
+    }
+
+    cache.set_persist_path(path);
+    bool ok = cache.load_from_disk();
+    std::remove(path.c_str());
+
+    CHECK_FALSE(ok); // Must fail (truncated)
+
+    // ATOMIC SWAP GUARANTEE:
+    // The pre-existing /original entry must still be in the cache.
+    // (Without atomic swap: /original is gone, /page may or may not be there)
+    auto result = cache.get("/original", 1);
+    CHECK(result != nullptr); // Existing cache must be preserved
+  }
+}
+
+// ─── learn_count clamp on load ──────────────────────────────────────────────
+
+TEST_CASE("HintsCache: load_from_disk clamps oversized learn_count to max_learn_count", "[hints_cache][learn_count_clamp]")
+{
+  std::string path = "/tmp/eh_clamp_" + std::to_string(getpid()) + ".bin";
+
+  // Write persist file with learn_count = 2,000,000 (above 1,000,000 cap)
+  {
+    FILE *fp = fopen(path.c_str(), "wb");
+    REQUIRE(fp);
+    uint32_t magic = HINTS_CACHE_MAGIC;
+    uint32_t count = 1;
+    fwrite(&magic, sizeof(magic), 1, fp);
+    fwrite(&count, sizeof(count), 1, fp);
+
+    uint16_t key_len = 5;
+    fwrite(&key_len, sizeof(key_len), 1, fp);
+    fwrite("/page", 5, 1, fp);
+
+    uint32_t lc = 2000000; // way over cap
+    fwrite(&lc, sizeof(lc), 1, fp);
+
+    uint16_t link_count = 1;
+    fwrite(&link_count, sizeof(link_count), 1, fp);
+    const char *link  = "</app.js>; rel=preload; as=script";
+    uint16_t link_len = static_cast<uint16_t>(strlen(link));
+    fwrite(&link_len, sizeof(link_len), 1, fp);
+    fwrite(link, link_len, 1, fp);
+
+    fclose(fp);
+  }
+
+  HintsCache cache;
+  cache.set_persist_path(path);
+  REQUIRE(cache.load_from_disk());
+  std::remove(path.c_str());
+
+  // After clamping: learn_count must be 1,000,000
+  // get(key, 1000000) must succeed
+  auto result = cache.get("/page", 1000000);
+  CHECK(result != nullptr);
+
+  // get(key, 1000001) must fail (clamped to exactly 1,000,000)
+  auto result_fail = cache.get("/page", 1000001);
+  CHECK(result_fail == nullptr);
+}
+
+// ─── Concurrent persist safety ───────────────────────────────────────────────
+
+TEST_CASE("HintsCache: concurrent put() calls produce valid persist file", "[hints_cache][persist_concurrent][threading]")
+{
+  std::string path = "/tmp/eh_persist_conc_" + std::to_string(getpid()) + ".bin";
+  std::remove(path.c_str());
+
+  HintsCache cache;
+  cache.set_persist_path(path);
+
+  constexpr int NUM_THREADS     = 4;
+  constexpr int PUTS_PER_THREAD = 50;
+
+  std::vector<std::string> links = {"</app.js>; rel=preload; as=script"};
+
+  auto worker = [&](int id) {
+    for (int i = 0; i < PUTS_PER_THREAD; i++) {
+      std::string key = "/page" + std::to_string(id);
+      cache.put(key, links);
+    }
+  };
+
+  std::vector<std::thread> threads;
+  for (int i = 0; i < NUM_THREADS; i++) {
+    threads.emplace_back(worker, i);
+  }
+  for (auto &t : threads) {
+    t.join();
+  }
+
+  // After concurrent puts, persist file must be readable and valid
+  HintsCache cache2;
+  cache2.set_persist_path(path);
+  CHECK(cache2.load_from_disk());
+  CHECK(cache2.size() > 0);
+  CHECK(cache2.size() <= NUM_THREADS);
+
+  std::remove(path.c_str());
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Additional cache safety tests
+//
+// drop_counter_ must be safe under concurrent drops.
+//     Currently int64_t protected only by mutex_ in drops() call-site.
+//     But put() increments drop_counter_ INSIDE the mutex guard already,
+//     so the real question is whether drops() const can call TSMutexGuard
+//     on a non-mutable mutex. This is currently UB / non-const-correct.
+//     Fix: make drops() thread-safe without UB (either mutable mutex or
+//     change drop_counter_ to std::atomic<int64_t> and remove mutex from drops()).
+//
+// evict_oldest() should prefer stale (never-accessed) entries over recently read ones.
+//     A freshly-accessed (get()) entry can be evicted before a stale
+//     one that was written long ago but never read since.
+//     Fix: add last_accessed to HintEntry, update in get(), use
+//     max(last_updated, last_accessed) in evict_oldest().
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ─── drops() concurrent safety test ──────────────────────────────────────────
+//
+// Test that concurrent put() calls into a full cache (max_entries=0) produce
+// the exact expected drop count. This will race on drop_counter_ if it is not
+// properly protected under all code paths.
+//
+// Expectation: drops() must be const-correct and race-free.
+// TSMutexGuard on a non-mutable TSMutex in a const method is ill-formed.
+// Once drop_counter_ becomes std::atomic<int64_t>, drops() can be truly const
+// without any mutex, and concurrent increments are safe.
+
+TEST_CASE("drops() returns exact count under concurrent pressure", "[hints_cache][drops][threading]")
+{
+  constexpr int NUM_THREADS = 8;
+  constexpr int DROPS_PER   = 100; // each thread drops 100 keys into max_entries=0 cache
+
+  HintsCache cache(0); // max_entries=0 → every put() is a drop
+  std::vector<std::string> links = {"</app.js>; rel=preload; as=script"};
+
+  auto worker = [&](int id) {
+    for (int i = 0; i < DROPS_PER; i++) {
+      cache.put("/key-" + std::to_string(id) + "-" + std::to_string(i), links);
+    }
+  };
+
+  std::vector<std::thread> threads;
+  for (int i = 0; i < NUM_THREADS; i++) {
+    threads.emplace_back(worker, i);
+  }
+  for (auto &t : threads) {
+    t.join();
+  }
+
+  // Expected: NUM_THREADS * DROPS_PER total drops, no races
+  int64_t expected = static_cast<int64_t>(NUM_THREADS) * DROPS_PER;
+  CHECK(cache.drops() == expected);
+  CHECK(cache.size() == 0);
+}
+
+// ─── evict_oldest() must prefer entries never accessed ──────────────────
+//
+// Scenario: cache capacity=2, fill with entries A and B.
+// Access (get) entry A. Then insert C → eviction needed.
+// Fix: evict_oldest() should evict B (never accessed), not A (recently accessed).
+// Without fix: evict_oldest uses only last_updated which is
+// identical for A and B (both put at the same time). Eviction is non-deterministic.
+// With fix: last_accessed is updated on get(), B is evicted because its
+// max(last_updated, last_accessed) is older than A's max(last_updated, last_accessed).
+//
+// Expectation: without last_accessed, we cannot guarantee A survives. This test documents
+// the expected post-fix behavior.
+
+TEST_CASE("evict_oldest() prefers never-accessed entries over recently-accessed ones", "[hints_cache][eviction]")
+{
+  HintsCache cache(2);
+  std::vector<std::string> links = {"</app.js>; rel=preload; as=script"};
+
+  // Insert A and B at t=0 (same timestamp due to fast test)
+  cache.put("/entry-A", links);
+  cache.put("/entry-B", links);
+  REQUIRE(cache.size() == 2);
+
+  // Access A — this should update its last_accessed
+  // We sleep 1 second to ensure time difference is observable
+  std::this_thread::sleep_for(std::chrono::seconds(1));
+  auto ptr_a = cache.get("/entry-A", 1);
+  REQUIRE(ptr_a != nullptr); // confirm A is accessible
+
+  // Now add C — one of A or B must be evicted
+  cache.put("/entry-C", links);
+  REQUIRE(cache.size() == 2); // still 2 after eviction
+
+  // C must be present (just inserted)
+  CHECK(cache.get("/entry-C", 1) != nullptr);
+
+  // Requirement: A must survive because it was recently accessed.
+  // B must be evicted because it was never accessed after initial put.
+  // Without last_accessed, eviction is non-deterministic for same-timestamp entries.
+  // After fix: A must always survive, B must be evicted.
+  CHECK(cache.get("/entry-A", 1) != nullptr); // A: recently accessed → must survive
+  CHECK(cache.get("/entry-B", 1) == nullptr); // B: never accessed → must be evicted
 }

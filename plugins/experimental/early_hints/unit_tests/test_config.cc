@@ -715,7 +715,7 @@ TEST_CASE("Config link validation: check_rel boundary logic", "[config]")
     CHECK_FALSE(parse_config(config, {"--mode", "manual", "--link", "</a.js>;\trel=preload;\tas=script"}));
   }
 
-  SECTION("rel=preload followed by double-quote is REJECTED (WP9 fix: quote is not a valid unquoted boundary)")
+  SECTION("rel=preload followed by double-quote is REJECTED (quote is not a valid unquoted boundary)")
   {
     EarlyHintsConfig config;
     // rel=preload"extra" uses '"' as boundary for unquoted form — not valid.
@@ -723,7 +723,7 @@ TEST_CASE("Config link validation: check_rel boundary logic", "[config]")
     CHECK_FALSE(parse_config(config, {"--mode", "manual", "--link", "</a.js>; rel=preload\"extra\""}));
   }
 
-  SECTION("rel=preload followed by single-quote is REJECTED (WP9 fix: quote is not a valid unquoted boundary)")
+  SECTION("rel=preload followed by single-quote is REJECTED (quote is not a valid unquoted boundary)")
   {
     EarlyHintsConfig config;
     CHECK_FALSE(parse_config(config, {"--mode", "manual", "--link", "</a.js>; rel=preload'extra'"}));
@@ -1129,9 +1129,9 @@ TEST_CASE("Config audit: safe_parse_int strtol behavior", "[config][audit]")
 
 TEST_CASE("Config audit: link validation URL edge cases", "[config][audit]")
 {
-  SECTION("whitespace-only URL REJECTED after WP1 allowlist fix (scheme_start == npos)")
+  SECTION("whitespace-only URL REJECTED by allowlist (scheme_start == npos)")
   {
-    // URL portion is " " — after WP1 fix, url_part.find_first_not_of returns npos
+    // URL portion is " " — after allowlist fix, url_part.find_first_not_of returns npos
     // for all-whitespace URLs, which is now correctly rejected (useless URL).
     EarlyHintsConfig config;
     CHECK_FALSE(parse_config(config, {"--mode", "manual", "--link", "< >; rel=preload; as=script"}));
@@ -2424,13 +2424,13 @@ TEST_CASE("merge_hint_links: edge cases", "[config][merge]")
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// WP1: Scheme allowlist unification — RED tests
+// Scheme allowlist unification tests
 // These must FAIL before fix, PASS after fix.
 // Bug: is_valid_link_value uses denylist (only blocks js/data/vbscript/blob).
 // Exotic schemes like file:, ftp:, chrome-extension: bypass the denylist.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-TEST_CASE("WP1: is_valid_link_value rejects exotic schemes (allowlist)", "[config][security][wp1]")
+TEST_CASE("is_valid_link_value rejects exotic schemes (allowlist)", "[config][security][allowlist]")
 {
   SECTION("file:// scheme rejected — not in current denylist (BUG)")
   {
@@ -2502,12 +2502,12 @@ TEST_CASE("WP1: is_valid_link_value rejects exotic schemes (allowlist)", "[confi
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// WP9: check_rel boundary — norel= false positive (RED)
+// check_rel boundary — norel= false positive
 // Bug: `"` and `'` allowed as after_ok boundary in unquoted rel check,
 // so `rel=preload"garbage` passes incorrectly.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-TEST_CASE("WP9: check_rel boundary — quote not valid for unquoted rel form", "[config][wp9]")
+TEST_CASE("check_rel boundary — quote not valid for unquoted rel form", "[config][rel_boundary]")
 {
   SECTION("rel=preload followed by double-quote is REJECTED (unquoted form boundary bug)")
   {

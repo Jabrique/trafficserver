@@ -1,5 +1,5 @@
 '''
-Test 103 Early Hints plugin — URL scheme allowlist (WP1) and rel= boundary (WP9)
+Test 103 Early Hints plugin — URL scheme allowlist and rel= boundary validation
 '''
 #  Licensed to the Apache Software Foundation (ASF) under one
 #  or more contributor license agreements.  See the NOTICE file
@@ -18,15 +18,15 @@ Test 103 Early Hints plugin — URL scheme allowlist (WP1) and rel= boundary (WP
 #  limitations under the License.
 
 Test.Summary = '''
-WP1: URL scheme allowlist enforcement (integration).
-WP9: rel= boundary validation for manual --link values.
+URL scheme allowlist enforcement (integration).
+rel= boundary validation for manual --link values.
 
 Verifies that exotic schemes from origin Link headers (file://, ftp://, ws://)
 are rejected by the allowlist and never forwarded or cached as early hints.
 Valid http/https and relative URLs continue to work normally.
 
-Note: WP1 fix is committed. These tests serve as regression guards.
-Before WP1 fix (denylist), file:// and ftp:// passed is_valid_link_value
+Fix is committed. These tests serve as regression guards.
+Before allowlist fix (denylist), file:// and ftp:// passed is_valid_link_value
 and would have been forwarded — these tests would have FAILED.
 '''
 
@@ -41,7 +41,7 @@ Test.ContinueOnFail = True
 # ----
 microserver = Test.MakeOriginServer("microserver")
 
-# Origin sends exotic schemes in Link headers — all must be rejected (WP1)
+# Origin sends exotic schemes in Link headers — all must be rejected
 microserver.addResponse(
     "sessionfile.log", {
         "headers": "GET /exotic-schemes.html HTTP/1.1\r\nHost: www.example.com\r\n\r\n",
@@ -123,9 +123,9 @@ ts.Disk.records_config.update({
 
 # ----
 # TC0: First request — origin sends file://, ftp://, ws:// — plugin must reject all
-# (Before WP1 fix: these would have been cached. After fix: rejected by allowlist.)
+# (Before fix: these would have been cached. After allowlist fix: rejected.)
 # ----
-tr0 = Test.AddTestRun("WP1: First request (H2) with exotic scheme Link headers — verify rejection")
+tr0 = Test.AddTestRun("Scheme-validation: First request (H2) with exotic scheme Link headers — verify rejection")
 tr0.Processes.Default.Command = (
     "curl -s -D - -o /dev/null"
     " --http2"
@@ -137,7 +137,7 @@ tr0.Processes.Default.StartBefore(Test.Processes.ts)
 tr0.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression("200", "Should receive 200 OK")
 # CRITICAL: plugin must process origin Link headers (H2 passes h1-skip) and reject exotic schemes.
 # status=no-hints proves: plugin ran, saw file://+ftp://+ws://, rejected all via allowlist.
-# Before WP1 fix (denylist): file:// passed → status would be "learned" or "sent" not "no-hints".
+# Before allowlist fix: exotic schemes passed → status would have been "learned" or "sent".
 tr0.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
     "x-early-hints-status: no-hints",
     "Plugin must reject all exotic schemes — status must be no-hints not sent/learned")
@@ -148,17 +148,17 @@ tr0.StillRunningAfter = microserver
 # ATS transparently passes origin Link headers in the 200 response regardless.
 # What we test: plugin status must be "no-hints" (nothing cached from exotic schemes),
 # and no 103 Early Hints is sent (the only thing the plugin controls).
-# With WP1 fix: file://, ftp://, ws:// rejected → no-hints.
+# With allowlist fix: file://, ftp://, ws:// rejected → no-hints.
 # With old denylist: these would have been cached → 103 sent with exotic links.
 # ----
-tr1 = Test.AddTestRun("WP1: Second request — exotic schemes must NOT be cached (no 103 sent)")
+tr1 = Test.AddTestRun("Scheme-validation: Second request — exotic schemes must NOT be cached (no 103 sent)")
 tr1.Processes.Default.Command = (
     "sleep 1 && curl -s -D - -o /dev/null"
     " --http2"
     " --insecure"
     " 'https://127.0.0.1:{0}/exotic-schemes.html'".format(ts.Variables.ssl_port))
 tr1.Processes.Default.ReturnCode = 0
-# With WP1 fix: plugin rejected all links, nothing cached, no 103 sent
+# With allowlist fix: plugin rejected all links, nothing cached, no 103 sent
 # x-early-hints-status must be "no-hints" NOT "sent"
 tr1.Processes.Default.Streams.stdout.Content = Testers.ExcludesExpression(
     "x-early-hints-status: sent", "No exotic scheme links should have been cached — no 103 sent")
@@ -170,7 +170,7 @@ tr1.StillRunningAfter = microserver
 # TC2: Valid relative Link header — must still work normally
 # Proves the allowlist fix does not break legitimate relative/http/https URLs.
 # ----
-tr2 = Test.AddTestRun("WP1: Valid relative Link from origin — learn phase")
+tr2 = Test.AddTestRun("Scheme-validation: Valid relative Link from origin — learn phase")
 tr2.Processes.Default.Command = (
     "curl -s -D - -o /dev/null"
     " --http1.1"
@@ -180,7 +180,7 @@ tr2.Processes.Default.ReturnCode = 0
 tr2.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression("200 OK", "Should receive 200 OK")
 tr2.StillRunningAfter = microserver
 
-tr3 = Test.AddTestRun("WP1: Valid link cached and served — H2 gets 103")
+tr3 = Test.AddTestRun("Scheme-validation: Valid link cached and served — H2 gets 103")
 tr3.Processes.Default.Command = (
     "curl -s -D - -o /dev/null"
     " --http2"

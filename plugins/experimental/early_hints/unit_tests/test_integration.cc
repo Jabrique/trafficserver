@@ -936,7 +936,7 @@ TEST_CASE("Origin-forward dedup: same URL, different rel types are NOT deduplica
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// WP3: Origin-forward dedup tautological comparison — RED tests
+// Origin-forward dedup tautological comparison tests
 //
 // Bug in dedup_link_segments() (link_parser.cc), mirroring early_hints.cc:
 //   bool is_preconnect = seg.find("rel=preconnect") != std::string::npos;
@@ -953,7 +953,7 @@ TEST_CASE("Origin-forward dedup: same URL, different rel types are NOT deduplica
 // link_parser.cc) — NOT a test helper. RED before fix, GREEN after fix.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-TEST_CASE("WP3: dedup_link_segments() tautological comparison drops different-rel entries", "[integration][wp3][dedup]")
+TEST_CASE("dedup_link_segments() tautological comparison drops different-rel entries", "[integration][dedup]")
 {
   SECTION("BUG: preload then preconnect for same URL — preconnect incorrectly dropped")
   {

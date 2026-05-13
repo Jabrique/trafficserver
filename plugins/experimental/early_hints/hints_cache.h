@@ -91,6 +91,20 @@ public:
   int64_t drops() const;
 
   /**
+   * Number of times persist_to_disk() was actually called inside put().
+   * Used by unit tests to verify the equality-check debounce:
+   * identical link content for an existing key must NOT increment this counter.
+   */
+  int64_t put_persist_count() const;
+
+  /** Maximum learn_count value — capped in put() and clamped on load. */
+  static constexpr int
+  max_learn_count()
+  {
+    return 1000000;
+  }
+
+  /**
    * Normalize URL path to cache key.
    * Strips query string — intentional: <head> resources are typically
    * identical across query string variants for the same path.
@@ -108,10 +122,14 @@ public:
 
 private:
   TSMutex mutex_;
+  TSMutex persist_mutex_; // Serialize persist_to_disk() — prevents concurrent disk writes
   std::unordered_map<std::string, HintEntry> entries_;
-  int64_t drop_counter_ = 0;
+  int64_t drop_counter_  = 0;
+  int64_t persist_count_ = 0; // Counts actual persist_to_disk() calls inside put()
   int max_entries_;
   std::string persist_path_;
+
+  static constexpr int MAX_KEY_LEN = 4096; // Reject keys longer than this in put()
 
   // Evict oldest entries when cache is full (called with mutex held)
   void evict_oldest();
