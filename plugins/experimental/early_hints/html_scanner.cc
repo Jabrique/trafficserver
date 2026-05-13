@@ -177,12 +177,28 @@ HtmlScanner::is_crossorigin(const std::string &href)
     return true;
   }
 
-  // Absolute URL: https://example.com/path
-  if (href.find("://") != std::string::npos) {
-    return true;
+  // Absolute URL: must have a scheme per RFC 3986 §3.1:
+  //   scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ) ":"
+  // We require the scheme to start from the beginning of the URL.
+  // This prevents false positives when "://" appears inside a query string,
+  // e.g. /proxy?url=https://cdn.example.com — that is a same-origin URL.
+  const char *s = href.c_str();
+  size_t n      = href.size();
+  if (n > 0 && std::isalpha(static_cast<unsigned char>(s[0]))) {
+    for (size_t i = 1; i < n; i++) {
+      char c = s[i];
+      if (c == ':' && i + 2 < n && s[i + 1] == '/' && s[i + 2] == '/') {
+        // Found scheme:// starting from position 0 — this is cross-origin.
+        return true;
+      }
+      // Valid scheme chars: ALPHA / DIGIT / "+" / "-" / "."
+      if (!std::isalnum(static_cast<unsigned char>(c)) && c != '+' && c != '-' && c != '.') {
+        break; // Not a scheme char — no scheme at start, relative URL
+      }
+    }
   }
 
-  // Relative URLs (start with / or no scheme) are same-origin
+  // Relative URL (path starts with /, relative path, or :// only in query) — same-origin
   return false;
 }
 
@@ -200,8 +216,32 @@ HtmlScanner::extract_origin(const std::string &url)
     return std::string::npos;
   };
 
-  size_t scheme_end = url.find("://");
+  // RFC 3986 §3.1 scheme detection: scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ) "://"
+  // Only recognize scheme:// when it starts from position 0 of the URL (ALPHA at pos 0).
+  // This prevents false positives when :// appears inside a query string or path,
+  // e.g. /proxy?url=https://cdn.example.com — that is a relative (same-origin) URL,
+  // NOT an absolute URL with scheme "proxy?url=https".
+  //
+  // Naive url.find("://") would return 16 for /proxy?url=https://... and incorrectly
+  // extract "/proxy?url=https://cdn.example.com" as the "origin".
+  size_t scheme_end = std::string::npos;
+  if (!url.empty() && std::isalpha(static_cast<unsigned char>(url[0]))) {
+    for (size_t i = 1; i < url.size(); i++) {
+      char c = url[i];
+      if (c == ':' && i + 2 < url.size() && url[i + 1] == '/' && url[i + 2] == '/') {
+        // Found scheme:// starting at position 0 — valid absolute URL
+        scheme_end = i;
+        break;
+      }
+      // Valid scheme chars per RFC 3986 §3.1: ALPHA / DIGIT / "+" / "-" / "."
+      if (!std::isalnum(static_cast<unsigned char>(c)) && c != '+' && c != '-' && c != '.') {
+        break; // Not a valid scheme char — no scheme at start, relative URL
+      }
+    }
+  }
+
   if (scheme_end == std::string::npos) {
+    // No absolute scheme at position 0.
     // Per WHATWG URL spec §4.2, browsers treat \ as / in the authority
     // component of special schemes. Normalize \\, \/, /\ to // before
     // protocol-relative parsing to match browser behavior.
@@ -213,6 +253,9 @@ HtmlScanner::extract_origin(const std::string &url)
       }
       return "https:" + normalized.substr(0, auth_end);
     }
+    // Relative URL (path, query-only, etc.) — return as-is.
+    // Callers must NOT call extract_origin for relative URLs; is_crossorigin()
+    // guards this. If called anyway (defensive), return url unchanged.
     return url;
   }
 

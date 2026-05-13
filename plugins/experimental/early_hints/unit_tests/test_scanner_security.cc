@@ -1325,3 +1325,246 @@ TEST_CASE("R6: scan limit mid-body tag", "[scanner][r6]")
   CHECK(links.size() <= 1);
   CHECK(scanner.is_done());
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// WP2: is_crossorigin + extract_origin :// false positive — RED tests
+// Bug: href.find("://") matches anywhere in string, so a same-origin proxy URL
+// like /proxy?url=https://cdn.example.com/x.js is treated as cross-origin.
+// Fix: detect scheme only when :// is preceded by valid RFC 3986 scheme chars
+// (ALPHA prefix), not when it appears inside a query string.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("WP2: is_crossorigin false positive on query string containing ://", "[html_scanner][wp2]")
+{
+  SECTION("proxy URL with :// in query string treated as same-origin (BUG: treated as cross-origin)")
+  {
+    // /proxy?url=https://cdn.example.com/x.js is a same-origin URL.
+    // Current is_crossorigin finds "://" and returns true. Should return false.
+    std::string html =
+      R"(<html><head><link rel="preload" href="/proxy?url=https://cdn.example.com/app.js" as="script"></head></html>)";
+    auto links = scan_html(html);
+    REQUIRE(links.size() == 1);
+    // Same-origin proxy URL must produce rel=preload (same-origin), NOT rel=preconnect
+    CHECK(links[0].find("rel=preload") != std::string::npos);
+    CHECK(links[0].find("/proxy?url=https://cdn.example.com/app.js") != std::string::npos);
+    CHECK(links[0].find("rel=preconnect") == std::string::npos);
+  }
+
+  SECTION("script src proxy with :// in query treated as same-origin (BUG)")
+  {
+    std::string html = R"(<html><head><script src="/loader?src=https://cdn.example.com/lib.js"></script></head></html>)";
+    auto links       = scan_html(html);
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=preload; as=script") != std::string::npos);
+    CHECK(links[0].find("/loader?src=https://cdn.example.com/lib.js") != std::string::npos);
+    CHECK(links[0].find("rel=preconnect") == std::string::npos);
+  }
+
+  SECTION("genuine cross-origin URL still detected as cross-origin after fix")
+  {
+    std::string html = R"(<html><head><link rel="preload" href="https://cdn.example.com/app.js" as="script"></head></html>)";
+    auto links       = scan_html(html);
+    REQUIRE(links.size() == 1);
+    // Genuine cross-origin, no whitelist: must be preconnect
+    CHECK(links[0].find("rel=preconnect") != std::string::npos);
+  }
+
+  SECTION("absolute URL without ALPHA prefix :// is treated as same-origin (relative with colon)")
+  {
+    // Edge case: a URL like "?foo=bar://baz" has :// but no alpha scheme prefix
+    std::string html = R"(<html><head><link rel="preload" href="?foo=bar://baz/style.css" as="style"></head></html>)";
+    auto links       = scan_html(html);
+    // This is a relative URL (query-only). Must be same-origin preload, not preconnect.
+    if (!links.empty()) {
+      CHECK(links[0].find("rel=preconnect") == std::string::npos);
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// WP2 SISA: extract_origin() RFC 3986 compliance
+// Bug: extract_origin() uses url.find("://") naively. For a same-origin proxy URL
+// /proxy?url=https://cdn.example.com/x.js, url.find("://") returns 16 (inside
+// query string), causing extract_origin to return "/proxy?url=https://cdn.example.com"
+// — a completely wrong "origin".
+//
+// Although extract_origin() is currently protected by is_crossorigin() gate
+// (which already uses RFC 3986 detection), extract_origin() itself must be
+// consistent for defensive correctness and future-proofing.
+//
+// Fix: Use RFC 3986 §3.1 scheme detection in extract_origin() — only detect
+// scheme:// when it starts from position 0 with ALPHA prefix, not when ://
+// appears anywhere in the string.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Helper to expose extract_origin for direct testing via scanner subclass trick.
+// We use a thin wrapper since extract_origin is a private static — test via
+// build_link_header behavior when is_crossorigin is bypassed isn't directly
+// testable. Instead we test the integration: a URL with :// in a proxy query
+// must NOT produce a hint with the wrong "origin" fragment in the link value.
+//
+// NOTE: The direct unit test is done via the html output: when a link tag has
+// href="/proxy?url=https://cdn.example.com/app.js" and scanner correctly treats
+// it as same-origin (is_crossorigin=false), extract_origin is never called.
+// The risk case is: if a future change breaks is_crossorigin gating and
+// extract_origin is called with this URL, it must NOT return a bad "origin".
+// We test this through an exposed test-only method declared in html_scanner.h.
+
+TEST_CASE("WP2 SISA: extract_origin must use RFC 3986 scheme detection, not naive url.find(\"://\")",
+          "[html_scanner][wp2][extract_origin]")
+{
+  // We test extract_origin indirectly via the end-to-end scanner behaviour.
+  // A proxy URL /proxy?url=https://cdn.example.com/app.js must produce:
+  //   <link> => rel=preload; as=script (same-origin preload of the full proxy URL)
+  //   NOT: <https://cdn.example.com>; rel=preconnect (wrong — cross-origin of inner URL)
+  //   NOT: </proxy?url=https://cdn.example.com>; rel=preconnect (wrong — broken origin)
+  //
+  // If extract_origin were called for this URL (hypothetical future regression):
+  //   - Buggy: url.find("://") = 16, extracts "/proxy?url=https://cdn.example.com"
+  //   - Fixed: detects no scheme at pos 0, returns url as-is
+
+  SECTION("proxy URL with :// in query string — preload uses full URL, not broken origin")
+  {
+    // This confirms extract_origin is NOT called (is_crossorigin returns false).
+    // If it WERE called, the buggy version would produce a broken result.
+    std::string html =
+      R"(<html><head><link rel="preload" href="/proxy?url=https://cdn.example.com/app.js" as="script"></head></html>)";
+    auto links = scan_html(html);
+    REQUIRE(links.size() == 1);
+    // Must use the full URL in the preload (same-origin, not cross-origin path)
+    CHECK(links[0].find("/proxy?url=https://cdn.example.com/app.js") != std::string::npos);
+    // Must NOT contain a bare cdn.example.com origin (that would mean extract_origin was called)
+    CHECK(links[0].find("cdn.example.com>") == std::string::npos);
+    // Must NOT contain the broken partial origin "/proxy?url=https://cdn.example.com"
+    CHECK(links[0].find("/proxy?url=https://cdn.example.com>") == std::string::npos);
+  }
+
+  SECTION("stylesheet proxy URL with :// in query — same-origin preload, not preconnect")
+  {
+    std::string html = R"(<html><head><link rel="stylesheet" href="/assets?src=https://fonts.googleapis.com/css2"></head></html>)";
+    auto links       = scan_html(html);
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=preload; as=style") != std::string::npos);
+    CHECK(links[0].find("/assets?src=https://fonts.googleapis.com/css2") != std::string::npos);
+    CHECK(links[0].find("fonts.googleapis.com>") == std::string::npos);
+  }
+
+  SECTION("script proxy URL — correct same-origin preload")
+  {
+    std::string html =
+      R"(<html><head><script src="/loader?url=https://unpkg.com/react@18/umd/react.production.min.js"></script></head></html>)";
+    auto links = scan_html(html);
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=preload; as=script") != std::string::npos);
+    CHECK(links[0].find("/loader?url=https://unpkg.com") != std::string::npos);
+    CHECK(links[0].find("unpkg.com>") == std::string::npos);
+  }
+
+  SECTION("genuine cross-origin URL — extract_origin produces correct scheme+host (regression guard)")
+  {
+    // After fix: https://cdn.example.com/app.js must still yield https://cdn.example.com as origin
+    // (is_crossorigin=true, no whitelist → preconnect to origin only)
+    std::string html = R"(<html><head><link rel="preload" href="https://cdn.example.com/app.js" as="script"></head></html>)";
+    auto links       = scan_html(html);
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=preconnect") != std::string::npos);
+    // extract_origin must strip the path and return https://cdn.example.com
+    CHECK(links[0].find("<https://cdn.example.com>") != std::string::npos);
+    CHECK(links[0].find("/app.js") == std::string::npos);
+  }
+
+  SECTION("URL with :// only in path segment — same-origin preload")
+  {
+    // Unusual but valid: /api/v2://rpc/endpoint
+    // The :// is not at position 0 after ALPHA, so this is same-origin
+    std::string html = R"(<html><head><link rel="preload" href="/api/v2://rpc/endpoint.js" as="script"></head></html>)";
+    auto links       = scan_html(html);
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=preload; as=script") != std::string::npos);
+    CHECK(links[0].find("/api/v2://rpc/endpoint.js") != std::string::npos);
+    CHECK(links[0].find("rel=preconnect") == std::string::npos);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// WP2 SISA: Direct unit tests for extract_origin() RFC 3986 compliance
+//
+// These tests call HtmlScanner::extract_origin() DIRECTLY (now public).
+// They will be RED before the fix because the current implementation uses
+// url.find("://") which matches anywhere — not just at the scheme position.
+//
+// BUG TRACE: extract_origin("/proxy?url=https://cdn.example.com/app.js")
+//   Step 1: url.find("://") = 16 (finds :// inside query string at "https://")
+//   Step 2: scheme_end = 16, host_start = 19
+//   Step 3: find_authority_end(url, 19) → finds '/' at position 33
+//   Step 4: returns url.substr(0, 33) = "/proxy?url=https://cdn.example.com"
+//   WRONG! Should return url as-is because there is no scheme at position 0.
+//
+// AFTER FIX: extract_origin uses RFC 3986 scheme detection (ALPHA prefix at pos 0).
+// ═══════════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("WP2 SISA: extract_origin() direct test — RFC 3986 scheme detection", "[html_scanner][wp2][extract_origin][direct]")
+{
+  SECTION("BUG: proxy URL with :// in query string must return URL as-is")
+  {
+    // BUG: url.find("://") returns 16 (inside query string), producing
+    // "/proxy?url=https://cdn.example.com" as the "origin" — completely wrong.
+    // FIX: RFC 3986 detection — '/' at position 0, no scheme — return url as-is.
+    std::string url    = "/proxy?url=https://cdn.example.com/app.js";
+    std::string result = HtmlScanner::extract_origin(url);
+    // After fix: must return the URL as-is (no scheme at pos 0)
+    CHECK(result == url);
+    // After fix: must NOT return the broken partial string
+    CHECK(result != "/proxy?url=https://cdn.example.com");
+  }
+
+  SECTION("BUG: path URL with :// in middle must return URL as-is")
+  {
+    std::string url    = "/api/v1://service/endpoint";
+    std::string result = HtmlScanner::extract_origin(url);
+    CHECK(result == url);
+  }
+
+  SECTION("BUG: stylesheet proxy URL with :// in query must return URL as-is")
+  {
+    std::string url    = "/assets?src=https://fonts.googleapis.com/css2";
+    std::string result = HtmlScanner::extract_origin(url);
+    CHECK(result == url);
+    CHECK(result != "/assets?src=https://fonts.googleapis.com");
+  }
+
+  SECTION("CORRECT: genuine https absolute URL — strip path to origin")
+  {
+    std::string url    = "https://cdn.example.com/app.js";
+    std::string result = HtmlScanner::extract_origin(url);
+    CHECK(result == "https://cdn.example.com");
+  }
+
+  SECTION("CORRECT: genuine https URL with query — stop at ?")
+  {
+    std::string url    = "https://cdn.example.com/style.css?v=abc123";
+    std::string result = HtmlScanner::extract_origin(url);
+    CHECK(result == "https://cdn.example.com");
+  }
+
+  SECTION("CORRECT: http URL — strips path to origin")
+  {
+    std::string url    = "http://static.example.com/bundle.js";
+    std::string result = HtmlScanner::extract_origin(url);
+    CHECK(result == "http://static.example.com");
+  }
+
+  SECTION("CORRECT: protocol-relative URL — returns https://host")
+  {
+    std::string url    = "//cdn.example.com/app.js";
+    std::string result = HtmlScanner::extract_origin(url);
+    CHECK(result == "https://cdn.example.com");
+  }
+
+  SECTION("CORRECT: relative path — returns as-is")
+  {
+    std::string url    = "/assets/app.js";
+    std::string result = HtmlScanner::extract_origin(url);
+    CHECK(result == "/assets/app.js");
+  }
+}

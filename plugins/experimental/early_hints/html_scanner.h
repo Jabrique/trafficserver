@@ -51,6 +51,14 @@ public:
   /** Reset for reuse. */
   void reset();
 
+  // ── Public static helpers (exposed for direct unit testing — RFC 3986 compliance) ──
+  //
+  // extract_origin() and is_crossorigin() are placed in the public section so that
+  // unit tests can call them directly without going through the full HTML scanning path.
+  // This makes TDD for WP2 (RFC 3986 scheme detection) possible with RED→GREEN cycles.
+  static std::string extract_origin(const std::string &url);
+  static bool is_crossorigin(const std::string &href);
+
 private:
   enum class State : uint8_t {
     INIT,             // Scanning for <head (case-insensitive)
@@ -115,8 +123,6 @@ private:
   void reset_tag_state();
   State state_after_open_tag();
 
-  static std::string extract_origin(const std::string &url);
-  static bool is_crossorigin(const std::string &href);
   static std::string tolower_str(const std::string &s);
 
   // Sanitize URL: reject control chars, header injection, and non-http(s) schemes
