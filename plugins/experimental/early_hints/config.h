@@ -25,6 +25,12 @@
 
 #define PLUGIN_NAME "early_hints"
 
+// Validates a Link header value: structural checks (< > brackets), control chars,
+// URL scheme allowlist (http/https/relative only), and valid rel= type.
+// Single source of truth — used by both config.cc (manual --link) and early_hints.cc
+// (origin-forward forwarding).
+bool is_valid_link_value(const std::string &link);
+
 // Validates that a Link header value with rel=preload or rel=modulepreload
 // also contains a valid as= attribute (Fetch spec §8 destinations).
 // Returns true if as= is valid, or if rel is not preload/modulepreload.

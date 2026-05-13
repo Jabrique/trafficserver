@@ -715,16 +715,18 @@ TEST_CASE("Config link validation: check_rel boundary logic", "[config]")
     CHECK_FALSE(parse_config(config, {"--mode", "manual", "--link", "</a.js>;\trel=preload;\tas=script"}));
   }
 
-  SECTION("rel=preload followed by quote")
+  SECTION("rel=preload followed by double-quote is REJECTED (WP9 fix: quote is not a valid unquoted boundary)")
   {
     EarlyHintsConfig config;
-    CHECK(parse_config(config, {"--mode", "manual", "--link", "</a.js>; rel=preload\"extra\""}));
+    // rel=preload"extra" uses '"' as boundary for unquoted form — not valid.
+    // Use quoted form rel=\"preload\" instead. This is correct behavior.
+    CHECK_FALSE(parse_config(config, {"--mode", "manual", "--link", "</a.js>; rel=preload\"extra\""}));
   }
 
-  SECTION("rel=preload followed by single quote")
+  SECTION("rel=preload followed by single-quote is REJECTED (WP9 fix: quote is not a valid unquoted boundary)")
   {
     EarlyHintsConfig config;
-    CHECK(parse_config(config, {"--mode", "manual", "--link", "</a.js>; rel=preload'extra'"}));
+    CHECK_FALSE(parse_config(config, {"--mode", "manual", "--link", "</a.js>; rel=preload'extra'"}));
   }
 
   SECTION("partial match xrel=preload rejected (before_ok fails)")
@@ -1127,12 +1129,12 @@ TEST_CASE("Config audit: safe_parse_int strtol behavior", "[config][audit]")
 
 TEST_CASE("Config audit: link validation URL edge cases", "[config][audit]")
 {
-  SECTION("whitespace-only URL accepted (scheme_start == npos path)")
+  SECTION("whitespace-only URL REJECTED after WP1 allowlist fix (scheme_start == npos)")
   {
-    // URL portion is " " — scheme_start is npos, so dangerous-scheme check is skipped.
-    // rel=preload in params is still validated.
+    // URL portion is " " — after WP1 fix, url_part.find_first_not_of returns npos
+    // for all-whitespace URLs, which is now correctly rejected (useless URL).
     EarlyHintsConfig config;
-    CHECK(parse_config(config, {"--mode", "manual", "--link", "< >; rel=preload; as=script"}));
+    CHECK_FALSE(parse_config(config, {"--mode", "manual", "--link", "< >; rel=preload; as=script"}));
   }
 
   SECTION("extra '>' in params portion does not break rel= parsing")
@@ -2418,5 +2420,117 @@ TEST_CASE("merge_hint_links: edge cases", "[config][merge]")
     std::vector<std::string> manual = {"</a.js>; rel=preload; as=script"};
     auto result                     = merge_hint_links(manual, nullptr, 0);
     CHECK(result.empty());
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// WP1: Scheme allowlist unification — RED tests
+// These must FAIL before fix, PASS after fix.
+// Bug: is_valid_link_value uses denylist (only blocks js/data/vbscript/blob).
+// Exotic schemes like file:, ftp:, chrome-extension: bypass the denylist.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("WP1: is_valid_link_value rejects exotic schemes (allowlist)", "[config][security][wp1]")
+{
+  SECTION("file:// scheme rejected — not in current denylist (BUG)")
+  {
+    // Current denylist: js/data/vbscript/blob only. file: passes. MUST fail before fix.
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(config, {"--mode", "manual", "--link", "<file:///etc/passwd>; rel=preload; as=fetch"}));
+  }
+
+  SECTION("ftp:// scheme rejected — not in current denylist (BUG)")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(config, {"--mode", "manual", "--link", "<ftp://evil.com/payload.bin>; rel=preload; as=fetch"}));
+  }
+
+  SECTION("chrome-extension:// scheme rejected — not in current denylist (BUG)")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(
+      parse_config(config, {"--mode", "manual", "--link", "<chrome-extension://abcdef/inject.js>; rel=preload; as=script"}));
+  }
+
+  SECTION("feed:javascript: nested scheme rejected — not in current denylist (BUG)")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(config, {"--mode", "manual", "--link", "<feed:javascript:alert(1)>; rel=preload; as=script"}));
+  }
+
+  SECTION("jar:file: nested scheme rejected — not in current denylist (BUG)")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(config, {"--mode", "manual", "--link", "<jar:file:///tmp/evil.jar!/exploit>; rel=preload; as=fetch"}));
+  }
+
+  SECTION("ws:// websocket scheme rejected — not in current denylist (BUG)")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(config, {"--mode", "manual", "--link", "<ws://evil.com/sock>; rel=preload; as=fetch"}));
+  }
+
+  SECTION("wss:// websocket-secure scheme rejected — not in current denylist (BUG)")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(config, {"--mode", "manual", "--link", "<wss://evil.com/sock>; rel=preload; as=fetch"}));
+  }
+
+  SECTION("https:// still accepted after allowlist fix")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--mode", "manual", "--link", "<https://cdn.example.com/app.js>; rel=preload; as=script"}));
+  }
+
+  SECTION("http:// still accepted after allowlist fix")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--mode", "manual", "--link", "<http://cdn.example.com/app.js>; rel=preload; as=script"}));
+  }
+
+  SECTION("relative URL still accepted after allowlist fix")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--mode", "manual", "--link", "</app.js>; rel=preload; as=script"}));
+  }
+
+  SECTION("protocol-relative URL still accepted after allowlist fix")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--mode", "manual", "--link", "<//cdn.example.com/app.js>; rel=preload; as=script"}));
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// WP9: check_rel boundary — norel= false positive (RED)
+// Bug: `"` and `'` allowed as after_ok boundary in unquoted rel check,
+// so `rel=preload"garbage` passes incorrectly.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("WP9: check_rel boundary — quote not valid for unquoted rel form", "[config][wp9]")
+{
+  SECTION("rel=preload followed by double-quote is REJECTED (unquoted form boundary bug)")
+  {
+    // Current code: after_ok includes '"', so rel=preload"garbage passes. BUG.
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(config, {"--mode", "manual", "--link", R"(</a.js>; rel=preload"garbage")"}));
+  }
+
+  SECTION("rel=preload followed by single-quote is REJECTED (unquoted form boundary bug)")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(config, {"--mode", "manual", "--link", R"(</a.js>; rel=preload'garbage')"}));
+  }
+
+  SECTION("rel=\"preload\" quoted form still accepted")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--mode", "manual", "--link", R"(</a.js>; rel="preload"; as=script)"}));
+  }
+
+  SECTION("rel='preload' single-quoted form still accepted")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--mode", "manual", "--link", R"(</a.js>; rel='preload'; as=script)"}));
   }
 }
