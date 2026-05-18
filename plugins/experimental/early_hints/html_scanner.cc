@@ -348,10 +348,18 @@ HtmlScanner::build_link_header(const std::string &tag)
           result = "<" + href_ + ">; rel=preload; as=" + as_;
           crossorigin_value_.clear();
         } else {
-          // Non-whitelisted cross-origin: use preconnect (safe)
+          // Non-whitelisted cross-origin: downgrade to preconnect for connection warm-up.
+          // crossorigin is meaningful here only for font resources: fonts are always CORS-fetched
+          // (W3C CSS Fonts spec), so the preconnect must establish a CORS-capable connection.
+          // For other resource types (script, style) the fetch mode is not predictably CORS,
+          // so we omit crossorigin to avoid establishing the wrong connection pool.
           result = "<" + origin + ">; rel=preconnect";
-          if (crossorigin_value_.empty()) {
+          if (as_ == "font") {
+            // Font: always CORS — preconnect must carry crossorigin so the browser reuses
+            // this connection for the subsequent CORS font fetch instead of opening a new one.
             crossorigin_value_ = "anonymous";
+          } else {
+            crossorigin_value_.clear();
           }
         }
       } else {
@@ -377,10 +385,9 @@ HtmlScanner::build_link_header(const std::string &tag)
           as_    = "style";
           crossorigin_value_.clear();
         } else {
+          // Non-whitelisted: preconnect only — crossorigin not valid on preconnect
           result = "<" + origin + ">; rel=preconnect";
-          if (crossorigin_value_.empty()) {
-            crossorigin_value_ = "anonymous";
-          }
+          crossorigin_value_.clear();
         }
       } else {
         result = "<" + href_ + ">; rel=preload; as=style";
@@ -390,10 +397,9 @@ HtmlScanner::build_link_header(const std::string &tag)
       // <link rel="modulepreload" href="...">
       if (is_crossorigin(href_)) {
         std::string origin = extract_origin(href_);
-        result             = "<" + origin + ">; rel=preconnect";
-        if (crossorigin_value_.empty()) {
-          crossorigin_value_ = "anonymous";
-        }
+        // Non-whitelisted cross-origin: preconnect only — crossorigin not valid here
+        result = "<" + origin + ">; rel=preconnect";
+        crossorigin_value_.clear();
       } else {
         result = "<" + href_ + ">; rel=modulepreload";
       }
@@ -422,10 +428,9 @@ HtmlScanner::build_link_header(const std::string &tag)
         as_    = "script";
         crossorigin_value_.clear();
       } else {
+        // Non-whitelisted: preconnect only — crossorigin not valid on preconnect
         result = "<" + origin + ">; rel=preconnect";
-        if (crossorigin_value_.empty()) {
-          crossorigin_value_ = "anonymous";
-        }
+        crossorigin_value_.clear();
       }
     } else {
       result = "<" + href_ + ">; rel=preload; as=script";
@@ -439,7 +444,10 @@ HtmlScanner::build_link_header(const std::string &tag)
     return;
   }
 
-  // Auto-add crossorigin for fonts (W3C CSS Fonts spec — prevents double-fetch)
+  // Auto-add crossorigin for fonts (W3C CSS Fonts spec — prevents double-fetch).
+  // Applies to both preload and preconnect: for same-origin fonts the preload carries
+  // crossorigin, and for cross-origin font preconnects (handled above) crossorigin is
+  // also required so the browser reuses the CORS-capable pre-established connection.
   if (as_ == "font" && crossorigin_value_.empty()) {
     crossorigin_value_ = "anonymous";
   }
@@ -462,8 +470,10 @@ HtmlScanner::build_link_header(const std::string &tag)
     }
   }
 
-  // Append fetchpriority (Chrome 101+)
-  if (!fetchpriority_.empty() && (fetchpriority_ == "high" || fetchpriority_ == "low" || fetchpriority_ == "auto")) {
+  // Append fetchpriority (Chrome 101+ Fetch Priority API).
+  // This attribute is only meaningful on preload hints — omit it from preconnect.
+  if (!fetchpriority_.empty() && result.find("rel=preload") != std::string::npos &&
+      (fetchpriority_ == "high" || fetchpriority_ == "low" || fetchpriority_ == "auto")) {
     result += "; fetchpriority=" + fetchpriority_;
   }
 

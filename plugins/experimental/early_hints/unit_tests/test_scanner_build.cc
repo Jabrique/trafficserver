@@ -104,7 +104,8 @@ TEST_CASE("HtmlScanner: cross-origin stylesheet becomes preconnect", "[html_scan
   REQUIRE(links.size() == 1);
   CHECK(links[0].find("rel=preconnect") != std::string::npos);
   CHECK(links[0].find("https://fonts.googleapis.com") != std::string::npos);
-  CHECK(links[0].find("crossorigin") != std::string::npos);
+  // crossorigin has no defined semantics on preconnect — must not be emitted
+  CHECK(links[0].find("crossorigin") == std::string::npos);
 }
 
 TEST_CASE("HtmlScanner: cross-origin modulepreload becomes preconnect", "[html_scanner][build]")
@@ -123,7 +124,8 @@ TEST_CASE("HtmlScanner: cross-origin script src becomes preconnect", "[html_scan
   REQUIRE(links.size() == 1);
   CHECK(links[0].find("rel=preconnect") != std::string::npos);
   CHECK(links[0].find("https://cdn.example.com") != std::string::npos);
-  CHECK(links[0].find("crossorigin") != std::string::npos);
+  // crossorigin has no defined semantics on preconnect — must not be emitted
+  CHECK(links[0].find("crossorigin") == std::string::npos);
 }
 
 TEST_CASE("HtmlScanner: fetchpriority=auto is preserved", "[html_scanner][build]")
@@ -856,7 +858,8 @@ TEST_CASE("QA: build_link_header exact output format", "[html_scanner][qa][build
     std::string html = R"(<html><head><link rel="preload" href="https://cdn.example.com/app.js" as="script"></head></html>)";
     auto links       = scan_html(html);
     REQUIRE(links.size() == 1);
-    CHECK(links[0] == "<https://cdn.example.com>; rel=preconnect; crossorigin=anonymous");
+    // crossorigin is not emitted on preconnect hints
+    CHECK(links[0] == "<https://cdn.example.com>; rel=preconnect");
   }
 
   SECTION("script preload output format")
@@ -905,7 +908,8 @@ TEST_CASE("HtmlScanner: multiple cross-origin preloads to same domain produce si
     auto links = scan_html(html);
     // All three collapse to the same origin URL — dedup must yield exactly one entry
     REQUIRE(links.size() == 1);
-    CHECK(links[0] == "<https://cdn.example.com>; rel=preconnect; crossorigin=anonymous");
+    // crossorigin is not emitted on preconnect hints
+    CHECK(links[0] == "<https://cdn.example.com>; rel=preconnect");
   }
 
   SECTION("script and stylesheet preloads to same cross-origin domain → single preconnect")
@@ -917,7 +921,8 @@ TEST_CASE("HtmlScanner: multiple cross-origin preloads to same domain produce si
     auto links = scan_html(html);
     // Different resource types, same cross-origin domain → both collapse to identical preconnect
     REQUIRE(links.size() == 1);
-    CHECK(links[0] == "<https://assets.example.com>; rel=preconnect; crossorigin=anonymous");
+    // crossorigin is not emitted on preconnect hints
+    CHECK(links[0] == "<https://assets.example.com>; rel=preconnect");
   }
 
   SECTION("cross-origin preloads to two distinct domains → two distinct preconnects")
@@ -965,7 +970,8 @@ TEST_CASE("HtmlScanner: multiple cross-origin preloads to same domain produce si
     html += "</head></html>";
     auto links = scan_html(html);
     REQUIRE(links.size() == 1);
-    CHECK(links[0] == "<https://cdn.example.com>; rel=preconnect; crossorigin=anonymous");
+    // crossorigin is not emitted on preconnect hints
+    CHECK(links[0] == "<https://cdn.example.com>; rel=preconnect");
   }
 }
 
@@ -1231,5 +1237,128 @@ TEST_CASE("HtmlScanner: --preload-whitelist emits no-cors preload", "[html_scann
     CHECK(links[0].find("as=font") != std::string::npos);
     // Font safety net at line 363-366 auto-adds crossorigin=anonymous even in preload-whitelist
     CHECK(links[0].find("crossorigin=anonymous") != std::string::npos);
+  }
+}
+
+// ─── crossorigin must not appear on rel=preconnect hints ────────────────────
+//
+// Bug: when a cross-origin resource is downgraded to preconnect, the scanner
+// was auto-injecting crossorigin=anonymous onto the preconnect Link header.
+// The crossorigin attribute has no defined semantics on rel=preconnect (it is
+// a preload-only concept per the Fetch and HTML specs). Emitting it produces
+// malformed headers that waste bytes without any browser benefit.
+//
+// These tests verify the corrected behaviour: the scanner MUST NOT emit
+// crossorigin on any rel=preconnect hint, regardless of what triggered the
+// downgrade (non-whitelisted preload, stylesheet, script, or modulepreload).
+
+TEST_CASE("preconnect hints must not carry crossorigin attribute", "[html_scanner][preconnect][crossorigin]")
+{
+  SECTION("cross-origin stylesheet downgraded to preconnect: no crossorigin")
+  {
+    // Before fix: scanner emitted crossorigin=anonymous on preconnect.
+    // After fix: crossorigin must be absent from the preconnect hint.
+    std::string html = R"(<html><head><link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto"></head></html>)";
+    auto links       = scan_html(html);
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=preconnect") != std::string::npos);
+    CHECK(links[0].find("crossorigin") == std::string::npos); // RED before fix
+  }
+
+  SECTION("cross-origin script downgraded to preconnect: no crossorigin")
+  {
+    std::string html = R"(<html><head><script src="https://cdn.example.com/analytics.js"></script></head></html>)";
+    auto links       = scan_html(html);
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=preconnect") != std::string::npos);
+    CHECK(links[0].find("crossorigin") == std::string::npos); // RED before fix
+  }
+
+  SECTION("cross-origin modulepreload downgraded to preconnect: no crossorigin")
+  {
+    std::string html = R"(<html><head><link rel="modulepreload" href="https://cdn.example.com/app.mjs"></head></html>)";
+    auto links       = scan_html(html);
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=preconnect") != std::string::npos);
+    CHECK(links[0].find("crossorigin") == std::string::npos); // RED before fix
+  }
+
+  SECTION("cross-origin font preload downgraded to preconnect: carries crossorigin=anonymous")
+  {
+    // Fonts are always fetched using CORS (W3C CSS Fonts spec). When a font preload
+    // is downgraded to preconnect, the hint must carry crossorigin=anonymous so that
+    // the browser opens a CORS-capable connection. Without it the browser opens a
+    // non-CORS connection, then opens a second CORS connection for the actual font
+    // fetch, defeating the purpose of the preconnect entirely.
+    // Reference: https://web.dev/preconnect-and-dns-prefetch/#establish-early-connections
+    std::string html = R"(<html><head><link rel="preload" href="https://cdn.example.com/font.woff2" as="font"></head></html>)";
+    auto links       = scan_html(html);
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=preconnect") != std::string::npos);
+    // Font preconnect MUST carry crossorigin=anonymous for CORS connection reuse
+    CHECK(links[0].find("crossorigin=anonymous") != std::string::npos);
+  }
+
+  SECTION("whitelisted crossorigin preload must still carry crossorigin (regression guard)")
+  {
+    // Fix must NOT break whitelisted preloads — they must still carry crossorigin.
+    const char *argv[] = {"from", "to", "--mode", "auto-learn", "--crossorigin-whitelist", "cdn.example.com"};
+    EarlyHintsConfig config;
+    config.init(6, argv);
+
+    HtmlScanner scanner(131072, 10, &config);
+    std::string html =
+      R"(<html><head><link rel="preload" href="https://cdn.example.com/app.js" as="script" crossorigin="anonymous"></head></html>)";
+    scanner.feed(html.c_str(), static_cast<int64_t>(html.size()));
+
+    auto links = scanner.get_links();
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=preload") != std::string::npos);
+    CHECK(links[0].find("crossorigin=anonymous") != std::string::npos); // must still be present
+  }
+
+  SECTION("same-origin font must still carry crossorigin=anonymous (regression guard)")
+  {
+    // Fonts always need crossorigin because of CORS — this must not be broken.
+    std::string html =
+      R"(<html><head><link rel="preload" href="/fonts/inter.woff2" as="font" crossorigin="anonymous"></head></html>)";
+    auto links = scan_html(html);
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=preload") != std::string::npos);
+    CHECK(links[0].find("crossorigin=anonymous") != std::string::npos); // must be preserved
+  }
+}
+
+TEST_CASE("fetchpriority must not appear on rel=preconnect hints", "[html_scanner][preconnect][fetchpriority]")
+{
+  SECTION("cross-origin preload with fetchpriority=high: preconnect drops fetchpriority")
+  {
+    // fetchpriority is defined only for preload (Chrome 101+ Fetch Priority API).
+    // The attribute has no effect on preconnect and emitting it produces invalid headers.
+    std::string html =
+      R"(<html><head><link rel="preload" href="https://cdn.example.com/hero.js" as="script" fetchpriority="high"></head></html>)";
+    auto links = scan_html(html);
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=preconnect") != std::string::npos);
+    CHECK(links[0].find("fetchpriority") == std::string::npos); // RED before fix
+  }
+
+  SECTION("same-origin preload with fetchpriority=high: fetchpriority preserved (regression guard)")
+  {
+    std::string html = R"(<html><head><link rel="preload" href="/hero.js" as="script" fetchpriority="high"></head></html>)";
+    auto links       = scan_html(html);
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=preload") != std::string::npos);
+    CHECK(links[0].find("fetchpriority=high") != std::string::npos); // must be kept
+  }
+
+  SECTION("cross-origin image with fetchpriority=low: preconnect drops fetchpriority")
+  {
+    std::string html =
+      R"(<html><head><link rel="preload" href="https://images.example.com/hero.jpg" as="image" fetchpriority="low"></head></html>)";
+    auto links = scan_html(html);
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=preconnect") != std::string::npos);
+    CHECK(links[0].find("fetchpriority") == std::string::npos); // RED before fix
   }
 }
