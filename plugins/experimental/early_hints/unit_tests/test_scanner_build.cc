@@ -1362,3 +1362,79 @@ TEST_CASE("fetchpriority must not appear on rel=preconnect hints", "[html_scanne
     CHECK(links[0].find("fetchpriority") == std::string::npos); // RED before fix
   }
 }
+
+// ─── WP6: noscript and template content must not be extracted ───────────────
+//
+// <noscript> contains fallback content for when JavaScript is disabled.
+// The browser ignores it when JS is enabled, so preloading resources inside
+// it would waste bandwidth in the common case. More critically, a malicious
+// page could craft a <noscript><link rel="preload" href="evil.js"></noscript>
+// to poison the hint cache.
+//
+// <template> contains inert DOM — it is never rendered or fetched on load.
+// Resources inside it should not be pre-fetched.
+//
+// Both tags must be treated as opaque containers: their inner content is
+// skipped by the scanner until the matching closing tag.
+
+TEST_CASE("HtmlScanner: noscript content is not extracted as hints", "[html_scanner][build][noscript]")
+{
+  SECTION("link inside noscript is ignored")
+  {
+    std::string html = R"(<html><head><noscript><link rel="stylesheet" href="/noscript.css"></noscript></head></html>)";
+    auto links       = scan_html(html);
+    CHECK(links.empty()); // RED before fix
+  }
+
+  SECTION("preload inside noscript is ignored")
+  {
+    std::string html = R"(<html><head><noscript><link rel="preload" href="/noscript.js" as="script"></noscript></head></html>)";
+    auto links       = scan_html(html);
+    CHECK(links.empty()); // RED before fix
+  }
+
+  SECTION("link after noscript is extracted normally")
+  {
+    std::string html =
+      R"(<html><head><noscript><link rel="stylesheet" href="/noscript.css"></noscript><link rel="preload" href="/main.js" as="script"></head></html>)";
+    auto links = scan_html(html);
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("/main.js") != std::string::npos); // regression guard
+  }
+
+  SECTION("script inside noscript is ignored")
+  {
+    std::string html =
+      R"(<html><head><noscript><script src="/fallback.js"></script></noscript><link rel="preload" href="/real.js" as="script"></head></html>)";
+    auto links = scan_html(html);
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("/real.js") != std::string::npos);
+  }
+}
+
+TEST_CASE("HtmlScanner: template content is not extracted as hints", "[html_scanner][build][template]")
+{
+  SECTION("link inside template is ignored")
+  {
+    std::string html = R"(<html><head><template><link rel="preload" href="/template.js" as="script"></template></head></html>)";
+    auto links       = scan_html(html);
+    CHECK(links.empty()); // RED before fix
+  }
+
+  SECTION("link after template is extracted normally")
+  {
+    std::string html =
+      R"(<html><head><template><link rel="preload" href="/template.js" as="script"></template><link rel="stylesheet" href="/app.css"></head></html>)";
+    auto links = scan_html(html);
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("/app.css") != std::string::npos); // regression guard
+  }
+
+  SECTION("deeply nested content inside template is ignored")
+  {
+    std::string html =
+      R"(<html><head><template><div><link rel="preload" href="/inner.js" as="script"></div></template></head></html>)";
+    auto links = scan_html(html);
+    CHECK(links.empty()); // RED before fix
+  }
+}

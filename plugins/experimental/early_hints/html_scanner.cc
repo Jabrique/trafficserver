@@ -533,6 +533,21 @@ HtmlScanner::state_after_open_tag()
     raw_close_tag_ = "</style";
     return State::IN_SCRIPT;
   }
+  // <noscript> contains fallback content for JS-disabled environments. When JS
+  // is enabled (the common case) the browser ignores it entirely, so preloading
+  // resources inside it wastes bandwidth. Skip the body to prevent cache poisoning.
+  if (tag_name_.size() == 8 && strncasecmp(tag_name_.c_str(), "noscript", 8) == 0) {
+    raw_close_pos_ = 0;
+    raw_close_tag_ = "</noscript";
+    return State::IN_SCRIPT;
+  }
+  // <template> contains inert DOM — it is never rendered or fetched on page load.
+  // Resources referenced inside it must not be pre-fetched via Early Hints.
+  if (tag_name_.size() == 8 && strncasecmp(tag_name_.c_str(), "template", 8) == 0) {
+    raw_close_pos_ = 0;
+    raw_close_tag_ = "</template";
+    return State::IN_SCRIPT;
+  }
   return State::IN_HEAD;
 }
 
