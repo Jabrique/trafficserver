@@ -143,6 +143,12 @@ public:
     return preload_whitelist_;
   }
 
+  int
+  persist_throttle() const
+  {
+    return persist_throttle_;
+  }
+
 private:
   uint8_t mode_          = MODE_ORIGIN_FORWARD;
   int max_links_         = 10;
@@ -157,6 +163,7 @@ private:
   std::vector<std::string> crossorigin_whitelist_;
   std::vector<std::string> preload_whitelist_;
   bool persist_enabled_ = true;
+  int persist_throttle_ = 10;
   std::string persist_dir_;
 
   bool parse_mode(const char *mode_str);

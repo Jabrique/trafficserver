@@ -75,10 +75,21 @@ is_valid_link_value(const std::string &link)
     return false; // No '>' found, or empty URL between '<>'
   }
 
-  // Reject any control characters (NUL, CRLF, etc.) and DEL
+  // Reject control characters (NUL, CRLF, tab, etc.) and DEL anywhere in the link value.
+  // Control chars in headers risk header injection and protocol violations (RFC 7230 §3.2.6).
   for (char c : link) {
     unsigned char uc = static_cast<unsigned char>(c);
     if (uc < 0x20 || uc == 0x7F) {
+      return false;
+    }
+  }
+
+  // Additionally reject space (0x20) inside the URL portion only.
+  // Space in the URL breaks HTTP header framing (whitespace-delimited parsers) and
+  // violates RFC 3986 §2 which disallows unencoded spaces in URIs.
+  // Space is valid in the params ("; rel=preload; as=style") per RFC 8288 §3.
+  for (size_t i = 1; i < url_end; ++i) {
+    if (link[i] == ' ') {
       return false;
     }
   }
@@ -439,6 +450,7 @@ EarlyHintsConfig::init(int argc, const char *argv[])
     {const_cast<char *>("crossorigin-whitelist"),    required_argument, nullptr, 'w'},
     {const_cast<char *>("preload-whitelist"),         required_argument, nullptr, 'W'},
     {const_cast<char *>("max-cache-entries"),        required_argument, nullptr, 'c'},
+    {const_cast<char *>("persist-throttle"),          required_argument, nullptr, 't'},
     {nullptr, 0, nullptr, 0},
   };
   // clang-format on
@@ -618,6 +630,16 @@ EarlyHintsConfig::init(int argc, const char *argv[])
         return false;
       }
       break;
+    case 't':
+      if (!safe_parse_int(optarg, &persist_throttle_)) {
+        TSError("[%s] invalid --persist-throttle value: %s", PLUGIN_NAME, optarg);
+        return false;
+      }
+      if (persist_throttle_ < 0 || persist_throttle_ > 300) {
+        TSError("[%s] persist-throttle must be between 0 and 300 seconds, got %d", PLUGIN_NAME, persist_throttle_);
+        return false;
+      }
+      break;
     default:
       TSError("[%s] unknown option", PLUGIN_NAME);
       return false;
@@ -641,11 +663,11 @@ EarlyHintsConfig::init(int argc, const char *argv[])
 
   TSDebug(PLUGIN_NAME,
           "config: mode=0x%02x max_links=%d header_size_limit=%d skip_bots=%d navigate_only=%d "
-          "scan_limit=%d min_hit_count=%d max_cache_entries=%d manual_links=%zu crossorigin_whitelist=%zu "
+          "scan_limit=%d min_hit_count=%d max_cache_entries=%d persist_throttle=%d manual_links=%zu crossorigin_whitelist=%zu "
           "preload_whitelist=%zu persist=%s persist_dir=%s",
           mode_, max_links_, header_size_limit_, skip_bots_, navigate_only_, scan_limit_, min_hit_count_, max_cache_entries_,
-          manual_links_.size(), crossorigin_whitelist_.size(), preload_whitelist_.size(), persist_enabled_ ? "on" : "off",
-          persist_dir_.empty() ? "(auto)" : persist_dir_.c_str());
+          persist_throttle_, manual_links_.size(), crossorigin_whitelist_.size(), preload_whitelist_.size(),
+          persist_enabled_ ? "on" : "off", persist_dir_.empty() ? "(auto)" : persist_dir_.c_str());
 
   return true;
 }

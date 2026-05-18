@@ -40,7 +40,8 @@ TEST_CASE("HintsCache: basic put and get", "[hints_cache]")
     std::vector<std::string> links = {"</app.js>; rel=preload; as=script", "</style.css>; rel=preload; as=style"};
     cache.put("/page", links);
 
-    auto result = cache.get("/page", 1);
+    const HintsCache &const_cache = cache;
+    auto result                   = const_cache.get("/page", 1);
     REQUIRE(result != nullptr);
     REQUIRE(result->size() == 2);
     CHECK((*result)[0] == "</app.js>; rel=preload; as=script");
@@ -619,16 +620,23 @@ TEST_CASE("put() equality-check — shared_ptr identity preserved for identical 
 
   SECTION("persist_path set — put_persist_count increments per put (learn_count persisted)")
   {
+    std::string path = "/tmp/eh_put_persist_count_" + std::to_string(getpid()) + ".bin";
+    std::remove(path.c_str());
+
     HintsCache cache;
     std::vector<std::string> links = {"</a.js>; rel=preload; as=script"};
 
-    cache.set_persist_path("/dev/null");
-    cache.put("/page", links); // count=1
-    cache.put("/page", links); // count=2 (learn_count changed, must persist)
-    cache.put("/page", links); // count=3
+    cache.set_persist_path(path);
+    cache.set_persist_throttle(0); // persist every put for this test
+    cache.put("/page", links);     // count=1
+    cache.put("/page", links);     // count=2 (learn_count changed, must persist)
+    cache.put("/page", links);     // count=3
 
     // Every put must persist because learn_count changes (min_hit_count restart safety)
     CHECK(cache.put_persist_count() == 3);
+
+    std::remove(path.c_str());
+    std::remove((path + ".tmp").c_str());
   }
 }
 

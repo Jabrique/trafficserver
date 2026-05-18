@@ -19,6 +19,7 @@
 
 #include <catch.hpp>
 #include "../config.h"
+#include "../link_parser.h"
 #include <cstring>
 #include <getopt.h>
 #include <unistd.h>
@@ -964,6 +965,46 @@ TEST_CASE("Config boundary: persistence", "[config]")
     EarlyHintsConfig config;
     CHECK(parse_config(config, {"--no-persist"}));
     CHECK(config.persist_enabled() == false);
+  }
+
+  SECTION("persist-throttle valid value")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--persist-throttle", "5"}));
+    CHECK(config.persist_throttle() == 5);
+  }
+
+  SECTION("persist-throttle zero disables throttle")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--persist-throttle", "0"}));
+    CHECK(config.persist_throttle() == 0);
+  }
+
+  SECTION("persist-throttle max boundary accepted")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--persist-throttle", "300"}));
+    CHECK(config.persist_throttle() == 300);
+  }
+
+  SECTION("persist-throttle over max rejected")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(config, {"--persist-throttle", "301"}));
+  }
+
+  SECTION("persist-throttle negative rejected")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(config, {"--persist-throttle", "-1"}));
+  }
+
+  SECTION("persist-throttle default is 10")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {}));
+    CHECK(config.persist_throttle() == 10);
   }
 }
 
@@ -2572,5 +2613,126 @@ TEST_CASE("Config: debug-header sanitization (M-6)", "[config][security]")
     EarlyHintsConfig config;
     CHECK_FALSE(
       parse_config(config, {"--mode", "manual", "--link", "</a.js>; rel=preload; as=script", "--debug-header", "X-Header Name"}));
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Space (0x20) must be rejected by is_valid_link_value
+//
+// The bug: the control-char filter uses `uc < 0x20`, which passes space
+// (0x20 is NOT less than 0x20). A URL with an embedded space must be
+// rejected because it breaks HTTP header framing (Link: <...> is terminated
+// by whitespace in many parsers) and violates RFC 3986 §2.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("Config: space (0x20) in link URL rejected by is_valid_link_value", "[config][security]")
+{
+  SECTION("space in URL path is rejected")
+  {
+    // A space (0x20) in the URL portion must be rejected.
+    // Bug: `uc < 0x20` passes 0x20. Fix requires `uc <= 0x20`.
+    CHECK_FALSE(is_valid_link_value("</path with spaces>; rel=preload; as=style"));
+  }
+
+  SECTION("space in URL at start is rejected") { CHECK_FALSE(is_valid_link_value("< /style.css>; rel=preload; as=style")); }
+
+  SECTION("URL with no spaces still accepted (baseline)") { CHECK(is_valid_link_value("</style.css>; rel=preload; as=style")); }
+
+  SECTION("URL with tab (0x09) is still rejected (pre-existing behaviour)")
+  {
+    // Tab is < 0x20, so already correctly rejected before the fix.
+    CHECK_FALSE(is_valid_link_value("</path\twith\ttabs>; rel=preload; as=style"));
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// dedup_link_segments must not add an entry when URL key exactly
+//        equals an already-seen key.
+//
+// The bug: the supersede condition uses `existing.size() > url_key.size()`
+// (strict greater-than), so an entry with an identical URL key is never
+// deduplicated — it gets added a second time. Fix: change > to >=.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("Config: dedup_link_segments exact-size URL key deduplication", "[config][dedup]")
+{
+  SECTION("two segments with identical URL key: only first survives")
+  {
+    // Both links reference the same URL. dedup_link_segments must keep only one.
+    // Bug: existing.size() > url_key.size() is false when sizes are equal,
+    // so the second is never dropped.
+    std::vector<std::string> segments = {
+      "</style.css>; rel=preload; as=style",
+      "</style.css>; rel=preload; as=style", // exact duplicate
+    };
+    auto result = dedup_link_segments(std::move(segments), 10);
+    REQUIRE(result.size() == 1);
+    CHECK(result[0] == "</style.css>; rel=preload; as=style");
+  }
+
+  SECTION("two segments with same URL but different params: only first survives")
+  {
+    // URL key (everything up to '>') is identical. Only the first wins.
+    std::vector<std::string> segments = {
+      "</style.css>; rel=preload; as=style",
+      "</style.css>; rel=stylesheet", // same URL, different rel
+    };
+    auto result = dedup_link_segments(std::move(segments), 10);
+    REQUIRE(result.size() == 1);
+    CHECK(result[0] == "</style.css>; rel=preload; as=style");
+  }
+
+  SECTION("different URLs are kept separately (no false positive)")
+  {
+    std::vector<std::string> segments = {
+      "</a.css>; rel=preload; as=style",
+      "</b.css>; rel=preload; as=style",
+    };
+    auto result = dedup_link_segments(std::move(segments), 10);
+    REQUIRE(result.size() == 2);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// dedup_link_segments must be called once after all Link fields are collected
+//        are collected, not once per field inside the while(link_field) loop.
+//
+// The bug: calling dedup per-field means cross-field duplicates are never
+// eliminated. merge_hint_links already uses extract_dedup_key for its own
+// dedup, but dedup_link_segments is called before merge — if it's in the
+// loop, each partial segment list is deduplicated in isolation, not globally.
+//
+// This test exercises merge_hint_links which wraps the same dedup logic.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("Config: merge_hint_links deduplication across multiple inputs", "[config][dedup]")
+{
+  SECTION("duplicate URL across manual and cached links: only one survives")
+  {
+    std::vector<std::string> manual = {"</style.css>; rel=preload; as=style"};
+    std::vector<std::string> cached = {"</style.css>; rel=preload; as=style"}; // same URL
+    auto result                     = merge_hint_links(manual, &cached, 10);
+    // With correct dedup, exactly one entry survives.
+    REQUIRE(result.size() == 1);
+    CHECK(result[0] == "</style.css>; rel=preload; as=style");
+  }
+
+  SECTION("three identical URLs collapse to one")
+  {
+    std::vector<std::string> manual = {
+      "</style.css>; rel=preload; as=style",
+      "</style.css>; rel=preload; as=style",
+    };
+    std::vector<std::string> cached = {"</style.css>; rel=preload; as=style"};
+    auto result                     = merge_hint_links(manual, &cached, 10);
+    REQUIRE(result.size() == 1);
+  }
+
+  SECTION("different URLs all survive (no false dedup)")
+  {
+    std::vector<std::string> manual = {"</a.js>; rel=preload; as=script"};
+    std::vector<std::string> cached = {"</b.css>; rel=preload; as=style"};
+    auto result                     = merge_hint_links(manual, &cached, 10);
+    REQUIRE(result.size() == 2);
   }
 }

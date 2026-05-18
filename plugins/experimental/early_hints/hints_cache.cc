@@ -28,6 +28,12 @@ HintsCache::HintsCache(int max_entries) : mutex_(TSMutexCreate()), persist_mutex
 
 HintsCache::~HintsCache()
 {
+  // Flush any unsaved data to disk before destroying mutexes.
+  // This handles the case where put() was throttled or persist failed mid-session.
+  if (is_dirty_.load(std::memory_order_acquire) && !persist_path_.empty()) {
+    persist_to_disk();
+  }
+
   if (mutex_) {
     TSMutexDestroy(mutex_);
   }
@@ -37,7 +43,7 @@ HintsCache::~HintsCache()
 }
 
 LinkListPtr
-HintsCache::get(const std::string &key, int min_hits)
+HintsCache::get(const std::string &key, int min_hits) const
 {
   TSMutexGuard guard(mutex_);
 
@@ -46,19 +52,22 @@ HintsCache::get(const std::string &key, int min_hits)
     return nullptr;
   }
 
-  HintEntry &entry = it->second;
+  const HintEntry &entry = it->second;
 
   // Check minimum hit count before serving hints
   if (entry.learn_count < min_hits) {
     return nullptr;
   }
 
+  // Move to front of LRU list since it was accessed
+  lru_list_.splice(lru_list_.begin(), lru_list_, entry.lru_iterator);
+
   // Return shared_ptr (ref-count bump, no deep copy)
   return entry.links;
 }
 
 bool
-HintsCache::get(const std::string &key, std::vector<std::string> &links, int min_hits)
+HintsCache::get(const std::string &key, std::vector<std::string> &links, int min_hits) const
 {
   LinkListPtr ptr = get(key, min_hits);
   if (!ptr) {
@@ -104,6 +113,9 @@ HintsCache::put(const std::string &key, const std::vector<std::string> &links)
       if (entry.learn_count < max_learn_count()) {
         entry.learn_count++;
       }
+
+      // Move key to front of LRU list since it was updated
+      lru_list_.splice(lru_list_.begin(), lru_list_, entry.lru_iterator);
     } else {
       // Enforce max entries limit — evict oldest if at capacity
       if (static_cast<int>(entries_.size()) >= max_entries_) {
@@ -115,29 +127,40 @@ HintsCache::put(const std::string &key, const std::vector<std::string> &links)
         }
       }
 
+      lru_list_.push_front(key);
       HintEntry entry;
       entry.links        = std::move(new_links);
       entry.last_updated = time(nullptr);
       entry.learn_count  = 1;
+      entry.lru_iterator = lru_list_.begin();
       entries_[key]      = std::move(entry);
     }
+
+    // Mark cache as dirty so the destructor will flush if put()'s persist fails.
+    is_dirty_.store(true, std::memory_order_release);
   } // mutex released
 
   // Persist is serialized by persist_mutex_ to prevent two concurrent
   // put() calls from both entering persist_to_disk() simultaneously.
-  // persist_to_disk() itself takes a snapshot under mutex_ — double-entry is safe
+  // persist_to_disk() itself takes a snapshot under mutex_, so double-entry is safe
   // but wastes I/O. persist_mutex_ ensures only one persist runs at a time.
+  // The throttle check limits disk writes to at most once per persist_throttle_interval_
+  // seconds, preventing I/O storms from rapid put() calls under production traffic.
   if (!persist_path_.empty()) {
     TSMutexGuard persist_guard(persist_mutex_);
-    if (persist_to_disk()) {
-      // persist_count_ is std::atomic — no mutex needed, no nested lock.
-      persist_count_.fetch_add(1, std::memory_order_relaxed);
+    time_t now = time(nullptr);
+    if (now - last_persist_time_ >= persist_throttle_interval_) {
+      if (persist_to_disk()) {
+        last_persist_time_ = now;
+        // persist_count_ is std::atomic, no mutex needed, no nested lock.
+        persist_count_.fetch_add(1, std::memory_order_relaxed);
+      }
     }
   }
 }
 
 size_t
-HintsCache::size()
+HintsCache::size() const
 {
   TSMutexGuard guard(mutex_);
   return entries_.size();
@@ -177,18 +200,14 @@ HintsCache::make_key(const char *path, int path_len)
 void
 HintsCache::evict_oldest()
 {
-  // Called with mutex_ held. Remove the entry with the oldest last_updated.
-  if (entries_.empty()) {
+  // Called with mutex_ held. Remove the entry at the back of lru_list_ (Least Recently Used).
+  if (lru_list_.empty()) {
     return;
   }
 
-  auto oldest = entries_.begin();
-  for (auto it = entries_.begin(); it != entries_.end(); ++it) {
-    if (it->second.last_updated < oldest->second.last_updated) {
-      oldest = it;
-    }
-  }
-  entries_.erase(oldest);
+  std::string oldest_key = lru_list_.back();
+  entries_.erase(oldest_key);
+  lru_list_.pop_back();
 }
 
 void
@@ -297,7 +316,7 @@ HintsCache::persist_to_disk()
   // Rename succeeded — data is safely on disk. Clear the dirty flag now.
   {
     TSMutexGuard guard(mutex_);
-    is_dirty_ = false;
+    is_dirty_.store(false, std::memory_order_release);
   }
 
   TSDebug("early_hints", "persisted %u entries to %s", entry_count, persist_path_.c_str());
@@ -416,11 +435,18 @@ HintsCache::load_from_disk()
 
   // Atomic swap — hold mutex only for the map swap (not for file I/O).
   // All parsing done above. Now swap new_entries into entries_ atomically.
+  size_t loaded_count = 0;
   {
     TSMutexGuard guard(mutex_);
     entries_ = std::move(new_entries);
+    lru_list_.clear();
+    for (auto &pair : entries_) {
+      lru_list_.push_front(pair.first);
+      pair.second.lru_iterator = lru_list_.begin();
+    }
+    loaded_count = entries_.size();
   }
 
-  TSDebug("early_hints", "loaded %zu entries from %s", entries_.size(), persist_path_.c_str());
+  TSDebug("early_hints", "loaded %zu entries from %s", loaded_count, persist_path_.c_str());
   return true;
 }

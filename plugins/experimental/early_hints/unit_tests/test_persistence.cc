@@ -274,8 +274,7 @@ TEST_CASE("Persistence: persist overwrites previous file (no duplicates)", "[per
 
   HintsCache cache;
   cache.set_persist_path(path);
-
-  // Write version 1
+  cache.set_persist_throttle(0); // persist every put for this test
   std::vector<std::string> links1 = {"</old.js>; rel=preload; as=script"};
   cache.put("/page", links1);
 
@@ -394,6 +393,7 @@ TEST_CASE("Persistence: put triggers auto-persist when path set", "[persistence]
 
   HintsCache cache;
   cache.set_persist_path(path);
+  cache.set_persist_throttle(0); // persist every put for this test
 
   // First put
   std::vector<std::string> links = {"</app.js>; rel=preload; as=script"};
@@ -1022,6 +1022,111 @@ TEST_CASE("Persistence: persist count is accurate under concurrent puts", "[pers
 
   // At least one persist must have happened; no deadlock must occur
   CHECK(cache.put_persist_count() >= 1);
+
+  cleanup(path);
+}
+
+// Persist throttle: rapid puts within throttle window should persist only once
+
+TEST_CASE("Persistence: throttle limits persist frequency on rapid puts", "[persistence][throttle]")
+{
+  std::string path = make_temp_path(".bin");
+  cleanup(path);
+
+  HintsCache cache;
+  cache.set_persist_path(path);
+  cache.set_persist_throttle(5); // 5 second throttle
+
+  std::vector<std::string> links = {"</app.js>; rel=preload; as=script"};
+
+  // Rapid puts: all within the same second
+  cache.put("/page1", links);
+  cache.put("/page2", links);
+  cache.put("/page3", links);
+  cache.put("/page4", links);
+  cache.put("/page5", links);
+
+  // Only the first put should have triggered a persist (subsequent ones throttled)
+  CHECK(cache.put_persist_count() == 1);
+
+  // But all 5 entries should be in memory
+  CHECK(cache.size() == 5);
+
+  cleanup(path);
+}
+
+TEST_CASE("Persistence: throttle=0 persists every put (backward compatible)", "[persistence][throttle]")
+{
+  std::string path = make_temp_path(".bin");
+  cleanup(path);
+
+  HintsCache cache;
+  cache.set_persist_path(path);
+  cache.set_persist_throttle(0); // no throttle
+
+  std::vector<std::string> links = {"</app.js>; rel=preload; as=script"};
+
+  cache.put("/page1", links);
+  cache.put("/page2", links);
+  cache.put("/page3", links);
+
+  // Each put should trigger a persist
+  CHECK(cache.put_persist_count() == 3);
+
+  cleanup(path);
+}
+
+TEST_CASE("Persistence: throttle allows persist after interval expires", "[persistence][throttle]")
+{
+  std::string path = make_temp_path(".bin");
+  cleanup(path);
+
+  HintsCache cache;
+  cache.set_persist_path(path);
+  cache.set_persist_throttle(1); // 1 second throttle (short for test)
+
+  std::vector<std::string> links = {"</app.js>; rel=preload; as=script"};
+
+  cache.put("/page1", links);
+  CHECK(cache.put_persist_count() == 1);
+
+  cache.put("/page2", links); // should be throttled
+  CHECK(cache.put_persist_count() == 1);
+
+  sleep(2); // wait for throttle to expire
+
+  cache.put("/page3", links); // should trigger persist again
+  CHECK(cache.put_persist_count() == 2);
+
+  cleanup(path);
+}
+
+TEST_CASE("Persistence: destructor flushes dirty data even when throttled", "[persistence][throttle]")
+{
+  std::string path = make_temp_path(".bin");
+  cleanup(path);
+
+  {
+    HintsCache cache;
+    cache.set_persist_path(path);
+    cache.set_persist_throttle(9999); // very long throttle
+
+    std::vector<std::string> links = {"</app.js>; rel=preload; as=script"};
+    cache.put("/page1", links); // first put: persists
+    cache.put("/page2", links); // throttled: NOT persisted to disk yet
+
+    CHECK(cache.put_persist_count() == 1);
+    CHECK(cache.size() == 2);
+    // destructor runs here, should flush because is_dirty
+  }
+
+  // Verify destructor persisted the throttled data
+  HintsCache verify;
+  verify.set_persist_path(path);
+  REQUIRE(verify.load_from_disk());
+  CHECK(verify.size() == 2);
+  CHECK(verify.get("/page1", 1) != nullptr);
+  CHECK(verify.get("/page2", 1) != nullptr);
 
   cleanup(path);
 }

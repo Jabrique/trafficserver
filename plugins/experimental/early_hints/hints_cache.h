@@ -41,6 +41,8 @@ private:
   TSMutex m_;
 };
 
+#include <list>
+
 using LinkList    = std::vector<std::string>;
 using LinkListPtr = std::shared_ptr<const LinkList>;
 
@@ -48,6 +50,7 @@ struct HintEntry {
   LinkListPtr links;
   time_t last_updated = 0;
   int learn_count     = 0;
+  mutable std::list<std::string>::iterator lru_iterator;
 };
 
 // File format magic: "EH" (Early Hints) + version 1
@@ -70,13 +73,13 @@ public:
    * Returns non-null if entry exists and learn_count >= min_hits.
    * Entries never expire — they live until evicted by capacity or process restart.
    */
-  LinkListPtr get(const std::string &key, int min_hits);
+  LinkListPtr get(const std::string &key, int min_hits) const;
 
   /**
    * Thread-safe get (legacy): copies links into output vector.
    * Returns true if entry exists and learn_count >= min_hits.
    */
-  bool get(const std::string &key, std::vector<std::string> &links, int min_hits);
+  bool get(const std::string &key, std::vector<std::string> &links, int min_hits) const;
 
   /**
    * Thread-safe put: updates or creates entry.
@@ -86,7 +89,7 @@ public:
   void put(const std::string &key, const std::vector<std::string> &links);
 
   /** Get total entries (for stats). */
-  size_t size();
+  size_t size() const;
 
   /** Get count of entries dropped due to cache being full. */
   int64_t drops() const;
@@ -128,14 +131,31 @@ public:
   /** Load cache from disk. Returns true on success, false on error (cache stays empty). */
   bool load_from_disk();
 
+  /**
+   * Set minimum number of seconds between two automatic persist_to_disk() calls.
+   * 0 = persist on every put() that sets is_dirty_. Default = 10s.
+   * Thread-safe only if called before concurrent put() begins.
+   */
+  void
+  set_persist_throttle(int seconds)
+  {
+    persist_throttle_interval_ = seconds;
+  }
+
 private:
-  TSMutex mutex_;
-  TSMutex persist_mutex_; // Serialize persist_to_disk() — prevents concurrent disk writes
+  mutable TSMutex mutex_;
+  mutable TSMutex persist_mutex_; // Serialize persist_to_disk() — prevents concurrent disk writes
   std::unordered_map<std::string, HintEntry> entries_;
+  mutable std::list<std::string> lru_list_; // LRU list of keys (front = MRU, back = LRU)
   int64_t drop_counter_ = 0;
   std::atomic<int64_t> persist_count_{0}; // Counts actual persist_to_disk() calls inside put()
   int max_entries_;
   std::string persist_path_;
+
+  // --- Throttle state ---
+  std::atomic<bool> is_dirty_{false};
+  time_t last_persist_time_      = 0;
+  int persist_throttle_interval_ = 10;
 
   static constexpr int MAX_KEY_LEN = 4096; // Reject keys longer than this in put()
 

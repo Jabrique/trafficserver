@@ -905,6 +905,7 @@ TSRemapNewInstance(int argc, char *argv[], void **ih, char *errbuf, int errbuf_s
       snprintf(filename, sizeof(filename), "early_hints_%016llx.bin", static_cast<unsigned long long>(fnv1a_hash(from_url)));
       std::string persist_path = dir + "/" + filename;
       cache->set_persist_path(persist_path);
+      cache->set_persist_throttle(config->persist_throttle());
       cache->load_from_disk();
       TSDebug(PLUGIN_NAME, "persistence enabled: %s", persist_path.c_str());
     }
