@@ -330,7 +330,7 @@ TEST_CASE("Config numeric parameters", "[config]")
   SECTION("max-cache-entries too low fails")
   {
     EarlyHintsConfig config;
-    CHECK_FALSE(parse_config(config, {"--max-cache-entries", "50"}));
+    CHECK_FALSE(parse_config(config, {"--max-cache-entries", "0"}));
   }
 }
 
@@ -1070,10 +1070,10 @@ TEST_CASE("Config boundary: max-cache-entries", "[config]")
     CHECK(config.max_cache_entries() == 1000000);
   }
 
-  SECTION("max-cache-entries=99 just below lower bound fails")
+  SECTION("max-cache-entries=0 just below lower bound fails")
   {
     EarlyHintsConfig config;
-    CHECK_FALSE(parse_config(config, {"--max-cache-entries", "99"}));
+    CHECK_FALSE(parse_config(config, {"--max-cache-entries", "0"}));
   }
 
   SECTION("max-cache-entries=1000001 just above upper bound fails")
@@ -2244,6 +2244,13 @@ TEST_CASE("has_valid_as_for_preload validation", "[config][as-validation]")
     CHECK_FALSE(has_valid_as_for_preload(R"(</app.js>; rel='preload')"));
   }
 
+  SECTION("non-matching quoted rel without as= returns true")
+  {
+    CHECK(has_valid_as_for_preload(R"(</app.js>; xrel="preload")"));
+    CHECK(has_valid_as_for_preload(R"(</app.js>; xrel='preload')"));
+    CHECK(has_valid_as_for_preload(R"(</app.js>; rel="preloadx")"));
+  }
+
   SECTION("as= value is case-insensitive")
   {
     CHECK(has_valid_as_for_preload("</app.js>; rel=preload; as=Script"));
@@ -2532,5 +2539,38 @@ TEST_CASE("check_rel boundary — quote not valid for unquoted rel form", "[conf
   {
     EarlyHintsConfig config;
     CHECK(parse_config(config, {"--mode", "manual", "--link", R"(</a.js>; rel='preload'; as=script)"}));
+  }
+}
+
+TEST_CASE("Config: debug-header sanitization (M-6)", "[config][security]")
+{
+  SECTION("valid debug-header names are accepted")
+  {
+    EarlyHintsConfig config;
+    CHECK(
+      parse_config(config, {"--mode", "manual", "--link", "</a.js>; rel=preload; as=script", "--debug-header", "X-Early-Hints"}));
+    CHECK(parse_config(config,
+                       {"--mode", "manual", "--link", "</a.js>; rel=preload; as=script", "--debug-header", "Custom_Header_123"}));
+  }
+
+  SECTION("debug-header containing CRLF is rejected")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(
+      config, {"--mode", "manual", "--link", "</a.js>; rel=preload; as=script", "--debug-header", "X-Header\r\nInjection: value"}));
+  }
+
+  SECTION("debug-header containing colon is rejected")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(
+      parse_config(config, {"--mode", "manual", "--link", "</a.js>; rel=preload; as=script", "--debug-header", "X-Header: value"}));
+  }
+
+  SECTION("debug-header containing space is rejected")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(
+      parse_config(config, {"--mode", "manual", "--link", "</a.js>; rel=preload; as=script", "--debug-header", "X-Header Name"}));
   }
 }

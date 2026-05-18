@@ -137,16 +137,53 @@ TSError(const char *fmt, ...)
 
 // --- Statistics ---
 
-int
-TSStatCreate(const char * /* name */, TSRecordDataType /* type */, TSStatPersistence /* persist */, TSStatSync /* sync */)
+#include <unordered_map>
+#include <string>
+
+static std::unordered_map<std::string, int> mock_stats;
+
+bool mock_stat_create_fails = false;
+
+TSReturnCode
+TSStatFindName(const char *name, int *id)
 {
-  static int counter = 0;
-  return counter++;
+  if (mock_stat_create_fails) {
+    return TS_ERROR;
+  }
+  auto it = mock_stats.find(name);
+  if (it != mock_stats.end()) {
+    *id = it->second;
+    return TS_SUCCESS;
+  }
+  return TS_ERROR;
 }
 
-void
-TSStatIntIncrement(int /* id */, int64_t /* amount */)
+int mock_stat_create_call_count = 0;
+
+int
+TSStatCreate(const char *name, TSRecordDataType /* type */, TSStatPersistence /* persist */, TSStatSync /* sync */)
 {
+  mock_stat_create_call_count++;
+  if (mock_stat_create_fails) {
+    return TS_ERROR;
+  }
+  auto it = mock_stats.find(name);
+  if (it != mock_stats.end()) {
+    return TS_ERROR;
+  }
+  static int counter = 0;
+  int id             = counter++;
+  mock_stats[name]   = id;
+  return id;
+}
+
+int mock_last_incremented_stat_id = -2;
+
+void
+TSStatIntIncrement(int id, int64_t /* amount */)
+{
+  mock_last_incremented_stat_id = id;
+  REQUIRE(id >= 0);
 }
 
 // --- Mutex ---

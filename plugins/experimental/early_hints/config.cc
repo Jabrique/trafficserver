@@ -25,6 +25,24 @@
 #include <cerrno>
 #include <climits>
 #include <algorithm>
+#include <unordered_set>
+
+// Validate header name according to RFC 7230 token (tchar) standard
+static bool
+is_valid_header_name(const std::string &name)
+{
+  if (name.empty()) {
+    return false;
+  }
+  for (char c : name) {
+    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '!' || c == '#' || c == '$' ||
+          c == '%' || c == '&' || c == '\'' || c == '*' || c == '+' || c == '-' || c == '.' || c == '^' || c == '_' || c == '`' ||
+          c == '|' || c == '~')) {
+      return false;
+    }
+  }
+  return true;
+}
 
 // Safe integer parsing — returns false on overflow, trailing garbage, or empty input
 static bool
@@ -207,9 +225,8 @@ has_valid_as_for_preload(const std::string &link)
     return false;
   };
 
-  bool needs_as = has_rel("rel=preload") || has_rel("rel=modulepreload") || params.find("rel=\"preload\"") != std::string::npos ||
-                  params.find("rel='preload'") != std::string::npos || params.find("rel=\"modulepreload\"") != std::string::npos ||
-                  params.find("rel='modulepreload'") != std::string::npos;
+  bool needs_as = has_rel("rel=preload") || has_rel("rel=modulepreload") || has_rel("rel=\"preload\"") ||
+                  has_rel("rel='preload'") || has_rel("rel=\"modulepreload\"") || has_rel("rel='modulepreload'");
 
   if (!needs_as) {
     return true; // rel=preconnect, rel=stylesheet etc — as= not required
@@ -261,7 +278,7 @@ merge_hint_links(const std::vector<std::string> &manual_links, const std::vector
   result.reserve(static_cast<size_t>(max_links));
 
   // Track URL keys for deduplication
-  std::vector<std::string> seen_keys;
+  std::unordered_set<std::string> seen_keys;
   seen_keys.reserve(static_cast<size_t>(max_links));
 
   auto add_link = [&](const std::string &link) -> bool {
@@ -269,12 +286,10 @@ merge_hint_links(const std::vector<std::string> &manual_links, const std::vector
       return false;
     }
     std::string key = extract_dedup_key(link);
-    for (const auto &seen : seen_keys) {
-      if (seen == key) {
-        return true; // duplicate, skip but continue
-      }
+    if (seen_keys.find(key) != seen_keys.end()) {
+      return true; // duplicate, skip but continue
     }
-    seen_keys.push_back(std::move(key));
+    seen_keys.insert(std::move(key));
     result.push_back(link);
     return true;
   };
@@ -517,6 +532,10 @@ EarlyHintsConfig::init(int argc, const char *argv[])
       navigate_only_ = false;
       break;
     case 'd':
+      if (!is_valid_header_name(optarg)) {
+        TSError("[%s] invalid --debug-header value: %s", PLUGIN_NAME, optarg);
+        return false;
+      }
       debug_header_ = optarg;
       break;
     case 's':

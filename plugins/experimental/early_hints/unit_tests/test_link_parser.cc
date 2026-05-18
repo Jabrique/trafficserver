@@ -183,3 +183,28 @@ TEST_CASE("R9-01b: triple-backslash before quote keeps quote escaped", "[link_pa
   // Odd backslashes → quote is escaped → entire remainder is one segment.
   REQUIRE(result.size() == 1);
 }
+
+TEST_CASE("LinkParser: Case-insensitive rel deduplication", "[link_parser][dedup]")
+{
+  std::vector<std::string> preconnect_segments = {"</app.js>; rel=preconnect", "</app.js>; rel=Preconnect"};
+  auto result_pre                              = dedup_link_segments(preconnect_segments, 10);
+
+  // Before our fix, this will fail (RED) with 2 == 1, because "rel=Preconnect" is not seen as preconnect,
+  // so it doesn't match "rel=preconnect" as a duplicate type.
+  CHECK(result_pre.size() == 1);
+}
+
+TEST_CASE("LinkParser: rel boundary check in deduplication", "[link_parser][dedup][boundary]")
+{
+  std::vector<std::string> segments1 = {"</app.js>; rel=preconnect", "</app.js>; xrel=preconnect"};
+  auto result1                       = dedup_link_segments(segments1, 10);
+  CHECK(result1.size() == 2);
+
+  std::vector<std::string> segments2 = {"</app.js>; rel=preconnect", "</app.js>; rel=preconnectx"};
+  auto result2                       = dedup_link_segments(segments2, 10);
+  CHECK(result2.size() == 2);
+
+  std::vector<std::string> segments3 = {"</app.js>; rel=preconnect", "</app.js>; rel=\"preconnect\"garbage"};
+  auto result3                       = dedup_link_segments(segments3, 10);
+  CHECK(result3.size() == 2);
+}

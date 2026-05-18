@@ -1,4 +1,6 @@
 #include "link_parser.h"
+#include <algorithm>
+#include <cctype>
 
 std::vector<std::string>
 split_link_header_value(const std::string &header_value, int max_links)
@@ -63,6 +65,30 @@ split_link_header_value(const std::string &header_value, int max_links)
   return result;
 }
 
+static bool
+has_rel_type(const std::string &seg_lower, const std::string &rel_type)
+{
+  std::string needle1 = "rel=" + rel_type;
+  std::string needle2 = "rel=\"" + rel_type + "\"";
+  std::string needle3 = "rel='" + rel_type + "'";
+
+  auto match_needle = [&](const std::string &needle) -> bool {
+    size_t pos = 0;
+    while ((pos = seg_lower.find(needle, pos)) != std::string::npos) {
+      bool before_ok = (pos == 0) || seg_lower[pos - 1] == ';' || seg_lower[pos - 1] == ' ' || seg_lower[pos - 1] == '\t';
+      size_t after   = pos + needle.size();
+      bool after_ok = (after >= seg_lower.size()) || seg_lower[after] == ';' || seg_lower[after] == ' ' || seg_lower[after] == '\t';
+      if (before_ok && after_ok) {
+        return true;
+      }
+      pos += needle.size();
+    }
+    return false;
+  };
+
+  return match_needle(needle1) || match_needle(needle2) || match_needle(needle3);
+}
+
 std::vector<std::string>
 dedup_link_segments(std::vector<std::string> segments, int max_links)
 {
@@ -74,13 +100,20 @@ dedup_link_segments(std::vector<std::string> segments, int max_links)
     bool is_dup    = false;
     if (url_end != std::string::npos) {
       std::string_view url_key = std::string_view(seg).substr(0, url_end + 1);
-      bool is_preconnect       = seg.find("rel=preconnect") != std::string::npos;
+
+      // Case-insensitive check by lowercasing the search string
+      std::string seg_lower = seg;
+      std::transform(seg_lower.begin(), seg_lower.end(), seg_lower.begin(), [](unsigned char c) { return std::tolower(c); });
+      bool is_preconnect = has_rel_type(seg_lower, "preconnect");
+
       for (const auto &existing : result) {
         if (existing.size() > url_key.size() && existing.compare(0, url_key.size(), url_key.data(), url_key.size()) == 0) {
-          // Compare the existing entry's rel type against the incoming segment's rel type.
-          // Both must share the same rel type to be considered a duplicate.
-          // e.g. preload + preconnect for the same URL must both be emitted.
-          if ((existing.find("rel=preconnect") != std::string::npos) == is_preconnect) {
+          // Compare the existing entry's rel type against the incoming segment's rel type case-insensitively
+          std::string existing_lower = existing;
+          std::transform(existing_lower.begin(), existing_lower.end(), existing_lower.begin(),
+                         [](unsigned char c) { return std::tolower(c); });
+          bool existing_preconnect = has_rel_type(existing_lower, "preconnect");
+          if (existing_preconnect == is_preconnect) {
             is_dup = true;
             break;
           }

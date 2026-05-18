@@ -115,6 +115,13 @@ public:
   /** Set file path for disk persistence. Empty = no persistence (default). */
   void set_persist_path(const std::string &path);
 
+  /** Get file path for disk persistence. */
+  const std::string &
+  get_persist_path() const
+  {
+    return persist_path_;
+  }
+
   /** Persist entire cache to disk (atomic: write tmp → rename). */
   bool persist_to_disk();
 

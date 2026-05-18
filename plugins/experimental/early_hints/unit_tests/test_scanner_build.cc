@@ -64,6 +64,14 @@ TEST_CASE("HtmlScanner: unquoted attr terminated by space", "[html_scanner][attr
   CHECK(links[0].find("/app.css") != std::string::npos);
 }
 
+TEST_CASE("HtmlScanner: tag names with digits (e.g. h1-h6) are parsed correctly", "[html_scanner][tag]")
+{
+  std::string html = "<html><head><h1>Title</h1><link rel=stylesheet href=/app.css></head></html>";
+  auto links       = scan_html(html);
+  REQUIRE(links.size() == 1);
+  CHECK(links[0].find("/app.css") != std::string::npos);
+}
+
 // ─── process_tag / build_link_header gaps ───────────────────────────────────
 
 TEST_CASE("HtmlScanner: link with unsupported rel value is skipped", "[html_scanner][build]")

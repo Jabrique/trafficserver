@@ -62,6 +62,9 @@ extern int mock_send_early_hints_count;
 extern int mock_send_early_hints_last_nlinks;
 extern int mock_field_append_count;
 extern TSReturnCode mock_cached_resp_get_rc;
+extern int mock_last_incremented_stat_id;
+extern int mock_stat_create_call_count;
+extern bool mock_stat_create_fails;
 
 // Helper: reset all mock state to defaults
 static void
@@ -97,6 +100,9 @@ reset_mocks()
   mock_send_early_hints_count          = 0;
   mock_send_early_hints_last_nlinks    = 0;
   mock_cached_resp_get_rc              = TS_SUCCESS;
+  mock_last_incremented_stat_id        = -2;
+  mock_stat_create_call_count          = 0;
+  mock_stat_create_fails               = false;
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
@@ -2456,4 +2462,83 @@ TEST_CASE("Cache Interception: hook handles CACHE_HDR and prevents double learni
   TSfree(req_data);
   inst.config = nullptr;
   inst.cache  = nullptr;
+}
+
+extern "C" TSReturnCode TSRemapInit(TSRemapInterface *api_info, char *errbuf, int errbuf_size);
+
+TEST_CASE("Stats Reload: TSRemapInit idempotency", "[stats_reload]")
+{
+  reset_mocks();
+  char errbuf[256];
+  TSRemapInterface api_info;
+  api_info.size            = sizeof(TSRemapInterface);
+  api_info.tsremap_version = TSREMAP_VERSION;
+
+  // First initialization
+  TSReturnCode rc1 = TSRemapInit(&api_info, errbuf, sizeof(errbuf));
+  REQUIRE(rc1 == TS_SUCCESS);
+  CHECK(mock_stat_create_call_count == 6);
+
+  // Second initialization (simulates reload)
+  TSReturnCode rc2 = TSRemapInit(&api_info, errbuf, sizeof(errbuf));
+  REQUIRE(rc2 == TS_SUCCESS);
+
+  // If fixed, we should NOT call TSStatCreate again!
+  // It will fail (RED) before our fix, since TSRemapInit will try to call TSStatCreate 6 more times.
+  CHECK(mock_stat_create_call_count == 6);
+}
+
+extern "C" TSReturnCode TSRemapNewInstance(int argc, char *argv[], void **ih, char *errbuf, int errbuf_size);
+extern "C" void TSRemapDeleteInstance(void *ih);
+extern "C" int rmdir(const char *pathname);
+
+TEST_CASE("New Instance: Dir creation and cleanup", "[instance_init]")
+{
+  reset_mocks();
+  char errbuf[256];
+  void *ih     = nullptr;
+  char *argv[] = {(char *)"http://localhost/", (char *)"http://localhost/", (char *)"--persist-dir",
+                  (char *)"./early_hints_test_dir"};
+  int argc     = 4;
+
+  // Ensure it's clean
+  system("rm -rf ./early_hints_test_dir");
+
+  // Create the directory first to simulate it already existing
+  REQUIRE(mkdir("./early_hints_test_dir", 0755) == 0);
+
+  TSReturnCode rc = TSRemapNewInstance(argc, argv, &ih, errbuf, sizeof(errbuf));
+  REQUIRE(rc == TS_SUCCESS);
+  REQUIRE(ih != nullptr);
+
+  // Cast to access cache path
+  TSCont contp           = static_cast<TSCont>(ih);
+  PluginInstance *p_inst = static_cast<PluginInstance *>(TSContDataGet(contp));
+  std::string path       = p_inst->cache->get_persist_path();
+  size_t last_slash      = path.find_last_of('/');
+  std::string filename   = (last_slash != std::string::npos) ? path.substr(last_slash + 1) : path;
+
+  // 12 ("early_hints_") + 16 (hex) + 4 (".bin") = 32
+  CHECK(filename.length() == 32);
+
+  TSRemapDeleteInstance(ih);
+
+  // Clean up
+  system("rm -rf ./early_hints_test_dir");
+}
+
+TEST_CASE("Stats Safety: increment_stat safely guards against negative IDs (H-2)", "[stats_safety]")
+{
+  reset_mocks();
+
+  // Directly calling increment_stat with -1 should NOT call the mock TSStatIntIncrement
+  // (which has REQUIRE(id >= 0) and mock_last_incremented_stat_id = id).
+  // If it is not guarded, mock_last_incremented_stat_id would become -1, or the REQUIRE(id >= 0) would fail.
+  // We expect mock_last_incremented_stat_id to remain -2 (default).
+  increment_stat(-1, 1);
+  CHECK(mock_last_incremented_stat_id == -2);
+
+  // Directly calling with a valid ID should succeed
+  increment_stat(5, 1);
+  CHECK(mock_last_incremented_stat_id == 5);
 }

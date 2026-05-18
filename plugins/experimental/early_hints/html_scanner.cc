@@ -842,7 +842,7 @@ HtmlScanner::feed(const char *data, int64_t length)
     }
 
     case State::IN_TAG:
-      if (std::isalpha(static_cast<unsigned char>(c)) || c == '-' || c == '_') {
+      if (std::isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '_') {
         if (tag_name_.size() < MAX_TAG_NAME_LEN) {
           tag_name_ += c;
         }

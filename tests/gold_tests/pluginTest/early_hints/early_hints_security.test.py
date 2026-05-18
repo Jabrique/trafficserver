@@ -173,3 +173,37 @@ tr3.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
 tr3.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
     "error-style.css", "Resources from 500 page must not be learned")
 tr3.StillRunningAfter = microserver
+
+# ----
+# M-6: HTTP Header Injection via --debug-header Gold Test (RED)
+# ----
+ts_invalid = Test.MakeATSProcess("ts_invalid", select_ports=True, enable_tls=True, enable_cache=False)
+ts_invalid.addDefaultSSLFiles()
+ts_invalid.Disk.ssl_multicert_config.AddLine('dest_ip=* ssl_cert_name=server.pem ssl_key_name=server.key')
+
+ts_invalid.Disk.remap_config.AddLine(
+    'map / http://127.0.0.1:{0}/'.format(microserver.Variables.Port) +
+    ' @plugin=early_hints.so'
+    ' @pparam=--mode @pparam=manual'
+    ' @pparam=--link @pparam=</a.js>;rel=preload;as=script'
+    ' @pparam=--debug-header @pparam=X-Early-Hints:Injection')
+
+ts_invalid.Disk.records_config.update({
+    'proxy.config.diags.debug.enabled': 1,
+    'proxy.config.diags.debug.tags': 'early_hints',
+    'proxy.config.ssl.server.cert.path': '{0}'.format(ts_invalid.Variables.SSLDir),
+    'proxy.config.ssl.server.private_key.path': '{0}'.format(ts_invalid.Variables.SSLDir),
+})
+
+# We expect this process to log an error in diags.log about the invalid debug-header
+ts_invalid.Disk.diags_log.Content = Testers.ContainsExpression(
+    "invalid --debug-header value",
+    "Should reject header injection attempt in --debug-header parameter")
+
+ts_invalid.Ready = 0
+ts_invalid.ReturnCode = 70
+
+tr_invalid = Test.AddTestRun("Invalid debug-header - ATS rejects config")
+tr_invalid.Processes.Default.Command = "echo 'Testing invalid config'"
+tr_invalid.Processes.Default.ReturnCode = 0
+tr_invalid.Processes.Default.StartBefore(ts_invalid)

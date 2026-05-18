@@ -740,10 +740,10 @@ TEST_CASE("Numeric: config exact boundary values", "[numeric][config]")
     CHECK(config.max_cache_entries() == 1000000);
   }
 
-  SECTION("max-cache-entries=99 (below minimum) rejected")
+  SECTION("max-cache-entries=0 (below minimum) rejected")
   {
     EarlyHintsConfig config;
-    CHECK_FALSE(parse_config_ns(config, {"--max-cache-entries", "99"}));
+    CHECK_FALSE(parse_config_ns(config, {"--max-cache-entries", "0"}));
   }
 
   SECTION("max-cache-entries=1000001 (above maximum) rejected")

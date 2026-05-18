@@ -36,6 +36,7 @@
 #include <memory>
 #include <cstdio>
 #include <sys/stat.h>
+#include <cerrno>
 
 #include "config.h"
 #include "hints_cache.h"
@@ -53,6 +54,14 @@ static int stat_103_skipped_bot      = -1;
 static int stat_103_skipped_no_hints = -1;
 static int stat_103_skipped_non_nav  = -1;
 static int stat_hints_learned        = -1;
+
+static inline void
+increment_stat(int stat_id, int64_t amount)
+{
+  if (stat_id >= 0) {
+    TSStatIntIncrement(stat_id, amount);
+  }
+}
 
 // Per-request state stored via TSUserArgSet
 struct RequestData {
@@ -221,7 +230,7 @@ send_103_response(TSHttpTxn txnp, const std::vector<std::string> &links, int max
   TSDebug(PLUGIN_NAME, "send_103: calling TSHttpTxnSendEarlyHints with %d links (%d bytes total)", count, total_size);
   TSReturnCode rc = TSHttpTxnSendEarlyHints(txnp, link_ptrs.data(), static_cast<int>(link_ptrs.size()));
   if (rc == TS_SUCCESS) {
-    TSStatIntIncrement(stat_103_sent, 1);
+    increment_stat(stat_103_sent, 1);
     TSDebug(PLUGIN_NAME, "sent 103 Early Hints with %d Link headers (%d bytes)", count, total_size);
     return true;
   } else {
@@ -309,7 +318,7 @@ early_hints_transform_do(TSCont contp)
     if (!data->cache_written && data->scanner && !data->scanner->get_links().empty()) {
       data->cache->put(data->cache_key, data->scanner->get_links());
       data->cache_written = true;
-      TSStatIntIncrement(stat_hints_learned, 1);
+      increment_stat(stat_hints_learned, 1);
       TSDebug(PLUGIN_NAME, "learned %zu links for %s via HTML scanning", data->scanner->get_links().size(),
               data->cache_key.c_str());
       for (size_t i = 0; i < data->scanner->get_links().size(); ++i) {
@@ -391,7 +400,7 @@ early_hints_transform_do(TSCont contp)
     if (!data->cache_written && data->scanner && !data->scanner->get_links().empty()) {
       data->cache->put(data->cache_key, data->scanner->get_links());
       data->cache_written = true;
-      TSStatIntIncrement(stat_hints_learned, 1);
+      increment_stat(stat_hints_learned, 1);
       TSDebug(PLUGIN_NAME, "learned %zu links for %s via HTML scanning (final flush)", data->scanner->get_links().size(),
               data->cache_key.c_str());
       for (size_t i = 0; i < data->scanner->get_links().size(); ++i) {
@@ -534,7 +543,7 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
 
       if (!origin_links.empty()) {
         cache->put(req_data->cache_key, origin_links);
-        TSStatIntIncrement(stat_hints_learned, 1);
+        increment_stat(stat_hints_learned, 1);
         TSDebug(PLUGIN_NAME, "learned %zu origin Link headers for %s", origin_links.size(), req_data->cache_key.c_str());
         for (size_t i = 0; i < origin_links.size(); ++i) {
           TSDebug(PLUGIN_NAME, "  origin link[%zu]: %s", i, origin_links[i].c_str());
@@ -800,6 +809,20 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
 
 // ─── Remap Plugin Entry Points ──────────────────────────────────────────────
 
+static int
+get_or_create_stat(const char *name)
+{
+  int id = -1;
+  if (TSStatFindName(name, &id) == TS_SUCCESS) {
+    return id;
+  }
+  id = TSStatCreate(name, TS_RECORDDATATYPE_INT, TS_STAT_NON_PERSISTENT, TS_STAT_SYNC_COUNT);
+  if (id == TS_ERROR) {
+    TSError("[%s] Failed to create statistic: %s", PLUGIN_NAME, name);
+  }
+  return id;
+}
+
 TSReturnCode
 TSRemapInit(TSRemapInterface *api_info, char *errbuf, int errbuf_size)
 {
@@ -825,31 +848,26 @@ TSRemapInit(TSRemapInterface *api_info, char *errbuf, int errbuf_size)
     return TS_ERROR;
   }
 
-  // Register statistics
-  stat_103_sent = TSStatCreate("plugin.early_hints.103_sent", TS_RECORDDATATYPE_INT, TS_STAT_NON_PERSISTENT, TS_STAT_SYNC_COUNT);
-  stat_103_skipped_h1 =
-    TSStatCreate("plugin.early_hints.103_skipped_h1", TS_RECORDDATATYPE_INT, TS_STAT_NON_PERSISTENT, TS_STAT_SYNC_COUNT);
-  stat_103_skipped_bot =
-    TSStatCreate("plugin.early_hints.103_skipped_bot", TS_RECORDDATATYPE_INT, TS_STAT_NON_PERSISTENT, TS_STAT_SYNC_COUNT);
-  stat_103_skipped_no_hints =
-    TSStatCreate("plugin.early_hints.103_skipped_no_hints", TS_RECORDDATATYPE_INT, TS_STAT_NON_PERSISTENT, TS_STAT_SYNC_COUNT);
-  stat_103_skipped_non_nav =
-    TSStatCreate("plugin.early_hints.103_skipped_non_nav", TS_RECORDDATATYPE_INT, TS_STAT_NON_PERSISTENT, TS_STAT_SYNC_COUNT);
-  stat_hints_learned =
-    TSStatCreate("plugin.early_hints.hints_learned", TS_RECORDDATATYPE_INT, TS_STAT_NON_PERSISTENT, TS_STAT_SYNC_COUNT);
+  // Register statistics safely
+  stat_103_sent             = get_or_create_stat("plugin.early_hints.103_sent");
+  stat_103_skipped_h1       = get_or_create_stat("plugin.early_hints.103_skipped_h1");
+  stat_103_skipped_bot      = get_or_create_stat("plugin.early_hints.103_skipped_bot");
+  stat_103_skipped_no_hints = get_or_create_stat("plugin.early_hints.103_skipped_no_hints");
+  stat_103_skipped_non_nav  = get_or_create_stat("plugin.early_hints.103_skipped_non_nav");
+  stat_hints_learned        = get_or_create_stat("plugin.early_hints.hints_learned");
 
   TSDebug(PLUGIN_NAME, "plugin initialized, arg_idx=%d", arg_idx);
   return TS_SUCCESS;
 }
 
-// FNV-1a hash for generating unique persist filenames per remap
-static uint32_t
+// FNV-1a hash for generating unique persist filenames per remap (64-bit)
+static uint64_t
 fnv1a_hash(const char *str)
 {
-  uint32_t hash = 2166136261u;
+  uint64_t hash = 14695981039346656037ULL;
   for (; *str; ++str) {
     hash ^= static_cast<uint8_t>(*str);
-    hash *= 16777619u;
+    hash *= 1099511628211ULL;
   }
   return hash;
 }
@@ -878,17 +896,13 @@ TSRemapNewInstance(int argc, char *argv[], void **ih, char *errbuf, int errbuf_s
       }
     }
     if (!dir.empty()) {
-      // Ensure directory exists (create if needed)
-      struct stat st;
-      if (stat(dir.c_str(), &st) != 0) {
-        if (mkdir(dir.c_str(), 0755) != 0) {
-          TSError("[%s] failed to create persist dir: %s", PLUGIN_NAME, dir.c_str());
-        }
+      if (mkdir(dir.c_str(), 0755) != 0 && errno != EEXIST) {
+        TSError("[%s] failed to create persist dir: %s", PLUGIN_NAME, dir.c_str());
       }
       // Generate unique filename from remap from-URL (argv[0])
       const char *from_url = (argc > 0 && argv[0]) ? argv[0] : "default";
       char filename[64];
-      snprintf(filename, sizeof(filename), "early_hints_%08x.bin", fnv1a_hash(from_url));
+      snprintf(filename, sizeof(filename), "early_hints_%016llx.bin", static_cast<unsigned long long>(fnv1a_hash(from_url)));
       std::string persist_path = dir + "/" + filename;
       cache->set_persist_path(persist_path);
       cache->load_from_disk();
@@ -1032,15 +1046,16 @@ TSRemapDoRemap(void *ih, TSHttpTxn rh, TSRemapRequestInfo * /* rri ATS_UNUSED */
 
   // Check protocol: H2 only
   if (TSHttpTxnClientProtocolStackContains(rh, "h2") == nullptr) {
-    TSStatIntIncrement(stat_103_skipped_h1, 1);
+    increment_stat(stat_103_skipped_h1, 1);
     req_data->debug_status = "skipped-h1";
-    TSDebug(PLUGIN_NAME, "skipping 103 for %s: client is not H2 (103 requires HTTP/2 server push)", cache_key.c_str());
+    TSDebug(PLUGIN_NAME, "skipping 103 for %s: client is not H2 (103 requires HTTP/2 or HTTP/3 informational response support)",
+            cache_key.c_str());
     goto register_hooks;
   }
 
   // Check navigate mode
   if (config->navigate_only() && !is_navigate_request(req_bufp, req_hdr_loc)) {
-    TSStatIntIncrement(stat_103_skipped_non_nav, 1);
+    increment_stat(stat_103_skipped_non_nav, 1);
     req_data->debug_status = "skipped-non-navigate";
     TSDebug(PLUGIN_NAME, "skipping 103 for %s: non-navigate request (Sec-Fetch-Mode != navigate)", cache_key.c_str());
     goto register_hooks;
@@ -1048,7 +1063,7 @@ TSRemapDoRemap(void *ih, TSHttpTxn rh, TSRemapRequestInfo * /* rri ATS_UNUSED */
 
   // Check bot detection
   if (config->skip_bots() && is_bot_user_agent(req_bufp, req_hdr_loc)) {
-    TSStatIntIncrement(stat_103_skipped_bot, 1);
+    increment_stat(stat_103_skipped_bot, 1);
     req_data->debug_status = "skipped-bot";
     TSDebug(PLUGIN_NAME, "skipping 103 for %s: bot User-Agent detected", cache_key.c_str());
     goto register_hooks;
@@ -1089,7 +1104,7 @@ TSRemapDoRemap(void *ih, TSHttpTxn rh, TSRemapRequestInfo * /* rri ATS_UNUSED */
         req_data->debug_status = "send-failed";
       }
     } else {
-      TSStatIntIncrement(stat_103_skipped_no_hints, 1);
+      increment_stat(stat_103_skipped_no_hints, 1);
       req_data->debug_status = "no-hints";
       TSDebug(PLUGIN_NAME, "no hints available for %s after merge", cache_key.c_str());
     }
