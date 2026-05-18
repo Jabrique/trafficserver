@@ -317,6 +317,8 @@ TSIOBufferReader TSIOBufferReaderAlloc(TSIOBuffer /* bufp */)
   return reinterpret_cast<TSIOBufferReader>(0xBBBB);
 }
 
+void TSIOBufferReaderFree(TSIOBufferReader /* readerp */) {}
+
 int64_t
 TSIOBufferCopy(TSIOBuffer /* bufp */, TSIOBufferReader /* readerp */, int64_t nbytes, int64_t /* offset */)
 {
@@ -537,7 +539,7 @@ TSUserArgSet(void * /* data */, int /* arg_idx */, void *arg)
 void *
 TSUserArgGet(void * /* data */, int /* arg_idx */)
 {
-  return nullptr;
+  return mock_user_arg_set_value;
 }
 
 } // extern "C"
@@ -561,4 +563,17 @@ const char *
 TSRuntimeDirGet()
 {
   return "/tmp";
+}
+
+extern "C" {
+TSReturnCode mock_cached_resp_get_rc = TS_SUCCESS;
+TSReturnCode
+TSHttpTxnCachedRespGet(TSHttpTxn txnp, TSMBuffer *bufp, TSMLoc *offset)
+{
+  if (mock_cached_resp_get_rc == TS_SUCCESS) {
+    *bufp   = reinterpret_cast<TSMBuffer>(0xCAFE);
+    *offset = reinterpret_cast<TSMLoc>(0xBABE);
+  }
+  return mock_cached_resp_get_rc;
+}
 }

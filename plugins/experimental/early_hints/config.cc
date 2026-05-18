@@ -594,8 +594,8 @@ EarlyHintsConfig::init(int argc, const char *argv[])
         TSError("[%s] invalid --max-cache-entries value: %s", PLUGIN_NAME, optarg);
         return false;
       }
-      if (max_cache_entries_ < 100 || max_cache_entries_ > 1000000) {
-        TSError("[%s] max-cache-entries must be between 100 and 1000000, got %d", PLUGIN_NAME, max_cache_entries_);
+      if (max_cache_entries_ < 1 || max_cache_entries_ > 1000000) {
+        TSError("[%s] max-cache-entries must be between 1 and 1000000, got %d", PLUGIN_NAME, max_cache_entries_);
         return false;
       }
       break;

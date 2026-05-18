@@ -546,61 +546,154 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
 
     // Auto-learn mode: set up HTML scanning transform
     if (config->mode() & EarlyHintsConfig::MODE_AUTO_LEARN) {
-      // Check Content-Type: text/html
-      TSMLoc ct_field = TSMimeHdrFieldFind(server_bufp, server_hdr_loc, TS_MIME_FIELD_CONTENT_TYPE, TS_MIME_LEN_CONTENT_TYPE);
-      bool is_html    = false;
+      // ATS Cache Read Interception / Redundant Transform Skip:
+      // If the plugin already learned hints for this URL, skip scanning (saves CPU).
+      bool already_learned = (req_data->cached_links != nullptr);
 
-      if (ct_field != TS_NULL_MLOC) {
-        int ct_len         = 0;
-        const char *ct_str = TSMimeHdrFieldValueStringGet(server_bufp, server_hdr_loc, ct_field, -1, &ct_len);
-        if (ct_str && ct_len >= 9 && strncasecmp(ct_str, "text/html", 9) == 0 &&
-            (ct_len == 9 || ct_str[9] == ';' || ct_str[9] == ' ' || ct_str[9] == '\t')) {
-          is_html = true;
-        }
-        TSHandleMLocRelease(server_bufp, server_hdr_loc, ct_field);
-      }
+      if (already_learned) {
+        TSDebug(PLUGIN_NAME, "READ_RESPONSE_HDR: Redundant Transform Skip - already learned hints for %s, skipping scanner",
+                req_data->cache_key.c_str());
+      } else {
+        // Check Content-Type: text/html
+        TSMLoc ct_field = TSMimeHdrFieldFind(server_bufp, server_hdr_loc, TS_MIME_FIELD_CONTENT_TYPE, TS_MIME_LEN_CONTENT_TYPE);
+        bool is_html    = false;
 
-      // Skip scanning if response body is compressed — the scanner expects uncompressed HTML
-      bool is_compressed = false;
-      if (is_html) {
-        TSMLoc ce_field =
-          TSMimeHdrFieldFind(server_bufp, server_hdr_loc, TS_MIME_FIELD_CONTENT_ENCODING, TS_MIME_LEN_CONTENT_ENCODING);
-        if (ce_field != TS_NULL_MLOC) {
-          int ce_len         = 0;
-          const char *ce_str = TSMimeHdrFieldValueStringGet(server_bufp, server_hdr_loc, ce_field, -1, &ce_len);
-          if (ce_str && ce_len > 0 && !(ce_len == 8 && strncasecmp(ce_str, "identity", 8) == 0)) {
-            is_compressed = true;
-            TSDebug(PLUGIN_NAME, "auto-learn: skipping for %s, response is compressed (Content-Encoding: %.*s)",
-                    req_data->cache_key.c_str(), ce_len, ce_str);
+        if (ct_field != TS_NULL_MLOC) {
+          int ct_len         = 0;
+          const char *ct_str = TSMimeHdrFieldValueStringGet(server_bufp, server_hdr_loc, ct_field, -1, &ct_len);
+          if (ct_str && ct_len >= 9 && strncasecmp(ct_str, "text/html", 9) == 0 &&
+              (ct_len == 9 || ct_str[9] == ';' || ct_str[9] == ' ' || ct_str[9] == '\t')) {
+            is_html = true;
           }
-          TSHandleMLocRelease(server_bufp, server_hdr_loc, ce_field);
+          TSHandleMLocRelease(server_bufp, server_hdr_loc, ct_field);
         }
-      }
 
-      if (is_html && !is_compressed) {
-        // Create transform for HTML scanning
-        TransformData *tdata = static_cast<TransformData *>(TSmalloc(sizeof(TransformData)));
-        new (tdata) TransformData();
-        tdata->scanner   = new HtmlScanner(config->scan_limit(), config->max_links(), config);
-        tdata->cache     = cache;
-        tdata->cache_key = req_data->cache_key;
+        // Skip scanning if response body is compressed — the scanner expects uncompressed HTML
+        bool is_compressed = false;
+        if (is_html) {
+          TSMLoc ce_field =
+            TSMimeHdrFieldFind(server_bufp, server_hdr_loc, TS_MIME_FIELD_CONTENT_ENCODING, TS_MIME_LEN_CONTENT_ENCODING);
+          if (ce_field != TS_NULL_MLOC) {
+            int ce_len         = 0;
+            const char *ce_str = TSMimeHdrFieldValueStringGet(server_bufp, server_hdr_loc, ce_field, -1, &ce_len);
+            if (ce_str && ce_len > 0 && !(ce_len == 8 && strncasecmp(ce_str, "identity", 8) == 0)) {
+              is_compressed = true;
+              TSDebug(PLUGIN_NAME, "auto-learn: skipping for %s, response is compressed (Content-Encoding: %.*s)",
+                      req_data->cache_key.c_str(), ce_len, ce_str);
+            }
+            TSHandleMLocRelease(server_bufp, server_hdr_loc, ce_field);
+          }
+        }
 
-        TSVConn connp = TSTransformCreate(early_hints_transform, txnp);
-        if (!connp) {
-          TSDebug(PLUGIN_NAME, "TSTransformCreate failed for %s, skipping HTML scanning", req_data->cache_key.c_str());
-          delete tdata->scanner;
-          tdata->~TransformData();
-          TSfree(tdata);
-        } else {
-          TSContDataSet(connp, tdata);
-          TSHttpTxnHookAdd(txnp, TS_HTTP_RESPONSE_TRANSFORM_HOOK, connp);
-          TSDebug(PLUGIN_NAME, "added HTML scanning transform for %s (scan_limit=%d)", req_data->cache_key.c_str(),
-                  config->scan_limit());
+        if (is_html && !is_compressed) {
+          // Create transform for HTML scanning
+          TransformData *tdata = static_cast<TransformData *>(TSmalloc(sizeof(TransformData)));
+          new (tdata) TransformData();
+          tdata->scanner   = new HtmlScanner(config->scan_limit(), config->max_links(), config);
+          tdata->cache     = cache;
+          tdata->cache_key = req_data->cache_key;
+
+          TSVConn connp = TSTransformCreate(early_hints_transform, txnp);
+          if (!connp) {
+            TSDebug(PLUGIN_NAME, "TSTransformCreate failed for %s, skipping HTML scanning", req_data->cache_key.c_str());
+            delete tdata->scanner;
+            tdata->~TransformData();
+            TSfree(tdata);
+          } else {
+            TSContDataSet(connp, tdata);
+            TSHttpTxnHookAdd(txnp, TS_HTTP_RESPONSE_TRANSFORM_HOOK, connp);
+            TSDebug(PLUGIN_NAME, "added HTML scanning transform for %s (scan_limit=%d)", req_data->cache_key.c_str(),
+                    config->scan_limit());
+          }
         }
       }
     }
 
     TSHandleMLocRelease(server_bufp, TS_NULL_MLOC, server_hdr_loc);
+    break;
+  }
+
+  case TS_EVENT_HTTP_READ_CACHE_HDR: {
+    // ATS Cache Interception (Read-Cache Hook)
+    TSMBuffer cache_bufp;
+    TSMLoc cache_hdr_loc;
+
+    if (TSHttpTxnCachedRespGet(txnp, &cache_bufp, &cache_hdr_loc) != TS_SUCCESS) {
+      TSDebug(PLUGIN_NAME, "READ_CACHE_HDR: failed to get cached response for %s", req_data->cache_key.c_str());
+      break;
+    }
+
+    TSHttpStatus status = TSHttpHdrStatusGet(cache_bufp, cache_hdr_loc);
+    if (status != TS_HTTP_STATUS_OK) {
+      TSDebug(PLUGIN_NAME, "READ_CACHE_HDR: skipping non-200 cached response (status=%d) for %s", status,
+              req_data->cache_key.c_str());
+      TSHandleMLocRelease(cache_bufp, TS_NULL_MLOC, cache_hdr_loc);
+      break;
+    }
+
+    // ATS Cache Read Interception: Only attach HTML scanner if Auto-Learn is enabled.
+    // If the plugin already learned hints for this URL (cache hit in memory), skip scanning (saves CPU).
+    if (config->mode() & EarlyHintsConfig::MODE_AUTO_LEARN) {
+      bool already_learned = (req_data->cached_links != nullptr);
+
+      if (already_learned) {
+        TSDebug(PLUGIN_NAME, "READ_CACHE_HDR: Redundant Transform Skip - already learned hints for %s, skipping scanner",
+                req_data->cache_key.c_str());
+      } else {
+        // Not learned yet — we lost memory state but ATS has the cached response!
+        // Re-learn it from ATS Cache without contacting the Origin server.
+        TSMLoc ct_field = TSMimeHdrFieldFind(cache_bufp, cache_hdr_loc, TS_MIME_FIELD_CONTENT_TYPE, TS_MIME_LEN_CONTENT_TYPE);
+        bool is_html    = false;
+
+        if (ct_field != TS_NULL_MLOC) {
+          int ct_len         = 0;
+          const char *ct_str = TSMimeHdrFieldValueStringGet(cache_bufp, cache_hdr_loc, ct_field, -1, &ct_len);
+          if (ct_str && ct_len >= 9 && strncasecmp(ct_str, "text/html", 9) == 0 &&
+              (ct_len == 9 || ct_str[9] == ';' || ct_str[9] == ' ' || ct_str[9] == '\t')) {
+            is_html = true;
+          }
+          TSHandleMLocRelease(cache_bufp, cache_hdr_loc, ct_field);
+        }
+
+        bool is_compressed = false;
+        if (is_html) {
+          TSMLoc ce_field =
+            TSMimeHdrFieldFind(cache_bufp, cache_hdr_loc, TS_MIME_FIELD_CONTENT_ENCODING, TS_MIME_LEN_CONTENT_ENCODING);
+          if (ce_field != TS_NULL_MLOC) {
+            int ce_len         = 0;
+            const char *ce_str = TSMimeHdrFieldValueStringGet(cache_bufp, cache_hdr_loc, ce_field, -1, &ce_len);
+            if (ce_str && ce_len > 0 && !(ce_len == 8 && strncasecmp(ce_str, "identity", 8) == 0)) {
+              is_compressed = true;
+              TSDebug(PLUGIN_NAME, "auto-learn (cache): skipping for %s, response is compressed", req_data->cache_key.c_str());
+            }
+            TSHandleMLocRelease(cache_bufp, cache_hdr_loc, ce_field);
+          }
+        }
+
+        if (is_html && !is_compressed) {
+          TransformData *tdata = static_cast<TransformData *>(TSmalloc(sizeof(TransformData)));
+          new (tdata) TransformData();
+          tdata->scanner   = new HtmlScanner(config->scan_limit(), config->max_links(), config);
+          tdata->cache     = cache;
+          tdata->cache_key = req_data->cache_key;
+
+          TSVConn connp = TSTransformCreate(early_hints_transform, txnp);
+          if (!connp) {
+            TSDebug(PLUGIN_NAME, "TSTransformCreate failed for %s (cache), skipping HTML scanning", req_data->cache_key.c_str());
+            delete tdata->scanner;
+            tdata->~TransformData();
+            TSfree(tdata);
+          } else {
+            TSContDataSet(connp, tdata);
+            TSHttpTxnHookAdd(txnp, TS_HTTP_RESPONSE_TRANSFORM_HOOK, connp);
+            TSDebug(PLUGIN_NAME, "added HTML scanning transform for %s from ATS cache (scan_limit=%d)", req_data->cache_key.c_str(),
+                    config->scan_limit());
+          }
+        }
+      }
+    }
+
+    TSHandleMLocRelease(cache_bufp, TS_NULL_MLOC, cache_hdr_loc);
     break;
   }
 
@@ -1009,6 +1102,7 @@ register_hooks:
   TSDebug(PLUGIN_NAME, "registering hooks for %s: READ_RESPONSE_HDR + SEND_RESPONSE_HDR + TXN_CLOSE (status=%s)", cache_key.c_str(),
           req_data->debug_status.c_str());
   TSHttpTxnHookAdd(rh, TS_HTTP_READ_RESPONSE_HDR_HOOK, contp);
+  TSHttpTxnHookAdd(rh, TS_HTTP_READ_CACHE_HDR_HOOK, contp);
   TSHttpTxnHookAdd(rh, TS_HTTP_SEND_RESPONSE_HDR_HOOK, contp);
   TSHttpTxnHookAdd(rh, TS_HTTP_TXN_CLOSE_HOOK, contp);
 
