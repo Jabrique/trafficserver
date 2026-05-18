@@ -292,9 +292,11 @@ early_hints_transform_do(TSCont contp)
     }
     data->output_vio = TSVConnWrite(output_conn, contp, data->output_reader, INT64_MAX);
     if (!data->output_vio) {
+      // Free reader before destroying buffer: reader holds a reference into buffer.
+      TSIOBufferReaderFree(data->output_reader);
+      data->output_reader = nullptr;
       TSIOBufferDestroy(data->output_buffer);
       data->output_buffer = nullptr;
-      data->output_reader = nullptr;
       data->errored       = true;
       return;
     }
@@ -410,8 +412,17 @@ early_hints_transform(TSCont contp, TSEvent event, void * /* edata ATS_UNUSED */
     TransformData *data = static_cast<TransformData *>(TSContDataGet(contp));
     if (data) {
       delete data->scanner;
+      data->scanner = nullptr;
+      // output_reader must be freed before output_buffer: the reader holds an
+      // internal reference into the buffer, and TSIOBufferDestroy with a live
+      // reader is undefined behavior per ATS API contract.
+      if (data->output_reader) {
+        TSIOBufferReaderFree(data->output_reader);
+        data->output_reader = nullptr;
+      }
       if (data->output_buffer) {
         TSIOBufferDestroy(data->output_buffer);
+        data->output_buffer = nullptr;
       }
       data->~TransformData();
       TSfree(data);
