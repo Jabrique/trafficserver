@@ -69,12 +69,16 @@ struct RequestData {
   std::string cache_key;
   std::string debug_status;
   LinkListPtr cached_links; // Ref-counted, reused across hooks — no deep copy
+  // Guards stat_hints_learned against double-count in combined mode:
+  // origin-forward and auto-learn may both fire for the same request.
+  bool stat_learned_emitted = false;
 };
 
 // Transform data for auto-learn HTML scanning
 struct TransformData {
-  HtmlScanner *scanner = nullptr; // owned
-  HintsCache *cache    = nullptr; // NOT owned
+  HtmlScanner *scanner      = nullptr; // owned
+  HintsCache *cache         = nullptr; // NOT owned
+  RequestData *req_data_ref = nullptr; // NOT owned — for combined mode stat guard
   std::string cache_key;
   TSIOBuffer output_buffer       = nullptr;
   TSIOBufferReader output_reader = nullptr;
@@ -318,7 +322,12 @@ early_hints_transform_do(TSCont contp)
     if (!data->cache_written && data->scanner && !data->scanner->get_links().empty()) {
       data->cache->put(data->cache_key, data->scanner->get_links());
       data->cache_written = true;
-      increment_stat(stat_hints_learned, 1);
+      if (!data->req_data_ref || !data->req_data_ref->stat_learned_emitted) {
+        increment_stat(stat_hints_learned, 1);
+        if (data->req_data_ref) {
+          data->req_data_ref->stat_learned_emitted = true;
+        }
+      }
       TSDebug(PLUGIN_NAME, "learned %zu links for %s via HTML scanning", data->scanner->get_links().size(),
               data->cache_key.c_str());
       for (size_t i = 0; i < data->scanner->get_links().size(); ++i) {
@@ -400,7 +409,12 @@ early_hints_transform_do(TSCont contp)
     if (!data->cache_written && data->scanner && !data->scanner->get_links().empty()) {
       data->cache->put(data->cache_key, data->scanner->get_links());
       data->cache_written = true;
-      increment_stat(stat_hints_learned, 1);
+      if (!data->req_data_ref || !data->req_data_ref->stat_learned_emitted) {
+        increment_stat(stat_hints_learned, 1);
+        if (data->req_data_ref) {
+          data->req_data_ref->stat_learned_emitted = true;
+        }
+      }
       TSDebug(PLUGIN_NAME, "learned %zu links for %s via HTML scanning (final flush)", data->scanner->get_links().size(),
               data->cache_key.c_str());
       for (size_t i = 0; i < data->scanner->get_links().size(); ++i) {
@@ -543,7 +557,10 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
 
       if (!origin_links.empty()) {
         cache->put(req_data->cache_key, origin_links);
-        increment_stat(stat_hints_learned, 1);
+        if (!req_data->stat_learned_emitted) {
+          increment_stat(stat_hints_learned, 1);
+          req_data->stat_learned_emitted = true;
+        }
         TSDebug(PLUGIN_NAME, "learned %zu origin Link headers for %s", origin_links.size(), req_data->cache_key.c_str());
         for (size_t i = 0; i < origin_links.size(); ++i) {
           TSDebug(PLUGIN_NAME, "  origin link[%zu]: %s", i, origin_links[i].c_str());
@@ -598,9 +615,10 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
           // Create transform for HTML scanning
           TransformData *tdata = static_cast<TransformData *>(TSmalloc(sizeof(TransformData)));
           new (tdata) TransformData();
-          tdata->scanner   = new HtmlScanner(config->scan_limit(), config->max_links(), config);
-          tdata->cache     = cache;
-          tdata->cache_key = req_data->cache_key;
+          tdata->scanner      = new HtmlScanner(config->scan_limit(), config->max_links(), config);
+          tdata->cache        = cache;
+          tdata->cache_key    = req_data->cache_key;
+          tdata->req_data_ref = req_data; // for combined mode stat guard
 
           TSVConn connp = TSTransformCreate(early_hints_transform, txnp);
           if (!connp) {
@@ -682,9 +700,10 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
         if (is_html && !is_compressed) {
           TransformData *tdata = static_cast<TransformData *>(TSmalloc(sizeof(TransformData)));
           new (tdata) TransformData();
-          tdata->scanner   = new HtmlScanner(config->scan_limit(), config->max_links(), config);
-          tdata->cache     = cache;
-          tdata->cache_key = req_data->cache_key;
+          tdata->scanner      = new HtmlScanner(config->scan_limit(), config->max_links(), config);
+          tdata->cache        = cache;
+          tdata->cache_key    = req_data->cache_key;
+          tdata->req_data_ref = req_data; // for combined mode stat guard
 
           TSVConn connp = TSTransformCreate(early_hints_transform, txnp);
           if (!connp) {
