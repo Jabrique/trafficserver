@@ -1484,3 +1484,58 @@ TEST_CASE("HtmlScanner is_safe_url: space (0x20) in URL rejected", "[html_scanne
     CHECK(links.empty());
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// script_escaped_ and script_comment_pos_ must be reset for each new
+// <script> element — state must not leak across multiple scripts.
+//
+// The bug: state_after_open_tag() did not reset script_escaped_/
+// script_comment_pos_ before entering IN_SCRIPT. If a prior script left
+// script_comment_pos_ > 0, the next <script> element could misparse its
+// content, potentially allowing a link inside an unclosed <!-- to be treated
+// as outside a comment and produce an erroneous hint.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("HtmlScanner: script_escaped state resets between script elements without reset()", "[html_scanner][script][security]")
+{
+  SECTION("link after two properly closed scripts is found")
+  {
+    // Two consecutive scripts followed by a preload link. Each script must
+    // not leave stale state that causes the link to be missed.
+    std::string html = R"(<html><head>)"
+                       R"(<script>var x = 1;</script>)"
+                       R"(<script>var y = 2;</script>)"
+                       R"(<link rel="preload" href="/after-scripts.js" as="script">)"
+                       R"(</head></html>)";
+    auto links = scan_html(html);
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("/after-scripts.js") != std::string::npos);
+  }
+
+  SECTION("link after script-with-comment is found (comment properly closed)")
+  {
+    // Script with <!-- comment --> properly closed. After the comment exits
+    // escaped mode (-->) the </script> closes. Link must then be found.
+    std::string html = R"(<html><head>)"
+                       R"(<script><!-- var x = 1; --></script>)"
+                       R"(<link rel="preload" href="/after-escaped.js" as="script">)"
+                       R"(</head></html>)";
+    auto links = scan_html(html);
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("/after-escaped.js") != std::string::npos);
+  }
+
+  SECTION("link is not emitted from inside a script comment")
+  {
+    // Even with multiple scripts, links inside <!-- --> must not be extracted.
+    std::string html = R"(<html><head>)"
+                       R"(<script><!-- <link rel="preload" href="/bad.js" as="script"> --></script>)"
+                       R"(<link rel="preload" href="/good.js" as="script">)"
+                       R"(</head></html>)";
+    auto links = scan_html(html);
+    // Only the link outside the script should be emitted
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("/good.js") != std::string::npos);
+    CHECK(links[0].find("/bad.js") == std::string::npos);
+  }
+}

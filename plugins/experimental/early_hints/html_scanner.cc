@@ -526,28 +526,36 @@ HtmlScanner::State
 HtmlScanner::state_after_open_tag()
 {
   if (tag_name_.size() == 6 && strncasecmp(tag_name_.c_str(), "script", 6) == 0) {
-    raw_close_pos_ = 0;
-    raw_close_tag_ = "</script";
+    raw_close_pos_      = 0;
+    raw_close_tag_      = "</script";
+    script_escaped_     = false;
+    script_comment_pos_ = 0;
     return State::IN_SCRIPT;
   }
   if (tag_name_.size() == 5 && strncasecmp(tag_name_.c_str(), "style", 5) == 0) {
-    raw_close_pos_ = 0;
-    raw_close_tag_ = "</style";
+    raw_close_pos_      = 0;
+    raw_close_tag_      = "</style";
+    script_escaped_     = false;
+    script_comment_pos_ = 0;
     return State::IN_SCRIPT;
   }
   // <noscript> contains fallback content for JS-disabled environments. When JS
   // is enabled (the common case) the browser ignores it entirely, so preloading
   // resources inside it wastes bandwidth. Skip the body to prevent cache poisoning.
   if (tag_name_.size() == 8 && strncasecmp(tag_name_.c_str(), "noscript", 8) == 0) {
-    raw_close_pos_ = 0;
-    raw_close_tag_ = "</noscript";
+    raw_close_pos_      = 0;
+    raw_close_tag_      = "</noscript";
+    script_escaped_     = false;
+    script_comment_pos_ = 0;
     return State::IN_SCRIPT;
   }
   // <template> contains inert DOM — it is never rendered or fetched on page load.
   // Resources referenced inside it must not be pre-fetched via Early Hints.
   if (tag_name_.size() == 8 && strncasecmp(tag_name_.c_str(), "template", 8) == 0) {
-    raw_close_pos_ = 0;
-    raw_close_tag_ = "</template";
+    raw_close_pos_      = 0;
+    raw_close_tag_      = "</template";
+    script_escaped_     = false;
+    script_comment_pos_ = 0;
     return State::IN_SCRIPT;
   }
   return State::IN_HEAD;
