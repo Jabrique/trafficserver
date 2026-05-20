@@ -915,7 +915,8 @@ TSRemapNewInstance(int argc, char *argv[], void **ih, char *errbuf, int errbuf_s
       }
     }
     if (!dir.empty()) {
-      bool dir_ready = (mkdir(dir.c_str(), 0755) == 0 || errno == EEXIST);
+      // 0750: owner rwx, group rx, no world access — persist dir contains URL path data
+      bool dir_ready = (mkdir(dir.c_str(), 0750) == 0 || errno == EEXIST);
       if (!dir_ready) {
         TSError("[%s] failed to create persist dir '%s' — persistence disabled", PLUGIN_NAME, dir.c_str());
       } else {

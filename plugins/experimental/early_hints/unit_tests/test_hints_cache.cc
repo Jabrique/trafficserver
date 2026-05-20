@@ -23,6 +23,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <sys/stat.h>
 #include <thread>
 #include <unistd.h>
 #include <vector>
@@ -1031,4 +1032,184 @@ TEST_CASE("evict_oldest() prefers never-accessed entries over recently-accessed 
   // After fix: A must always survive, B must be evicted.
   CHECK(cache.get("/entry-A", 1) != nullptr); // A: recently accessed → must survive
   CHECK(cache.get("/entry-B", 1) == nullptr); // B: never accessed → must be evicted
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Persist security hardening tests
+//
+// Three related invariants:
+//  1. Stale .tmp file left by a prior crash must be removed by load_from_disk()
+//     before any new persist attempt, so O_EXCL in persist_to_disk() always works.
+//  2. persist_to_disk() must use O_EXCL so a pre-existing .tmp file (symlink or
+//     regular file) causes persist to fail safely rather than overwrite it.
+//  3. After persist_to_disk(), the persist file must have mode 0640 (not 0644
+//     or 0666) so world-read is not granted on potentially sensitive URL paths.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("HintsCache persist: stale .tmp file is removed by load_from_disk", "[hints_cache][persist][security]")
+{
+  char dir_template[] = "/tmp/eh_cache_test_XXXXXX";
+  char *dir           = mkdtemp(dir_template);
+  REQUIRE(dir != nullptr);
+
+  std::string persist_path = std::string(dir) + "/hints.bin";
+  std::string tmp_path     = persist_path + ".tmp";
+
+  // Pre-create a stale .tmp file (simulating a crash during prior persist)
+  {
+    FILE *fp = fopen(tmp_path.c_str(), "wb");
+    REQUIRE(fp != nullptr);
+    fwrite("stale", 1, 5, fp);
+    fclose(fp);
+  }
+  REQUIRE(access(tmp_path.c_str(), F_OK) == 0); // stale .tmp exists
+
+  HintsCache cache;
+  cache.set_persist_path(persist_path);
+
+  // load_from_disk() must remove the stale .tmp
+  cache.load_from_disk();                     // no valid persist file — returns false, but cleans .tmp
+  CHECK(access(tmp_path.c_str(), F_OK) != 0); // .tmp must be gone
+
+  rmdir(dir);
+}
+
+TEST_CASE("HintsCache persist: symlink at .tmp path is not followed (O_EXCL)", "[hints_cache][persist][security]")
+{
+  char dir_template[] = "/tmp/eh_cache_test_XXXXXX";
+  char *dir           = mkdtemp(dir_template);
+  REQUIRE(dir != nullptr);
+
+  std::string persist_path = std::string(dir) + "/hints.bin";
+  std::string tmp_path     = persist_path + ".tmp";
+  std::string victim_path  = std::string(dir) + "/victim.txt";
+
+  // Attacker pre-creates victim file and symlinks .tmp → victim
+  {
+    FILE *fp = fopen(victim_path.c_str(), "wb");
+    REQUIRE(fp != nullptr);
+    fwrite("original", 1, 8, fp);
+    fclose(fp);
+  }
+  REQUIRE(symlink(victim_path.c_str(), tmp_path.c_str()) == 0);
+
+  HintsCache cache;
+  cache.set_persist_path(persist_path);
+  cache.put("/test", {R"(</a.js>; rel=preload; as=script)"});
+  cache.put("/test", {R"(</a.js>; rel=preload; as=script)"}); // meet min_hits
+
+  // persist_to_disk() must fail or skip — must NOT overwrite victim via symlink
+  cache.persist_to_disk();
+
+  // Verify victim file is unchanged
+  FILE *fp = fopen(victim_path.c_str(), "rb");
+  REQUIRE(fp != nullptr);
+  char buf[32] = {};
+  size_t n     = fread(buf, 1, sizeof(buf) - 1, fp);
+  fclose(fp);
+  CHECK(std::string(buf, n) == "original"); // victim untouched
+
+  // Cleanup
+  unlink(tmp_path.c_str());
+  unlink(victim_path.c_str());
+  rmdir(dir);
+}
+
+TEST_CASE("HintsCache persist: file mode is 0640 after persist", "[hints_cache][persist][security]")
+{
+  char dir_template[] = "/tmp/eh_cache_test_XXXXXX";
+  char *dir           = mkdtemp(dir_template);
+  REQUIRE(dir != nullptr);
+
+  std::string persist_path = std::string(dir) + "/hints.bin";
+
+  HintsCache cache;
+  cache.set_persist_path(persist_path);
+  cache.put("/test", {R"(</a.js>; rel=preload; as=script)"});
+  cache.put("/test", {R"(</a.js>; rel=preload; as=script)"}); // meet min_hits
+
+  bool ok = cache.persist_to_disk();
+  REQUIRE(ok);
+
+  struct stat st;
+  REQUIRE(stat(persist_path.c_str(), &st) == 0);
+  mode_t perms = st.st_mode & 0777;
+  CHECK(perms == 0640); // owner rw, group r, no world access
+
+  unlink(persist_path.c_str());
+  rmdir(dir);
+}
+
+TEST_CASE("HintsCache persist: no .tmp file remains after successful persist", "[hints_cache][persist][tmp_cleanup]")
+{
+  char dir_template[] = "/tmp/eh_cache_test_XXXXXX";
+  char *dir           = mkdtemp(dir_template);
+  REQUIRE(dir != nullptr);
+
+  std::string persist_path = std::string(dir) + "/hints.bin";
+  std::string tmp_path     = persist_path + ".tmp";
+
+  HintsCache cache;
+  cache.set_persist_path(persist_path);
+  cache.set_persist_throttle(0);
+
+  std::vector<std::string> links = {"</app.js>; rel=preload; as=script"};
+  cache.put("/page", links);
+
+  // After persist via put(), the .tmp file must be gone (renamed to persist path)
+  CHECK(access(tmp_path.c_str(), F_OK) != 0);
+  CHECK(access(persist_path.c_str(), F_OK) == 0);
+
+  unlink(persist_path.c_str());
+  rmdir(dir);
+}
+
+TEST_CASE("HintsCache persist: subsequent persist after stale .tmp is cleaned by load_from_disk",
+          "[hints_cache][persist][tmp_cleanup]")
+{
+  char dir_template[] = "/tmp/eh_cache_test_XXXXXX";
+  char *dir           = mkdtemp(dir_template);
+  REQUIRE(dir != nullptr);
+
+  std::string persist_path = std::string(dir) + "/hints.bin";
+  std::string tmp_path     = persist_path + ".tmp";
+
+  // Write a valid persist file first
+  {
+    HintsCache cache;
+    cache.set_persist_path(persist_path);
+    cache.set_persist_throttle(0);
+    cache.put("/page1", {"</a.js>; rel=preload; as=script"});
+  }
+  REQUIRE(access(persist_path.c_str(), F_OK) == 0);
+
+  // Simulate a crash: leave a stale .tmp file behind
+  {
+    FILE *fp = fopen(tmp_path.c_str(), "wb");
+    REQUIRE(fp);
+    fwrite("crash_remnant", 1, 13, fp);
+    fclose(fp);
+  }
+  REQUIRE(access(tmp_path.c_str(), F_OK) == 0);
+
+  // load_from_disk should remove the stale .tmp, and subsequent persist should work
+  HintsCache cache2;
+  cache2.set_persist_path(persist_path);
+  cache2.set_persist_throttle(0);
+  cache2.load_from_disk();
+  CHECK(access(tmp_path.c_str(), F_OK) != 0); // .tmp removed
+
+  // New persist should succeed (O_EXCL won't fail since .tmp is gone)
+  cache2.put("/page2", {"</b.css>; rel=preload; as=style"});
+  CHECK(access(persist_path.c_str(), F_OK) == 0);
+  CHECK(access(tmp_path.c_str(), F_OK) != 0); // .tmp cleaned after persist
+
+  // Verify data integrity
+  HintsCache verify;
+  verify.set_persist_path(persist_path);
+  REQUIRE(verify.load_from_disk());
+  CHECK(verify.size() == 2);
+
+  unlink(persist_path.c_str());
+  rmdir(dir);
 }

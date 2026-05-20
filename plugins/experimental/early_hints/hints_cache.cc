@@ -20,9 +20,12 @@
 
 #include "hints_cache.h"
 #include "config.h"
-#include <cstring>
-#include <cstdio>
 #include <algorithm>
+#include <cstdio>
+#include <cstring>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 HintsCache::HintsCache(int max_entries) : mutex_(TSMutexCreate()), persist_mutex_(TSMutexCreate()), max_entries_(max_entries) {}
 
@@ -243,11 +246,21 @@ HintsCache::persist_to_disk()
     }
   } // mutex released — disk I/O happens without blocking readers
 
-  // Step 2: Serialize to temp file
+  // Step 2: Serialize to temp file.
+  // O_EXCL ensures we never follow a symlink or overwrite an existing file —
+  // a pre-existing .tmp is always either a crash remnant (cleaned by load_from_disk)
+  // or a symlink planted by an attacker; either way we refuse to write.
   std::string tmp_path = persist_path_ + ".tmp";
-  FILE *fp             = fopen(tmp_path.c_str(), "wb");
+  int fd               = open(tmp_path.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0640);
+  if (fd < 0) {
+    TSDebug("early_hints", "persist: failed to open %s (O_EXCL): %s", tmp_path.c_str(), strerror(errno));
+    return false;
+  }
+  FILE *fp = fdopen(fd, "wb");
   if (!fp) {
-    TSDebug("early_hints", "persist: failed to open %s for writing", tmp_path.c_str());
+    close(fd);
+    std::remove(tmp_path.c_str());
+    TSDebug("early_hints", "persist: fdopen failed for %s", tmp_path.c_str());
     return false;
   }
 
@@ -256,6 +269,7 @@ HintsCache::persist_to_disk()
   uint32_t entry_count = static_cast<uint32_t>(snapshot.size());
   if (fwrite(&magic, sizeof(magic), 1, fp) != 1 || fwrite(&entry_count, sizeof(entry_count), 1, fp) != 1) {
     fclose(fp);
+    std::remove(tmp_path.c_str());
     return false;
   }
 
@@ -265,6 +279,7 @@ HintsCache::persist_to_disk()
     uint16_t key_len = static_cast<uint16_t>(entry.key.size());
     if (fwrite(&key_len, sizeof(key_len), 1, fp) != 1 || fwrite(entry.key.data(), key_len, 1, fp) != 1) {
       fclose(fp);
+      std::remove(tmp_path.c_str());
       return false;
     }
 
@@ -272,6 +287,7 @@ HintsCache::persist_to_disk()
     uint32_t lc = static_cast<uint32_t>(entry.learn_count);
     if (fwrite(&lc, sizeof(lc), 1, fp) != 1) {
       fclose(fp);
+      std::remove(tmp_path.c_str());
       return false;
     }
 
@@ -279,6 +295,7 @@ HintsCache::persist_to_disk()
     uint16_t link_count = entry.links ? static_cast<uint16_t>(entry.links->size()) : 0;
     if (fwrite(&link_count, sizeof(link_count), 1, fp) != 1) {
       fclose(fp);
+      std::remove(tmp_path.c_str());
       return false;
     }
     if (entry.links) {
@@ -286,6 +303,7 @@ HintsCache::persist_to_disk()
         uint16_t link_len = static_cast<uint16_t>(link.size());
         if (fwrite(&link_len, sizeof(link_len), 1, fp) != 1 || fwrite(link.data(), link_len, 1, fp) != 1) {
           fclose(fp);
+          std::remove(tmp_path.c_str());
           return false;
         }
       }
@@ -294,6 +312,12 @@ HintsCache::persist_to_disk()
 
   // Check for buffered write errors before flushing (catches disk-full failures
   // that fwrite() may have silently swallowed into the kernel buffer).
+  // fdatasync ensures data reaches stable storage before the atomic rename,
+  // preventing a post-rename crash from leaving a zero-length or partial file.
+  int sync_fd = fileno(fp);
+  if (sync_fd >= 0) {
+    fdatasync(sync_fd);
+  }
   if (ferror(fp)) {
     fclose(fp);
     std::remove(tmp_path.c_str());
@@ -328,6 +352,17 @@ HintsCache::load_from_disk()
 {
   if (persist_path_.empty()) {
     return false;
+  }
+
+  // Remove any stale .tmp file left by a prior crash. This unblocks the
+  // O_EXCL open in persist_to_disk() and prevents it from accumulating.
+  std::string tmp_path = persist_path_ + ".tmp";
+  if (access(tmp_path.c_str(), F_OK) == 0) {
+    if (unlink(tmp_path.c_str()) != 0) {
+      TSDebug("early_hints", "load: failed to remove stale .tmp file %s: %s", tmp_path.c_str(), strerror(errno));
+    } else {
+      TSDebug("early_hints", "load: removed stale .tmp file %s", tmp_path.c_str());
+    }
   }
 
   FILE *fp = fopen(persist_path_.c_str(), "rb");
