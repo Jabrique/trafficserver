@@ -46,6 +46,12 @@ bool has_valid_as_for_preload(const std::string &link);
 std::vector<std::string> merge_hint_links(const std::vector<std::string> &manual_links,
                                           const std::vector<std::string> *cached_links, int max_links);
 
+// Normalizes a Link header value received from an origin response for use in 103 Early Hints.
+// HTTP 103 only supports rel=preload, rel=preconnect, and rel=modulepreload.
+// Converts rel=stylesheet to rel=preload; as=style so origin stylesheets generate
+// valid preload hints. Returns an empty string if the link cannot be normalized.
+std::string normalize_link_for_hint(const std::string &link);
+
 class EarlyHintsConfig
 {
 public:

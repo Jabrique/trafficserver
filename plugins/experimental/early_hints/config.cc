@@ -671,3 +671,48 @@ EarlyHintsConfig::init(int argc, const char *argv[])
 
   return true;
 }
+
+// Normalize a Link header value from an origin response for use in HTTP 103 Early Hints.
+// HTTP 103 only supports rel=preload, rel=preconnect, and rel=modulepreload.
+// rel=stylesheet is converted to rel=preload; as=style so origin stylesheets
+// generate valid preload hints. Other rel types (rel=dns-prefetch etc.) are dropped.
+// Returns an empty string if the link cannot be represented as a hint.
+std::string
+normalize_link_for_hint(const std::string &link)
+{
+  if (link.empty() || link[0] != '<') {
+    return {};
+  }
+
+  size_t url_end = link.find('>');
+  if (url_end == std::string::npos || url_end < 1) {
+    return {};
+  }
+
+  // Extract <URL> portion including brackets
+  std::string url_part = link.substr(0, url_end + 1);
+
+  // Build lowercase version of the params to classify rel type
+  std::string params_lower = link.substr(url_end + 1);
+  std::transform(params_lower.begin(), params_lower.end(), params_lower.begin(), [](unsigned char c) { return std::tolower(c); });
+
+  // Check for stylesheet — convert to preload; as=style.
+  // Match both rel=stylesheet and rel="stylesheet".
+  bool is_stylesheet =
+    (params_lower.find("rel=stylesheet") != std::string::npos || params_lower.find("rel=\"stylesheet\"") != std::string::npos);
+  if (is_stylesheet) {
+    return url_part + "; rel=preload; as=style";
+  }
+
+  // rel=preload, rel=preconnect, rel=modulepreload — return unchanged
+  bool is_hint_rel =
+    (params_lower.find("rel=preload") != std::string::npos || params_lower.find("rel=preconnect") != std::string::npos ||
+     params_lower.find("rel=modulepreload") != std::string::npos || params_lower.find("rel=\"preload\"") != std::string::npos ||
+     params_lower.find("rel=\"preconnect\"") != std::string::npos ||
+     params_lower.find("rel=\"modulepreload\"") != std::string::npos);
+  if (is_hint_rel) {
+    return link;
+  }
+
+  return {};
+}

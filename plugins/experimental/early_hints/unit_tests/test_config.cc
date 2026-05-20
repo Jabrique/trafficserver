@@ -2736,3 +2736,53 @@ TEST_CASE("Config: merge_hint_links deduplication across multiple inputs", "[con
     REQUIRE(result.size() == 2);
   }
 }
+
+// ==================== normalize_link_for_hint ====================
+
+TEST_CASE("normalize_link_for_hint: stylesheet conversion", "[config][normalize]")
+{
+  SECTION("rel=stylesheet converted to rel=preload; as=style")
+  {
+    std::string result = normalize_link_for_hint("</style.css>; rel=stylesheet");
+    CHECK(result == "</style.css>; rel=preload; as=style");
+  }
+
+  SECTION("rel=stylesheet with quoted value converted")
+  {
+    std::string result = normalize_link_for_hint("</theme.css>; rel=\"stylesheet\"");
+    CHECK(result == "</theme.css>; rel=preload; as=style");
+  }
+
+  SECTION("rel=preload passthrough unchanged")
+  {
+    std::string link   = "</app.js>; rel=preload; as=script";
+    std::string result = normalize_link_for_hint(link);
+    CHECK(result == link);
+  }
+
+  SECTION("rel=preconnect passthrough unchanged")
+  {
+    std::string link   = "<https://cdn.example.com>; rel=preconnect";
+    std::string result = normalize_link_for_hint(link);
+    CHECK(result == link);
+  }
+
+  SECTION("rel=modulepreload passthrough unchanged")
+  {
+    std::string link   = "</mod.js>; rel=modulepreload";
+    std::string result = normalize_link_for_hint(link);
+    CHECK(result == link);
+  }
+
+  SECTION("rel=stylesheet with extra params: extra params dropped, as=style added")
+  {
+    // Origin may send </a.css>; rel=stylesheet; media=print
+    // We strip non-hint params and convert to preload.
+    std::string result = normalize_link_for_hint("</a.css>; rel=stylesheet; media=print");
+    CHECK(result == "</a.css>; rel=preload; as=style");
+  }
+
+  SECTION("empty string returns empty") { CHECK(normalize_link_for_hint("").empty()); }
+
+  SECTION("link with no rel returns empty") { CHECK(normalize_link_for_hint("</x.css>; foo=bar").empty()); }
+}

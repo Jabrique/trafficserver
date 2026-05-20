@@ -529,8 +529,9 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
           int remaining = config->max_links() - static_cast<int>(origin_links.size());
           auto segments = split_link_header_value(full_val, remaining);
           for (auto &seg : segments) {
-            if (is_valid_link_value(seg)) {
-              origin_links.push_back(std::move(seg));
+            std::string normalized = normalize_link_for_hint(seg);
+            if (!normalized.empty() && is_valid_link_value(normalized)) {
+              origin_links.push_back(std::move(normalized));
             }
           }
           // Deduplicate: origins occasionally emit the same Link header field
