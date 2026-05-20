@@ -129,9 +129,10 @@ HintsCache::put(const std::string &key, const std::vector<std::string> &links)
   // but wastes I/O. persist_mutex_ ensures only one persist runs at a time.
   if (!persist_path_.empty()) {
     TSMutexGuard persist_guard(persist_mutex_);
-    persist_to_disk();
-    TSMutexGuard cnt_guard(mutex_);
-    persist_count_++;
+    if (persist_to_disk()) {
+      // persist_count_ is std::atomic — no mutex needed, no nested lock.
+      persist_count_.fetch_add(1, std::memory_order_relaxed);
+    }
   }
 }
 
@@ -152,8 +153,7 @@ HintsCache::drops() const
 int64_t
 HintsCache::put_persist_count() const
 {
-  TSMutexGuard guard(mutex_);
-  return persist_count_;
+  return persist_count_.load(std::memory_order_relaxed);
 }
 
 std::string
@@ -214,6 +214,10 @@ HintsCache::persist_to_disk()
 
   {
     TSMutexGuard guard(mutex_);
+    // Do NOT clear is_dirty_ here — clear it only after the rename succeeds.
+    // Clearing before I/O means a crash or disk-full during fwrite/rename
+    // would leave is_dirty_=false, causing the destructor to skip the final
+    // flush and permanently lose the unsaved data.
     snapshot.reserve(entries_.size());
     for (const auto &pair : entries_) {
       snapshot.push_back({pair.first, pair.second.links, pair.second.learn_count});
@@ -269,12 +273,31 @@ HintsCache::persist_to_disk()
     }
   }
 
-  fclose(fp);
+  // Check for buffered write errors before flushing (catches disk-full failures
+  // that fwrite() may have silently swallowed into the kernel buffer).
+  if (ferror(fp)) {
+    fclose(fp);
+    std::remove(tmp_path.c_str());
+    TSDebug("early_hints", "persist: write error detected (disk full?), aborting rename");
+    return false;
+  }
+  if (fclose(fp) != 0) {
+    std::remove(tmp_path.c_str());
+    TSDebug("early_hints", "persist: fclose failed, aborting rename");
+    return false;
+  }
 
-  // Step 3: Atomic rename
+  // Step 3: Atomic rename — only reached when all bytes are confirmed flushed.
   if (rename(tmp_path.c_str(), persist_path_.c_str()) != 0) {
     TSDebug("early_hints", "persist: rename failed");
+    std::remove(tmp_path.c_str());
     return false;
+  }
+
+  // Rename succeeded — data is safely on disk. Clear the dirty flag now.
+  {
+    TSMutexGuard guard(mutex_);
+    is_dirty_ = false;
   }
 
   TSDebug("early_hints", "persisted %u entries to %s", entry_count, persist_path_.c_str());
@@ -367,11 +390,20 @@ HintsCache::load_from_disk()
         fclose(fp);
         return false;
       }
-      links.push_back(std::move(link));
+      // Re-validate each persisted link value. A file written by an older plugin
+      // version may contain rel types or attributes that the current version
+      // would reject (e.g. rel=prefetch, preload without as=). Serving stale
+      // invalid hints wastes browser fetch budget and may trigger browser warnings.
+      if (is_valid_link_value(link) && has_valid_as_for_preload(link)) {
+        links.push_back(std::move(link));
+      } else {
+        TSDebug("early_hints", "load: rejecting invalid persisted link: %s", link.c_str());
+      }
     }
 
-    // Only insert if within capacity
-    if (static_cast<int>(new_entries.size()) < max_entries_) {
+    // Only insert entries that have at least one valid link.
+    // Entries whose every link failed validation are skipped entirely.
+    if (static_cast<int>(new_entries.size()) < max_entries_ && !links.empty()) {
       HintEntry entry;
       entry.links        = std::make_shared<const LinkList>(std::move(links));
       entry.last_updated = time(nullptr);

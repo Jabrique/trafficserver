@@ -25,6 +25,7 @@
 #include <vector>
 #include <memory>
 #include <unordered_map>
+#include <atomic>
 #include <ctime>
 
 // RAII guard for TSMutex — ensures unlock on all exit paths including exceptions
@@ -124,8 +125,8 @@ private:
   TSMutex mutex_;
   TSMutex persist_mutex_; // Serialize persist_to_disk() — prevents concurrent disk writes
   std::unordered_map<std::string, HintEntry> entries_;
-  int64_t drop_counter_  = 0;
-  int64_t persist_count_ = 0; // Counts actual persist_to_disk() calls inside put()
+  int64_t drop_counter_ = 0;
+  std::atomic<int64_t> persist_count_{0}; // Counts actual persist_to_disk() calls inside put()
   int max_entries_;
   std::string persist_path_;
 

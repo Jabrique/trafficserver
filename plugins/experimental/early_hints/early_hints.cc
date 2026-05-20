@@ -853,10 +853,10 @@ TSRemapDeleteInstance(void *ih)
   PluginInstance *inst = static_cast<PluginInstance *>(TSContDataGet(contp));
 
   if (inst) {
-    // Persist cache to disk on graceful shutdown
-    if (inst->cache) {
-      inst->cache->persist_to_disk();
-    }
+    // The HintsCache destructor persists to disk if is_dirty_ is true.
+    // Do not call persist_to_disk() explicitly here: a concurrent put()-triggered
+    // persist may already be in progress under persist_mutex_, and this call would
+    // race against it, writing .tmp simultaneously and potentially corrupting the file.
     delete inst;
   }
 

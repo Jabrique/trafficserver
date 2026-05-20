@@ -22,6 +22,7 @@
 #include <cstdio>
 #include <fstream>
 #include <sys/stat.h>
+#include <thread>
 #include <unistd.h>
 
 // Helper: create a unique temp file path in /tmp
@@ -721,6 +722,306 @@ TEST_CASE("Persistence: entry_count at exactly max_entries*2 is accepted", "[per
   // load_from_disk will pass the sanity check (200 <= 200) but fail reading entries
   // The important thing is it doesn't reject at the entry_count check
   CHECK_FALSE(cache.load_from_disk()); // Fails on missing entry data, not sanity check
+
+  cleanup(path);
+}
+
+// ─── Dirty flag integrity ────────────────────────────────────────────────────
+//
+// If persist_to_disk() fails (e.g. unwritable path, disk full), is_dirty_
+// must remain true so the destructor can retry on shutdown.
+// Clearing it before the write succeeds causes silent data loss.
+
+TEST_CASE("Persistence: dirty flag survives a failed persist_to_disk()", "[persistence][dirty-flag]")
+{
+  HintsCache cache;
+  cache.set_persist_path("/nonexistent/dir/hints.bin"); // fopen will fail
+
+  std::vector<std::string> links = {"</app.js>; rel=preload; as=script"};
+  cache.put("/page", links);
+
+  bool ok = cache.persist_to_disk();
+  CHECK_FALSE(ok);
+
+  // Redirect to a valid path
+  std::string valid_path = make_temp_path(".bin");
+  cleanup(valid_path);
+  cache.set_persist_path(valid_path);
+
+  // If dirty flag was wrongly cleared by the failed persist, this call will
+  // see nothing dirty and produce an empty or missing file.
+  bool ok2 = cache.persist_to_disk();
+  CHECK(ok2);
+
+  HintsCache verify;
+  verify.set_persist_path(valid_path);
+  REQUIRE(verify.load_from_disk());
+  CHECK(verify.size() == 1);
+  auto result = verify.get("/page", 1);
+  REQUIRE(result != nullptr);
+
+  cleanup(valid_path);
+}
+
+TEST_CASE("Persistence: destructor flushes data even after a prior failed persist", "[persistence][dirty-flag]")
+{
+  std::string valid_path = make_temp_path(".bin");
+  cleanup(valid_path);
+
+  {
+    HintsCache cache;
+    cache.set_persist_path("/nonexistent/dir/hints.bin");
+    std::vector<std::string> links = {"</app.js>; rel=preload; as=script"};
+    cache.put("/page", links);
+    cache.persist_to_disk(); // fails — dirty flag must NOT be cleared
+
+    cache.set_persist_path(valid_path);
+    // Destructor runs here — must flush because data is still dirty
+  }
+
+  // If dirty flag was cleared on failure, the destructor skips the flush
+  // and the file never gets written.
+  REQUIRE(file_exists(valid_path));
+
+  HintsCache verify;
+  verify.set_persist_path(valid_path);
+  REQUIRE(verify.load_from_disk());
+  CHECK(verify.size() == 1);
+
+  cleanup(valid_path);
+}
+
+// ─── Write error safety ──────────────────────────────────────────────────────
+//
+// A failed persist (bad path, disk full) must not corrupt or overwrite
+// an existing valid persist file. The atomic rename must only happen
+// after confirming all writes completed successfully.
+
+TEST_CASE("Persistence: failed persist leaves the existing good file intact", "[persistence][write-safety]")
+{
+  std::string path = make_temp_path(".bin");
+  cleanup(path);
+
+  // Write a known-good file first
+  {
+    HintsCache cache;
+    cache.set_persist_path(path);
+    std::vector<std::string> links = {"</original.js>; rel=preload; as=script"};
+    cache.put("/page", links);
+    cache.put("/page", links); // reset throttle
+    REQUIRE(cache.persist_to_disk());
+    REQUIRE(file_exists(path));
+    CHECK_FALSE(file_exists(path + ".tmp")); // .tmp removed on success
+  }
+
+  // A separate cache with a bad persist path must not corrupt the good file
+  {
+    HintsCache cache2;
+    cache2.set_persist_path("/nonexistent/dir/hints.bin");
+    std::vector<std::string> links = {"</new.js>; rel=preload; as=script"};
+    cache2.put("/page", links);
+    CHECK_FALSE(cache2.persist_to_disk());
+  }
+
+  // The original file must still be intact
+  {
+    HintsCache verify;
+    verify.set_persist_path(path);
+    REQUIRE(verify.load_from_disk());
+    CHECK(verify.size() == 1);
+    auto result = verify.get("/page", 1);
+    REQUIRE(result != nullptr);
+    CHECK((*result)[0] == "</original.js>; rel=preload; as=script");
+  }
+
+  cleanup(path);
+}
+
+// ─── Concurrent persist safety ───────────────────────────────────────────────
+//
+// Concurrent put()-triggered persists must not race against an explicit
+// persist_to_disk() call (e.g. from shutdown code). Both paths must
+// be serialized by persist_mutex_ to avoid writing .tmp simultaneously.
+
+TEST_CASE("Persistence: concurrent persist calls produce a valid final file", "[persistence][concurrent-persist][threading]")
+{
+  std::string path = make_temp_path(".bin");
+  cleanup(path);
+
+  for (int trial = 0; trial < 5; ++trial) {
+    cleanup(path);
+    HintsCache cache(1000);
+    cache.set_persist_path(path);
+    cache.set_persist_throttle(0); // persist on every put
+
+    std::vector<std::string> links = {"</app.js>; rel=preload; as=script"};
+
+    std::vector<std::thread> threads;
+    for (int i = 0; i < 4; ++i) {
+      threads.emplace_back([&, i]() {
+        for (int j = 0; j < 10; ++j) {
+          cache.put("/page" + std::to_string(i * 10 + j), links);
+        }
+      });
+    }
+    for (auto &t : threads) {
+      t.join();
+    }
+
+    // Explicit flush while destructor may also flush — must not corrupt
+    cache.persist_to_disk();
+
+    if (file_exists(path)) {
+      HintsCache verify;
+      verify.set_persist_path(path);
+      CHECK(verify.load_from_disk());
+    }
+  }
+
+  cleanup(path);
+}
+
+// ─── Link validation on load ─────────────────────────────────────────────────
+//
+// Links loaded from a persist file must be re-validated before serving.
+// An older plugin version or a tampered file may contain unsupported rel types
+// (e.g. rel=prefetch) or preload entries without as= that would be rejected
+// by the current plugin's validation logic.
+
+TEST_CASE("Persistence: invalid rel type from persist file is rejected on load", "[persistence][load-validation]")
+{
+  std::string path = make_temp_path(".bin");
+  cleanup(path);
+
+  {
+    FILE *fp = fopen(path.c_str(), "wb");
+    REQUIRE(fp);
+
+    uint32_t magic = HINTS_CACHE_MAGIC;
+    uint32_t count = 1;
+    fwrite(&magic, sizeof(magic), 1, fp);
+    fwrite(&count, sizeof(count), 1, fp);
+
+    const char *key  = "/page";
+    uint16_t key_len = static_cast<uint16_t>(strlen(key));
+    fwrite(&key_len, sizeof(key_len), 1, fp);
+    fwrite(key, key_len, 1, fp);
+
+    uint32_t lc = 3;
+    fwrite(&lc, sizeof(lc), 1, fp);
+
+    // Two links: one valid, one with unsupported rel=prefetch
+    uint16_t link_count = 2;
+    fwrite(&link_count, sizeof(link_count), 1, fp);
+
+    const char *valid_link = "</app.js>; rel=preload; as=script";
+    uint16_t ll1           = static_cast<uint16_t>(strlen(valid_link));
+    fwrite(&ll1, sizeof(ll1), 1, fp);
+    fwrite(valid_link, ll1, 1, fp);
+
+    const char *invalid_link = "</x>; rel=prefetch";
+    uint16_t ll2             = static_cast<uint16_t>(strlen(invalid_link));
+    fwrite(&ll2, sizeof(ll2), 1, fp);
+    fwrite(invalid_link, ll2, 1, fp);
+
+    fclose(fp);
+  }
+
+  HintsCache cache;
+  cache.set_persist_path(path);
+  REQUIRE(cache.load_from_disk());
+  CHECK(cache.size() == 1);
+
+  auto result = cache.get("/page", 1);
+  REQUIRE(result != nullptr);
+  // Only the valid link must be present; the invalid one must be dropped
+  CHECK(result->size() == 1);
+  CHECK((*result)[0] == "</app.js>; rel=preload; as=script");
+
+  cleanup(path);
+}
+
+TEST_CASE("Persistence: preload link missing as= is rejected on load", "[persistence][load-validation]")
+{
+  std::string path = make_temp_path(".bin");
+  cleanup(path);
+
+  {
+    FILE *fp = fopen(path.c_str(), "wb");
+    REQUIRE(fp);
+
+    uint32_t magic = HINTS_CACHE_MAGIC;
+    uint32_t count = 1;
+    fwrite(&magic, sizeof(magic), 1, fp);
+    fwrite(&count, sizeof(count), 1, fp);
+
+    const char *key  = "/page";
+    uint16_t key_len = static_cast<uint16_t>(strlen(key));
+    fwrite(&key_len, sizeof(key_len), 1, fp);
+    fwrite(key, key_len, 1, fp);
+
+    uint32_t lc = 1;
+    fwrite(&lc, sizeof(lc), 1, fp);
+
+    uint16_t link_count = 1;
+    fwrite(&link_count, sizeof(link_count), 1, fp);
+
+    // rel=preload without as= — invalid: preload requires the as= attribute
+    const char *bad_link = "</app.js>; rel=preload";
+    uint16_t ll          = static_cast<uint16_t>(strlen(bad_link));
+    fwrite(&ll, sizeof(ll), 1, fp);
+    fwrite(bad_link, ll, 1, fp);
+
+    fclose(fp);
+  }
+
+  HintsCache cache;
+  cache.set_persist_path(path);
+  cache.load_from_disk();
+
+  // Entry with only invalid links must be absent or have an empty link list
+  auto result = cache.get("/page", 1);
+  if (result != nullptr) {
+    CHECK(result->empty());
+  }
+
+  cleanup(path);
+}
+
+// ─── persist_count atomicity ─────────────────────────────────────────────────
+//
+// persist_count_ is incremented inside a nested lock (persist_mutex_ held,
+// then mutex_ acquired). Making it std::atomic removes this nested dependency.
+// Test verifies correctness under concurrent pressure without deadlock.
+
+TEST_CASE("Persistence: persist count is accurate under concurrent puts", "[persistence][persist-count][threading]")
+{
+  std::string path = make_temp_path(".bin");
+  cleanup(path);
+
+  HintsCache cache;
+  cache.set_persist_path(path);
+  cache.set_persist_throttle(0); // persist every put
+
+  std::vector<std::string> links = {"</app.js>; rel=preload; as=script"};
+
+  constexpr int NUM_THREADS = 4;
+  constexpr int PUTS_EACH   = 10;
+
+  std::vector<std::thread> threads;
+  for (int i = 0; i < NUM_THREADS; ++i) {
+    threads.emplace_back([&, i]() {
+      for (int j = 0; j < PUTS_EACH; ++j) {
+        cache.put("/page" + std::to_string(i), links);
+      }
+    });
+  }
+  for (auto &t : threads) {
+    t.join();
+  }
+
+  // At least one persist must have happened; no deadlock must occur
+  CHECK(cache.put_persist_count() >= 1);
 
   cleanup(path);
 }
