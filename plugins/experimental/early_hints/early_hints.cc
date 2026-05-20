@@ -201,7 +201,7 @@ send_103_response(TSHttpTxn txnp, const std::vector<std::string> &links, int max
           max_links, header_size_limit);
 
   // Build array of Link values respecting limits.
-  // Size accounting: "Link: " (6) + value + "\r\n" (2) = 8 overhead per header.
+  // Size accounting: LINK_HEADER_OVERHEAD (8) = "Link: " (6) + "\r\n" (2) per header.
   std::vector<const char *> link_ptrs;
   link_ptrs.reserve(links.size());
   int total_size = 0;
@@ -213,7 +213,7 @@ send_103_response(TSHttpTxn txnp, const std::vector<std::string> &links, int max
               links.size() - static_cast<size_t>(count));
       break;
     }
-    int link_size = static_cast<int>(link.size()) + 8; // "Link: " + value + "\r\n"
+    int link_size = static_cast<int>(link.size()) + LINK_HEADER_OVERHEAD;
     if (total_size + link_size > header_size_limit) {
       TSDebug(PLUGIN_NAME, "send_103: skipping oversized link (%d bytes would exceed %d/%d limit): %s", link_size,
               total_size + link_size, header_size_limit, link.c_str());
@@ -253,8 +253,7 @@ add_link_headers_to_response(TSMBuffer bufp, TSMLoc hdr_loc, const std::vector<s
     if (count >= max_links) {
       break;
     }
-    // "Link: " (6) + value + "\r\n" (2)
-    int entry_len = 6 + static_cast<int>(link.size()) + 2;
+    int entry_len = LINK_HEADER_OVERHEAD + static_cast<int>(link.size());
     if (header_size_limit > 0 && total_len + entry_len > header_size_limit) {
       continue; // skip oversized link, try remaining smaller ones (consistent with send_103_response)
     }

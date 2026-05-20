@@ -483,11 +483,14 @@ HtmlScanner::build_link_header(const std::string &tag)
     crossorigin_value_ = "anonymous";
   }
 
+  // Cache the rel=preload check once — used by both type= and fetchpriority= guards.
+  const bool is_preload_hint = (result.find("rel=preload") != std::string::npos);
+
   // Append type attribute — validate as "type/subtype" MIME structure before
   // emitting. A MIME type without a "/" separator (e.g. type="font") is invalid
   // and must not be forwarded as a Link hint. Also reject empty, leading-slash,
   // and trailing-slash values.
-  if (!type_.empty() && result.find("rel=preload") != std::string::npos) {
+  if (!type_.empty() && is_preload_hint) {
     size_t slash_pos = type_.find('/');
     bool valid_mime  = (slash_pos != std::string::npos && slash_pos > 0 && slash_pos < type_.size() - 1 &&
                        type_.find('/', slash_pos + 1) == std::string::npos);
@@ -509,7 +512,7 @@ HtmlScanner::build_link_header(const std::string &tag)
 
   // Append fetchpriority (Chrome 101+ Fetch Priority API).
   // This attribute is only meaningful on preload hints — omit it from preconnect.
-  if (!fetchpriority_.empty() && result.find("rel=preload") != std::string::npos &&
+  if (!fetchpriority_.empty() && is_preload_hint &&
       (fetchpriority_ == "high" || fetchpriority_ == "low" || fetchpriority_ == "auto")) {
     result += "; fetchpriority=" + fetchpriority_;
   }

@@ -93,8 +93,6 @@ HintsCache::put(const std::string &key, const std::vector<std::string> &links)
     return;
   }
 
-  auto new_links = std::make_shared<const LinkList>(links);
-
   {
     TSMutexGuard guard(mutex_);
 
@@ -102,12 +100,12 @@ HintsCache::put(const std::string &key, const std::vector<std::string> &links)
     if (it != entries_.end()) {
       HintEntry &entry = it->second;
 
-      // Equality-check debounce.
-      // Compare new links against the currently stored links.
-      // If identical, skip the shared_ptr swap.
-      // This avoids unnecessary memory allocation on every request after warm-up.
+      // Equality-check debounce: if the incoming links are identical to what is
+      // already stored, skip the shared_ptr allocation entirely.  This avoids
+      // a heap allocation on every request after the cache warms up.
       if (!entry.links || *entry.links != links) {
-        entry.links = std::move(new_links);
+        // Allocate inside the lock so the pointer is always in a consistent state.
+        entry.links = std::make_shared<const LinkList>(links);
       }
       entry.last_updated = time(nullptr);
 
@@ -132,7 +130,7 @@ HintsCache::put(const std::string &key, const std::vector<std::string> &links)
 
       lru_list_.push_front(key);
       HintEntry entry;
-      entry.links        = std::move(new_links);
+      entry.links        = std::make_shared<const LinkList>(links);
       entry.last_updated = time(nullptr);
       entry.learn_count  = 1;
       entry.lru_iterator = lru_list_.begin();

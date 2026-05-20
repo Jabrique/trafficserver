@@ -25,6 +25,10 @@
 
 #define PLUGIN_NAME "early_hints"
 
+// Per-header framing overhead: "Link: " (6 bytes) + "\r\n" (2 bytes) = 8 bytes.
+// Used when accounting for Link header size budget in 103 and 200 responses.
+static constexpr int LINK_HEADER_OVERHEAD = 8;
+
 // Validates a Link header value: structural checks (< > brackets), control chars,
 // URL scheme allowlist (http/https/relative only), and valid rel= type.
 // Single source of truth — used by both config.cc (manual --link) and early_hints.cc
