@@ -1446,3 +1446,41 @@ TEST_CASE("HtmlScanner: template content is not extracted as hints", "[html_scan
     CHECK(links.empty()); // RED before fix
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// is_safe_url must reject space (0x20) in URL paths.
+//
+// The bug: the control-char filter uses `uc < 0x20`, which passes space
+// (0x20 is NOT less than 0x20). A URL with an embedded space must be rejected
+// because it breaks HTTP header framing and violates RFC 3986 §2.
+// Fix: change `uc < 0x20` to `uc <= 0x20` in html_scanner.cc is_safe_url().
+// ═══════════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("HtmlScanner is_safe_url: space (0x20) in URL rejected", "[html_scanner][security]")
+{
+  SECTION("space in URL path produces no link")
+  {
+    // href="/path with spaces" contains 0x20 — must be rejected by is_safe_url
+    std::string html = R"(<html><head><link rel="preload" href="/path with spaces.js" as="script"></head></html>)";
+    auto links       = scan_html(html);
+    // Bug: uc < 0x20 passes 0x20 → link is emitted. Fix: uc <= 0x20 rejects it.
+    CHECK(links.empty());
+  }
+
+  SECTION("percent-encoded space (%20) is accepted (not a raw space)")
+  {
+    // %20 is two bytes '%' and '2' and '0' — none is 0x20, so it must pass
+    std::string html = R"(<html><head><link rel="preload" href="/path%20encoded.js" as="script"></head></html>)";
+    auto links       = scan_html(html);
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("/path%20encoded.js") != std::string::npos);
+  }
+
+  SECTION("tab (0x09) in URL still rejected (pre-existing behaviour)")
+  {
+    // Tab is < 0x20, already correctly rejected before this fix.
+    std::string html = "<html><head><link rel=\"preload\" href=\"/path\twith\ttab.js\" as=\"script\"></head></html>";
+    auto links       = scan_html(html);
+    CHECK(links.empty());
+  }
+}

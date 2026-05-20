@@ -107,8 +107,10 @@ HtmlScanner::is_safe_url(const std::string &url)
 
   for (char c : url) {
     unsigned char uc = static_cast<unsigned char>(c);
-    // Reject control characters (CRLF injection, null bytes)
-    if (uc < 0x20 || uc == 0x7F) {
+    // Reject control characters (CRLF injection, null bytes) and space (0x20).
+    // Space breaks HTTP header framing — the Link header value is whitespace-delimited
+    // in many parsers, and RFC 3986 §2 disallows unencoded spaces in URIs.
+    if (uc <= 0x20 || uc == 0x7F) {
       return false;
     }
     // Reject Link header delimiters — '>' terminates the URI-Reference in

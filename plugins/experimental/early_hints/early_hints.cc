@@ -896,18 +896,20 @@ TSRemapNewInstance(int argc, char *argv[], void **ih, char *errbuf, int errbuf_s
       }
     }
     if (!dir.empty()) {
-      if (mkdir(dir.c_str(), 0755) != 0 && errno != EEXIST) {
-        TSError("[%s] failed to create persist dir: %s", PLUGIN_NAME, dir.c_str());
+      bool dir_ready = (mkdir(dir.c_str(), 0755) == 0 || errno == EEXIST);
+      if (!dir_ready) {
+        TSError("[%s] failed to create persist dir '%s' — persistence disabled", PLUGIN_NAME, dir.c_str());
+      } else {
+        // Generate unique filename from remap from-URL (argv[0])
+        const char *from_url = (argc > 0 && argv[0]) ? argv[0] : "default";
+        char filename[64];
+        snprintf(filename, sizeof(filename), "early_hints_%016llx.bin", static_cast<unsigned long long>(fnv1a_hash(from_url)));
+        std::string persist_path = dir + "/" + filename;
+        cache->set_persist_path(persist_path);
+        cache->set_persist_throttle(config->persist_throttle());
+        cache->load_from_disk();
+        TSDebug(PLUGIN_NAME, "persistence enabled: %s", persist_path.c_str());
       }
-      // Generate unique filename from remap from-URL (argv[0])
-      const char *from_url = (argc > 0 && argv[0]) ? argv[0] : "default";
-      char filename[64];
-      snprintf(filename, sizeof(filename), "early_hints_%016llx.bin", static_cast<unsigned long long>(fnv1a_hash(from_url)));
-      std::string persist_path = dir + "/" + filename;
-      cache->set_persist_path(persist_path);
-      cache->set_persist_throttle(config->persist_throttle());
-      cache->load_from_disk();
-      TSDebug(PLUGIN_NAME, "persistence enabled: %s", persist_path.c_str());
     }
   }
 
