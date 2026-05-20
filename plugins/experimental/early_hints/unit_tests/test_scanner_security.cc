@@ -364,35 +364,29 @@ TEST_CASE("HtmlScanner is_safe_url: tab before data:", "[html_scanner][security]
 // BUG FIX: extract_origin must normalize backslash-prefixed URLs to proper origins.
 // Per WHATWG URL spec §4.2, browsers treat \ as / in special schemes.
 
-TEST_CASE("HtmlScanner: extract_origin normalizes backslash cross-origin URLs", "[html_scanner][security][regression]")
+TEST_CASE("HtmlScanner: backslash cross-origin URLs are rejected by URL sanitization", "[html_scanner][security][regression]")
 {
-  SECTION("double-backslash URL produces correct https://host preconnect")
+  SECTION("double-backslash URL rejected at URL validation (not preconnected)")
   {
+    // is_safe_url() now rejects \\evil.com before is_crossorigin() is evaluated.
+    // This is a stricter defense: no hint of any kind is emitted for these URLs.
     std::string html = R"(<html><head><link rel="preload" href="\\evil.com/tracker.js" as="script"></head></html>)";
     auto links       = scan_html(html);
-    REQUIRE(links.size() == 1);
-    CHECK(links[0].find("rel=preconnect") != std::string::npos);
-    // Must produce normalized origin: https://evil.com
-    CHECK(links[0].find("https://evil.com>") != std::string::npos);
-    CHECK(links[0].find("\\") == std::string::npos);
+    CHECK(links.empty()); // URL rejected outright — no preconnect emitted
   }
 
-  SECTION("slash-backslash URL produces correct preconnect origin")
+  SECTION("slash-backslash URL rejected at URL validation")
   {
     std::string html = R"(<html><head><link rel="preload" href="/\evil.com/tracker.js" as="script"></head></html>)";
     auto links       = scan_html(html);
-    REQUIRE(links.size() == 1);
-    CHECK(links[0].find("rel=preconnect") != std::string::npos);
-    CHECK(links[0].find("https://evil.com>") != std::string::npos);
+    CHECK(links.empty());
   }
 
-  SECTION("backslash-slash URL produces correct preconnect origin")
+  SECTION("backslash-slash URL rejected at URL validation")
   {
     std::string html = R"(<html><head><link rel="preload" href="\/evil.com/tracker.js" as="script"></head></html>)";
     auto links       = scan_html(html);
-    REQUIRE(links.size() == 1);
-    CHECK(links[0].find("rel=preconnect") != std::string::npos);
-    CHECK(links[0].find("https://evil.com>") != std::string::npos);
+    CHECK(links.empty());
   }
 }
 
@@ -1194,7 +1188,7 @@ TEST_CASE("R6: backslash authority confusion bypass", "[scanner][security][r6]")
     CHECK(links[0].find("https://example.com>") != std::string::npos);
   }
 
-  SECTION("backslash in protocol-relative already handled")
+  SECTION("backslash in protocol-relative rejected outright by is_safe_url")
   {
     const char *argv[] = {"from", "to", "--mode", "auto-learn"};
     EarlyHintsConfig config;
@@ -1205,8 +1199,8 @@ TEST_CASE("R6: backslash authority confusion bypass", "[scanner][security][r6]")
     scanner.feed(html.c_str(), static_cast<int64_t>(html.size()));
 
     auto links = scanner.get_links();
-    REQUIRE(links.size() == 1);
-    CHECK(links[0].find("https://cdn.example.com>") != std::string::npos);
+    // \\cdn.example.com is now caught by is_safe_url and rejected — no hint emitted
+    CHECK(links.empty());
   }
 }
 

@@ -734,10 +734,11 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
       break;
     }
 
-    // Only add Link headers to successful responses (2xx).
-    // Adding them to 4xx/5xx/3xx is misleading — the resources don't apply.
+    // Only add Link headers to 200 OK responses. Partial (206), no-content (204),
+    // redirects, and errors don't correspond to a loadable document — adding
+    // preload hints to them would cause spurious fetches in the browser.
     TSHttpStatus resp_status = TSHttpHdrStatusGet(resp_bufp, resp_hdr_loc);
-    if (resp_status >= 200 && resp_status < 300) {
+    if (resp_status == TS_HTTP_STATUS_OK) {
       // Build merged links from all active modes — same approach as TSRemapDoRemap.
       // For auto-learn/origin-forward, try cached links from remap first;
       // if not available, fallback to fresh cache lookup (transform may have just learned).

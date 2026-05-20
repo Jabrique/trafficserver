@@ -479,38 +479,37 @@ TEST_CASE("DoS: Attribute bomb (thousands of attributes per tag)", "[dos][scanne
     CHECK(elapsed_ms < 2000);
   }
 
-  SECTION("single attribute with value exceeding MAX_ATTR_VALUE_LEN is capped")
+  SECTION("single attribute exceeding MAX_ATTR_VALUE_LEN causes tag rejection")
   {
-    // Build a link tag with an href value of 10000 characters
+    // Build a link tag with an href value of 10000 characters.
+    // New behavior: the tag is rejected entirely (not truncated and emitted).
     std::string long_path = "/";
     long_path.append(10000, 'A');
 
-    std::string html = "<head><link rel=\"preload\" href=\"" + long_path + "\" as=\"script\"></head>";
+    std::string html = "<head><link rel=\"preload\" href=\"" + long_path +
+                       "\" as=\"script\"><link rel=\"preload\" href=\"/ok.js\" as=\"script\"></head>";
 
     auto links = dos_scan(html, static_cast<int>(html.size()), 10);
 
-    // The href is capped at MAX_ATTR_VALUE_LEN (4096).
-    // The truncated URL will be extracted, but its length must be bounded.
+    // Oversized tag is discarded; the following valid link is still extracted.
     REQUIRE(links.size() == 1);
-    CHECK(links[0].size() < 4200); // 4096 + overhead for <url>; rel=... format
+    CHECK(links[0].find("/ok.js") != std::string::npos);
   }
 
-  SECTION("R6: unquoted oversized href is also capped")
+  SECTION("R6: unquoted oversized href causes tag rejection")
   {
-    // This exercises the unquoted attribute value truncation path
-    // (html_scanner.cc line 847 vs the quoted path at line 860)
+    // Unquoted oversized values also cause rejection.
     std::string long_path = "/";
     long_path.append(10000, 'B');
 
-    // Unquoted: href=/BBBBB... (terminated by space before as=)
-    // Actually unquoted values end at space, so we use > as terminator
-    std::string html = "<head><link rel=preload href=" + long_path + " as=script></head>";
+    std::string html =
+      "<head><link rel=preload href=" + long_path + " as=script><link rel=\"preload\" href=\"/ok2.js\" as=\"script\"></head>";
 
     auto links = dos_scan(html, static_cast<int>(html.size()), 10);
 
-    // Truncation must apply to unquoted values too
+    // Oversized tag rejected; valid following link still extracted
     REQUIRE(links.size() == 1);
-    CHECK(links[0].size() < 4200);
+    CHECK(links[0].find("/ok2.js") != std::string::npos);
   }
 
   SECTION("many boolean attributes do not cause issues")

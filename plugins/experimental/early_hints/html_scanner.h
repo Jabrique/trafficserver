@@ -112,6 +112,9 @@ private:
   std::string fetchpriority_;
   bool has_async_ = false;
   bool has_defer_ = false;
+  // Set when any attribute value exceeds MAX_ATTR_VALUE_LEN. The entire tag is
+  // discarded rather than emitting a hint with a silently truncated URL.
+  bool attr_overflowed_ = false;
 
   // Results
   std::vector<std::string> links_;

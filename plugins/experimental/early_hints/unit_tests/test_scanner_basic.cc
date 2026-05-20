@@ -266,29 +266,26 @@ TEST_CASE("HtmlScanner cross-origin handling", "[html_scanner]")
     CHECK(links[0].find("rel=preload") != std::string::npos);
   }
 
-  SECTION("backslash-backslash cross-origin detected (WHATWG URL spec)")
+  SECTION("backslash-backslash cross-origin rejected outright (WHATWG URL spec)")
   {
-    // Browsers treat \\ as // for special schemes — must be flagged as cross-origin
+    // is_safe_url() rejects \\evil.com at URL validation — no hint emitted at all.
     std::string html = R"(<html><head><link rel="preload" href="\\evil.com/tracker.js" as="script"></head></html>)";
     auto links       = scan_html(html);
-    REQUIRE(links.size() == 1);
-    CHECK(links[0].find("rel=preconnect") != std::string::npos);
+    CHECK(links.empty()); // blocked at URL validation — not downgraded to preconnect
   }
 
-  SECTION("slash-backslash cross-origin detected")
+  SECTION("slash-backslash cross-origin rejected outright")
   {
     std::string html = R"(<html><head><link rel="preload" href="/\evil.com/tracker.js" as="script"></head></html>)";
     auto links       = scan_html(html);
-    REQUIRE(links.size() == 1);
-    CHECK(links[0].find("rel=preconnect") != std::string::npos);
+    CHECK(links.empty());
   }
 
-  SECTION("backslash-slash cross-origin detected")
+  SECTION("backslash-slash cross-origin rejected outright")
   {
     std::string html = R"(<html><head><link rel="preload" href="\/evil.com/tracker.js" as="script"></head></html>)";
     auto links       = scan_html(html);
-    REQUIRE(links.size() == 1);
-    CHECK(links[0].find("rel=preconnect") != std::string::npos);
+    CHECK(links.empty());
   }
 
   SECTION("single backslash is NOT cross-origin")
@@ -597,17 +594,16 @@ TEST_CASE("HtmlScanner: control character and type sanitization", "[html_scanner
     CHECK(links[0].find("type=\"font/woff2evilinjected\"") != std::string::npos);
   }
 
-  SECTION("attribute value length is capped")
+  SECTION("attribute value length: oversized href causes tag rejection")
   {
-    // Build a very long href (>2048 chars)
+    // A truncated href would emit a corrupt URL — the entire tag is now rejected.
     std::string long_href(5000, 'a');
-    std::string html = "<html><head><link rel=\"stylesheet\" href=\"/" + long_href + ".css\"></head></html>";
-    auto links       = scan_html(html);
-    // Should either produce a truncated link or no link (href truncated to 4096 chars)
-    if (!links.empty()) {
-      // The href should be capped at 4096
-      CHECK(links[0].size() < 4300);
-    }
+    std::string html = "<html><head><link rel=\"stylesheet\" href=\"/" + long_href +
+                       ".css\"><link rel=\"stylesheet\" href=\"/good.css\"></head></html>";
+    auto links = scan_html(html);
+    // Oversized tag discarded; only the valid second link survives
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("/good.css") != std::string::npos);
   }
 }
 
@@ -778,14 +774,16 @@ TEST_CASE("HtmlScanner: pathological inputs", "[html_scanner][fuzz]")
     CHECK(links.empty());
   }
 
-  SECTION("very long attribute value is capped at MAX_ATTR_VALUE_LEN")
+  SECTION("very long attribute value causes tag rejection")
   {
+    // Oversized attribute rejects the entire tag — not silently truncated.
     std::string long_val(5000, 'x');
-    std::string html = R"(<html><head><link rel="preload" href="/)" + long_val + R"(" as="style"></head></html>)";
-    auto links       = scan_html(html);
-    if (!links.empty()) {
-      CHECK(links[0].size() < 4300); // 4096 max + header overhead
-    }
+    std::string html = R"(<html><head><link rel="preload" href="/)" + long_val +
+                       R"(" as="style"><link rel="stylesheet" href="/safe.css"></head></html>)";
+    auto links = scan_html(html);
+    // Oversized tag rejected; safe second link still emitted
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("/safe.css") != std::string::npos);
   }
 
   SECTION("1MB whitespace inside tag does not crash")
@@ -1068,18 +1066,16 @@ TEST_CASE("HtmlScanner: MAX_ATTR_VALUE_LEN boundary (4096)", "[html_scanner][bou
     CHECK(links[0].find(href_val) != std::string::npos);
   }
 
-  SECTION("href at 4097 chars is truncated to 4096")
+  SECTION("href at 4097 chars causes tag rejection (not truncation)")
   {
     std::string href_val = "/" + std::string(4096, 'y');
     REQUIRE(href_val.size() == 4097);
-    std::string html = "<html><head><link rel=\"preload\" href=\"" + href_val + "\" as=\"style\"></head></html>";
-    auto links       = scan_html(html);
-    // Scanner caps at 4096 — the href is truncated, link is still emitted but shorter
+    std::string html = "<html><head><link rel=\"preload\" href=\"" + href_val +
+                       "\" as=\"style\"><link rel=\"stylesheet\" href=\"/safe.css\"></head></html>";
+    auto links = scan_html(html);
+    // Tag is discarded; only the valid following link is emitted
     REQUIRE(links.size() == 1);
-    // The full 4097-char href should NOT appear (was truncated)
-    CHECK(links[0].find(href_val) == std::string::npos);
-    // But the link should still exist with a truncated path
-    CHECK(links[0].size() > 0);
+    CHECK(links[0].find("/safe.css") != std::string::npos);
   }
 
   SECTION("attr name at exactly 256 chars is capped — excess ignored")

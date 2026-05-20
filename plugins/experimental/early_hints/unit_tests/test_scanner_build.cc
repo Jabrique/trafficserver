@@ -1181,7 +1181,7 @@ TEST_CASE("HtmlScanner: --preload-whitelist emits no-cors preload", "[html_scann
     CHECK(links[0].find("crossorigin=anonymous") != std::string::npos);
   }
 
-  SECTION("modulepreload with domain in preload-whitelist only → falls to preconnect")
+  SECTION("modulepreload with domain in preload-whitelist gets modulepreload (no crossorigin)")
   {
     const char *argv[] = {"from", "to", "--mode", "auto-learn", "--preload-whitelist", "cdn.example.com"};
     EarlyHintsConfig config;
@@ -1193,8 +1193,10 @@ TEST_CASE("HtmlScanner: --preload-whitelist emits no-cors preload", "[html_scann
 
     auto links = scanner.get_links();
     REQUIRE(links.size() == 1);
-    CHECK(links[0].find("rel=preconnect") != std::string::npos);
-    CHECK(links[0].find("rel=preload") == std::string::npos);
+    // preload-whitelist: allow full modulepreload without crossorigin
+    CHECK(links[0].find("rel=modulepreload") != std::string::npos);
+    CHECK(links[0].find("crossorigin") == std::string::npos);
+    CHECK(links[0].find("rel=preconnect") == std::string::npos);
   }
 
   SECTION("wildcard *.cdn.example.com in preload-whitelist matches sub.cdn.example.com")
@@ -1537,5 +1539,141 @@ TEST_CASE("HtmlScanner: script_escaped state resets between script elements with
     REQUIRE(links.size() == 1);
     CHECK(links[0].find("/good.js") != std::string::npos);
     CHECK(links[0].find("/bad.js") == std::string::npos);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Attribute value overflow: tag must be rejected when any attribute value
+// exceeds MAX_ATTR_VALUE_LEN (4096 chars).
+//
+// Bug: when href exceeds the limit, attr_value_ is silently truncated to 4095
+// chars. The truncated URL is then used to build a Link header, emitting a
+// corrupt URL that will cause a fetch error in the browser.
+// Fix: set attr_overflowed_ = true and discard the entire tag.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("HtmlScanner: tag rejected when href exceeds MAX_ATTR_VALUE_LEN", "[html_scanner][validation]")
+{
+  SECTION("href exactly at limit is accepted")
+  {
+    // MAX_ATTR_VALUE_LEN = 4096 — a href with 4092 chars fits safely
+    std::string long_href = "/" + std::string(4090, 'a') + ".js";
+    std::string html      = "<html><head><link rel=\"preload\" href=\"" + long_href + "\" as=\"script\"></head></html>";
+    auto links            = scan_html(html);
+    CHECK(links.size() == 1);
+  }
+
+  SECTION("href exceeding limit produces no link")
+  {
+    // 4097 chars in href value — must be rejected, not truncated
+    std::string long_href = "/" + std::string(4096, 'a') + ".js";
+    std::string html      = "<html><head><link rel=\"preload\" href=\"" + long_href + "\" as=\"script\"></head></html>";
+    auto links            = scan_html(html);
+    CHECK(links.empty());
+  }
+
+  SECTION("valid link after overflowed link is still emitted")
+  {
+    std::string overflow_href = "/" + std::string(4096, 'a') + ".js";
+    std::string html          = "<html><head><link rel=\"preload\" href=\"" + overflow_href +
+                       "\" as=\"script\"><link rel=\"preload\" href=\"/good.js\" as=\"script\"></head></html>";
+    auto links = scan_html(html);
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("/good.js") != std::string::npos);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// type= attribute must be validated as "type/subtype" MIME structure.
+//
+// Bug: type_ passes character-level sanitization but is emitted without
+// checking it has the required "/" separator (e.g. type="font" emits
+// type="font" which is not a valid MIME type and may confuse browsers).
+// Fix: only emit type= when value contains exactly one "/" with non-empty
+// tokens before and after.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("HtmlScanner: type attribute requires type/subtype MIME structure", "[html_scanner][validation]")
+{
+  SECTION("valid MIME type is emitted")
+  {
+    auto links =
+      scan_html(R"(<html><head><link rel="preload" href="/font.woff2" as="font" type="font/woff2" crossorigin></head></html>)");
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("type=\"font/woff2\"") != std::string::npos);
+  }
+
+  SECTION("type without slash is not emitted")
+  {
+    // "font" alone is not a valid MIME type — no "/" separator
+    auto links =
+      scan_html(R"(<html><head><link rel="preload" href="/font.woff2" as="font" type="font" crossorigin></head></html>)");
+    // Link itself should still be emitted — type= just omitted
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("type=") == std::string::npos);
+  }
+
+  SECTION("empty type is not emitted")
+  {
+    auto links = scan_html(R"(<html><head><link rel="preload" href="/font.woff2" as="font" type="" crossorigin></head></html>)");
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("type=") == std::string::npos);
+  }
+
+  SECTION("type with leading slash is not emitted")
+  {
+    auto links =
+      scan_html(R"(<html><head><link rel="preload" href="/font.woff2" as="font" type="/woff2" crossorigin></head></html>)");
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("type=") == std::string::npos);
+  }
+
+  SECTION("type with trailing slash is not emitted")
+  {
+    auto links =
+      scan_html(R"(<html><head><link rel="preload" href="/font.woff2" as="font" type="font/" crossorigin></head></html>)");
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("type=") == std::string::npos);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Backslash evasion in is_safe_url must be comprehensively rejected.
+//
+// Browsers with "special" schemes (http/https) treat '\' as '/' per WHATWG
+// URL spec §4.2. Several variants must all be rejected:
+//   \\ prefix  →  browser treats as authority reference (cross-origin)
+//   \/ prefix  →  same
+//   /\ prefix  →  same
+// ═══════════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("HtmlScanner: backslash evasion variants are rejected by is_safe_url", "[html_scanner][security][backslash]")
+{
+  auto make_link = [](const std::string &href) {
+    return "<html><head><link rel=\"preload\" href=\"" + href + "\" as=\"script\"></head></html>";
+  };
+
+  SECTION("double-backslash authority reference rejected")
+  {
+    auto links = scan_html(make_link("\\\\evil.com/x.js"));
+    CHECK(links.empty());
+  }
+
+  SECTION("backslash+slash authority reference rejected")
+  {
+    auto links = scan_html(make_link("\\/evil.com/x.js"));
+    CHECK(links.empty());
+  }
+
+  SECTION("slash+backslash authority reference rejected")
+  {
+    auto links = scan_html(make_link("/\\evil.com/x.js"));
+    CHECK(links.empty());
+  }
+
+  SECTION("normal relative URL is still accepted")
+  {
+    auto links = scan_html(make_link("/path/to/x.js"));
+    CHECK(links.size() == 1);
   }
 }

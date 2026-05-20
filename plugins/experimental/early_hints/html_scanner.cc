@@ -83,8 +83,9 @@ HtmlScanner::reset_tag_state()
   type_.clear();
   crossorigin_value_.clear();
   fetchpriority_.clear();
-  has_async_ = false;
-  has_defer_ = false;
+  has_async_       = false;
+  has_defer_       = false;
+  attr_overflowed_ = false;
 }
 
 std::string
@@ -160,7 +161,19 @@ HtmlScanner::is_safe_url(const std::string &url)
     }
   }
 
-  // No scheme found — relative URL (e.g., "/app.js", "//cdn.example.com/...", "images/foo.png")
+  // No scheme found — relative URL (e.g., "/app.js", "images/foo.png").
+  // However, reject backslash-based authority references: browsers with "special"
+  // schemes (http/https) treat '\' as '/' per WHATWG URL spec §4.2, so
+  // \\evil.com, \/evil.com, and /\evil.com all resolve as cross-origin.
+  // Explicitly reject these before returning safe.
+  if (remaining >= 2) {
+    char c0 = s[0];
+    char c1 = s[1];
+    if ((c0 == '\\' && (c1 == '\\' || c1 == '/')) || (c0 == '/' && c1 == '\\')) {
+      return false; // backslash authority reference — cross-origin evasion
+    }
+  }
+
   return true;
 }
 
@@ -397,11 +410,27 @@ HtmlScanner::build_link_header(const std::string &tag)
       }
     } else if (rel_ == "modulepreload") {
       // <link rel="modulepreload" href="...">
+      // Module preloads are always CORS-fetched (HTML spec §8.1.4.2) so crossorigin=anonymous
+      // is always implied. Apply the same whitelist logic as rel=preload.
       if (is_crossorigin(href_)) {
         std::string origin = extract_origin(href_);
-        // Non-whitelisted cross-origin: preconnect only — crossorigin not valid here
-        result = "<" + origin + ">; rel=preconnect";
-        crossorigin_value_.clear();
+        size_t scheme_sep  = origin.find("://");
+        std::string domain = (scheme_sep != std::string::npos) ? origin.substr(scheme_sep + 3) : origin;
+        if (config_ && config_->is_whitelisted_domain(domain)) {
+          // crossorigin-whitelist: allow preload with crossorigin for module
+          result = "<" + href_ + ">; rel=modulepreload";
+          if (crossorigin_value_.empty()) {
+            crossorigin_value_ = "anonymous";
+          }
+        } else if (config_ && config_->is_preload_domain(domain)) {
+          // preload-whitelist: full modulepreload without crossorigin
+          result = "<" + href_ + ">; rel=modulepreload";
+          crossorigin_value_.clear();
+        } else {
+          // Non-whitelisted: preconnect only — crossorigin not valid on preconnect
+          result = "<" + origin + ">; rel=preconnect";
+          crossorigin_value_.clear();
+        }
       } else {
         result = "<" + href_ + ">; rel=modulepreload";
       }
@@ -454,11 +483,17 @@ HtmlScanner::build_link_header(const std::string &tag)
     crossorigin_value_ = "anonymous";
   }
 
-  // Append type attribute — MIME types contain '/' which is not a valid
-  // tchar (RFC 7230 §3.2.6), so the value must be a quoted-string per
-  // RFC 8288 §3.
+  // Append type attribute — validate as "type/subtype" MIME structure before
+  // emitting. A MIME type without a "/" separator (e.g. type="font") is invalid
+  // and must not be forwarded as a Link hint. Also reject empty, leading-slash,
+  // and trailing-slash values.
   if (!type_.empty() && result.find("rel=preload") != std::string::npos) {
-    result += "; type=\"" + type_ + "\"";
+    size_t slash_pos = type_.find('/');
+    bool valid_mime  = (slash_pos != std::string::npos && slash_pos > 0 && slash_pos < type_.size() - 1 &&
+                       type_.find('/', slash_pos + 1) == std::string::npos);
+    if (valid_mime) {
+      result += "; type=\"" + type_ + "\"";
+    }
   }
 
   // Append crossorigin — RFC 8288 §3 requires all link-params to use
@@ -510,6 +545,12 @@ HtmlScanner::process_tag()
   // <body> implicitly closes <head> per HTML spec §13.2.5.6
   if (tag == "body") {
     state_ = State::DONE;
+    return;
+  }
+
+  // If any attribute value exceeded MAX_ATTR_VALUE_LEN, the tag is tainted:
+  // a truncated href would produce a corrupt URL in the Link header. Discard.
+  if (attr_overflowed_) {
     return;
   }
 
@@ -1007,6 +1048,10 @@ HtmlScanner::feed(const char *data, int64_t length)
           // Unquoted attribute value
           if (static_cast<int>(attr_value_.size()) < MAX_ATTR_VALUE_LEN) {
             attr_value_ += c;
+          } else {
+            // Value exceeds limit — mark tag as tainted so the whole tag is rejected.
+            // Silently truncating would emit a corrupt URL in the Link header.
+            attr_overflowed_ = true;
           }
         }
       } else {
@@ -1020,6 +1065,9 @@ HtmlScanner::feed(const char *data, int64_t length)
         } else {
           if (static_cast<int>(attr_value_.size()) < MAX_ATTR_VALUE_LEN) {
             attr_value_ += c;
+          } else {
+            // Value exceeds limit — mark tag as tainted.
+            attr_overflowed_ = true;
           }
         }
       }
