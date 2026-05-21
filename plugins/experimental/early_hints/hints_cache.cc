@@ -66,8 +66,12 @@ HintsCache::get(const std::string &key, int min_hits) const
     return nullptr;
   }
 
-  // Move to front of LRU list since it was accessed
-  lru_list_.splice(lru_list_.begin(), lru_list_, entry.lru_iterator);
+  // Probabilistic LRU promotion: only splice 1 out of every 16 accesses.
+  // This reduces mutex hold time under high traffic by avoiding the linked
+  // list modification on most reads. The LRU order stays approximately correct.
+  if ((access_counter_.fetch_add(1, std::memory_order_relaxed) & 0xF) == 0) {
+    lru_list_.splice(lru_list_.begin(), lru_list_, entry.lru_iterator);
+  }
 
   // Return shared_ptr (ref-count bump, no deep copy)
   return entry.links;

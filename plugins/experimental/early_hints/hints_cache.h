@@ -150,6 +150,7 @@ private:
   mutable std::list<std::string> lru_list_; // LRU list of keys (front = MRU, back = LRU)
   int64_t drop_counter_ = 0;
   std::atomic<int64_t> persist_count_{0}; // Counts actual persist_to_disk() calls inside put()
+  mutable std::atomic<uint32_t> access_counter_{0}; // For probabilistic LRU promotion (1/16)
   int max_entries_;
   std::string persist_path_;
 
