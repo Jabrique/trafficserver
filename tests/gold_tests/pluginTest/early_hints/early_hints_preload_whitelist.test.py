@@ -22,7 +22,7 @@ Test HTTP 103 Early Hints plugin --preload-whitelist feature.
 Verifies:
 - --preload-whitelist: trusted domain gets preload WITHOUT crossorigin
 - --crossorigin-whitelist takes priority over --preload-whitelist for same domain
-- modulepreload ignores --preload-whitelist (falls to preconnect)
+- modulepreload obeys --preload-whitelist (emits rel=modulepreload)
 - Unwhitelisted cross-origin still gets preconnect (no regression)
 - H2 103 sent with correct no-CORS preload from cache
 '''
@@ -54,7 +54,7 @@ microserver.addResponse(
             '</head><body>Preload whitelist test</body></html>\r\n'
     })
 
-# Test 2: HTML with modulepreload on preload-whitelisted domain (should get preconnect)
+# Test 2: HTML with modulepreload on preload-whitelisted domain (should emit modulepreload)
 microserver.addResponse(
     "sessionfile.log", {
         "headers": "GET /module-wl.html HTTP/1.1\r\nHost: www.example.com\r\n\r\n",
@@ -112,7 +112,7 @@ ts.Disk.remap_config.AddLines([
     ' @pparam=--no-navigate-only'
     ' @pparam=--debug-header @pparam=X-Early-Hints-Status',
 
-    # Module whitelist: same domain in preload-whitelist (modulepreload should ignore it)
+    # Module whitelist: same domain in preload-whitelist (modulepreload obeys it)
     'map /module-wl.html http://127.0.0.1:{0}/module-wl.html'.format(microserver.Variables.Port) +
     ' @plugin=early_hints.so'
     ' @pparam=--mode @pparam=auto-learn'
@@ -212,9 +212,9 @@ tr2.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr2.StillRunningAfter = microserver
 
 # ====================================================================
-# TR3: Modulepreload — preload-whitelist ignored, falls to preconnect
+# TR3: Modulepreload on preload-whitelisted domain — emits modulepreload
 # ====================================================================
-tr3 = Test.AddTestRun("Modulepreload: preload-whitelist ignored → preconnect")
+tr3 = Test.AddTestRun("Modulepreload: preload-whitelist allows modulepreload emission")
 tr3.Processes.Default.Command = (
     "curl -s -D - -o /dev/null"
     " --http1.1"
@@ -224,9 +224,7 @@ tr3.Processes.Default.ReturnCode = 0
 tr3.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "200 OK", "Should receive 200 OK")
 tr3.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "cdn.preload.com>; rel=preconnect", "Modulepreload cross-origin should fall to preconnect")
-tr3.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
-    "rel=modulepreload", "Should NOT emit rel=modulepreload for cross-origin (only preconnect)")
+    "rel=modulepreload", "Modulepreload on preload-whitelisted domain should emit rel=modulepreload")
 tr3.StillRunningAfter = microserver
 
 # ====================================================================
