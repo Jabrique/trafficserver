@@ -530,7 +530,7 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
           auto segments = split_link_header_value(full_val, remaining);
           for (auto &seg : segments) {
             std::string normalized = normalize_link_for_hint(seg);
-            if (!normalized.empty() && is_valid_link_value(normalized)) {
+            if (!normalized.empty() && is_valid_link_value(normalized) && has_valid_as_for_preload(normalized)) {
               origin_links.push_back(std::move(normalized));
             }
           }
