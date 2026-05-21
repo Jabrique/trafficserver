@@ -51,7 +51,7 @@ def fnv1a_64(s):
         h = (h * 1099511628211) & 0xFFFFFFFFFFFFFFFF
     return h
 
-HINTS_CACHE_MAGIC = 0x45480001
+HINTS_CACHE_MAGIC = 0x45480002  # v2 format (includes last_updated per entry)
 
 # ─── Setup origin ─────────────────────────────────────────────────────────────
 microserver = Test.MakeOriginServer("microserver")
@@ -120,6 +120,7 @@ kb = b"/load-valid.html"
 persist_bytes  = struct.pack('<II', HINTS_CACHE_MAGIC, 1)          # magic + 1 entry
 persist_bytes += struct.pack('<H', len(kb)) + kb                    # key
 persist_bytes += struct.pack('<I', 5)                               # learn_count=5
+persist_bytes += struct.pack('<Q', 1700000000)                      # last_updated (v2 field)
 persist_bytes += struct.pack('<H', 2)                               # 2 links
 persist_bytes += struct.pack('<H', len(vb)) + vb                   # link 1: valid
 persist_bytes += struct.pack('<H', len(ib)) + ib                   # link 2: invalid

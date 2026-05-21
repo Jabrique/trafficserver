@@ -236,6 +236,7 @@ HintsCache::persist_to_disk()
     std::string key;
     LinkListPtr links;
     int learn_count;
+    time_t last_updated;
   };
   std::vector<SnapshotEntry> snapshot;
   uint64_t gen_snapshot = 0;
@@ -249,7 +250,7 @@ HintsCache::persist_to_disk()
     gen_snapshot = dirty_generation_.load(std::memory_order_acquire);
     snapshot.reserve(entries_.size());
     for (const auto &pair : entries_) {
-      snapshot.push_back({pair.first, pair.second.links, pair.second.learn_count});
+      snapshot.push_back({pair.first, pair.second.links, pair.second.learn_count, pair.second.last_updated});
     }
   } // mutex released — disk I/O happens without blocking readers
 
@@ -293,6 +294,14 @@ HintsCache::persist_to_disk()
     // learn_count
     uint32_t lc = static_cast<uint32_t>(entry.learn_count);
     if (fwrite(&lc, sizeof(lc), 1, fp) != 1) {
+      fclose(fp);
+      std::remove(tmp_path.c_str());
+      return false;
+    }
+
+    // last_updated (v2 field)
+    uint64_t ts = static_cast<uint64_t>(entry.last_updated);
+    if (fwrite(&ts, sizeof(ts), 1, fp) != 1) {
       fclose(fp);
       std::remove(tmp_path.c_str());
       return false;
@@ -393,6 +402,11 @@ HintsCache::load_from_disk()
     return false;
   }
 
+  if (magic == HINTS_CACHE_MAGIC_V1) {
+    TSDebug("early_hints", "load: v1 format (0x%08x) not supported, cold start", magic);
+    fclose(fp);
+    return false;
+  }
   if (magic != HINTS_CACHE_MAGIC) {
     TSDebug("early_hints", "load: bad magic 0x%08x (expected 0x%08x)", magic, HINTS_CACHE_MAGIC);
     fclose(fp);
@@ -437,6 +451,13 @@ HintsCache::load_from_disk()
       lc = static_cast<uint32_t>(max_learn_count());
     }
 
+    // Read last_updated (v2 field)
+    uint64_t ts_on_disk = 0;
+    if (fread(&ts_on_disk, sizeof(ts_on_disk), 1, fp) != 1) {
+      fclose(fp);
+      return false;
+    }
+
     // Read links
     uint16_t link_count = 0;
     if (fread(&link_count, sizeof(link_count), 1, fp) != 1 || link_count > 1000) {
@@ -473,7 +494,7 @@ HintsCache::load_from_disk()
     if (static_cast<int>(new_entries.size()) < max_entries_ && !links.empty()) {
       HintEntry entry;
       entry.links        = std::make_shared<const LinkList>(std::move(links));
-      entry.last_updated = time(nullptr);
+      entry.last_updated = static_cast<time_t>(ts_on_disk);
       entry.learn_count  = static_cast<int>(lc);
       new_entries[key]   = std::move(entry);
     }
@@ -483,14 +504,30 @@ HintsCache::load_from_disk()
 
   // Atomic swap — hold mutex only for the map swap (not for file I/O).
   // All parsing done above. Now swap new_entries into entries_ atomically.
+  // Sort by last_updated ascending before building LRU so oldest entries
+  // are at the back of the list (evicted first under LRU policy).
   size_t loaded_count = 0;
   {
+    // Build sorted key list: oldest first -> push_back = oldest at LRU tail
+    std::vector<std::pair<time_t, std::string>> sorted_keys;
+    sorted_keys.reserve(new_entries.size());
+    for (const auto &pair : new_entries) {
+      sorted_keys.push_back({pair.second.last_updated, pair.first});
+    }
+    std::sort(sorted_keys.begin(), sorted_keys.end());
+
     TSMutexGuard guard(mutex_);
     entries_ = std::move(new_entries);
     lru_list_.clear();
-    for (auto &pair : entries_) {
-      lru_list_.push_front(pair.first);
-      pair.second.lru_iterator = lru_list_.begin();
+    // Insert oldest first at front -> they end up at the back after all inserts
+    // Actually: push_front means last inserted = front (MRU).
+    // We want oldest at back. So iterate oldest first and push_back.
+    for (const auto &sk : sorted_keys) {
+      lru_list_.push_back(sk.second);
+      auto it = entries_.find(sk.second);
+      if (it != entries_.end()) {
+        it->second.lru_iterator = std::prev(lru_list_.end());
+      }
     }
     loaded_count = entries_.size();
   }

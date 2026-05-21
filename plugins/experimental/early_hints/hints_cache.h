@@ -53,8 +53,9 @@ struct HintEntry {
   mutable std::list<std::string>::iterator lru_iterator;
 };
 
-// File format magic: "EH" (Early Hints) + version 1
-static constexpr uint32_t HINTS_CACHE_MAGIC = 0x45480001;
+// File format magic: "EH" (Early Hints) + version 2 (adds per-entry last_updated)
+static constexpr uint32_t HINTS_CACHE_MAGIC   = 0x45480002;
+static constexpr uint32_t HINTS_CACHE_MAGIC_V1 = 0x45480001;
 
 class HintsCache
 {
