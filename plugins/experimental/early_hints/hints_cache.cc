@@ -33,7 +33,11 @@ HintsCache::~HintsCache()
 {
   // Flush any unsaved data to disk before destroying mutexes.
   // This handles the case where put() was throttled or persist failed mid-session.
+  // Acquire persist_mutex_ to serialize with any concurrent put() that may
+  // also be calling persist_to_disk(). Lock order: persist_mutex_ then mutex_
+  // (inside persist_to_disk), consistent with put() to avoid deadlock.
   if (is_dirty_.load(std::memory_order_acquire) && !persist_path_.empty()) {
+    TSMutexGuard persist_guard(persist_mutex_);
     persist_to_disk();
   }
 
