@@ -172,7 +172,7 @@ private:
   std::vector<std::string> manual_links_;
   std::vector<std::string> crossorigin_whitelist_;
   std::vector<std::string> preload_whitelist_;
-  bool persist_enabled_ = true;
+  bool persist_enabled_ = false;
   int persist_throttle_ = 10;
   std::string persist_dir_;
 

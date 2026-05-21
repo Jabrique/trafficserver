@@ -822,6 +822,8 @@ TEST_CASE("HintsCache: load_from_disk uses atomic swap — existing cache preser
       fwrite("/page", 5, 1, fp);
       uint32_t lc = 3;
       fwrite(&lc, sizeof(lc), 1, fp);
+      uint64_t ts = 0; // last_updated (v2 field)
+      fwrite(&ts, sizeof(ts), 1, fp);
       uint16_t link_count = 1;
       fwrite(&link_count, sizeof(link_count), 1, fp);
       uint16_t ll = 30;
@@ -867,6 +869,9 @@ TEST_CASE("HintsCache: load_from_disk clamps oversized learn_count to max_learn_
 
     uint32_t lc = 2000000; // way over cap
     fwrite(&lc, sizeof(lc), 1, fp);
+
+    uint64_t ts = 0; // last_updated (v2 field)
+    fwrite(&ts, sizeof(ts), 1, fp);
 
     uint16_t link_count = 1;
     fwrite(&link_count, sizeof(link_count), 1, fp);

@@ -511,7 +511,8 @@ EarlyHintsConfig::init(int argc, const char *argv[])
       }
       break;
     case 'p':
-      persist_dir_ = optarg;
+      persist_dir_     = optarg;
+      persist_enabled_ = true; // --persist-dir opts in to persistence
       break;
     case 'P':
       persist_enabled_ = false;
@@ -585,8 +586,7 @@ EarlyHintsConfig::init(int argc, const char *argv[])
         }
         std::string d = domains.substr(start, end - start);
         if (!d.empty()) {
-          std::transform(d.begin(), d.end(), d.begin(),
-                         [](unsigned char c) { return std::tolower(c); });
+          std::transform(d.begin(), d.end(), d.begin(), [](unsigned char c) { return std::tolower(c); });
           crossorigin_whitelist_.push_back(d);
         }
         pos = comma + 1;
@@ -611,8 +611,7 @@ EarlyHintsConfig::init(int argc, const char *argv[])
         }
         std::string d = domains.substr(start, end - start);
         if (!d.empty()) {
-          std::transform(d.begin(), d.end(), d.begin(),
-                         [](unsigned char c) { return std::tolower(c); });
+          std::transform(d.begin(), d.end(), d.begin(), [](unsigned char c) { return std::tolower(c); });
           preload_whitelist_.push_back(d);
         }
         pos = comma + 1;

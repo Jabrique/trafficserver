@@ -533,6 +533,10 @@ TEST_CASE("Persistence audit v2: extreme link_count rejected", "[persistence][au
     uint32_t learn_count = 1;
     f.write(reinterpret_cast<char *>(&learn_count), sizeof(learn_count));
 
+    // last_updated (v2 field)
+    uint64_t ts = 0;
+    f.write(reinterpret_cast<char *>(&ts), sizeof(ts));
+
     // link_count = 65535 (way over 1000 limit)
     uint16_t link_count = 65535;
     f.write(reinterpret_cast<char *>(&link_count), sizeof(link_count));
@@ -910,6 +914,9 @@ TEST_CASE("Persistence: invalid rel type from persist file is rejected on load",
     uint32_t lc = 3;
     fwrite(&lc, sizeof(lc), 1, fp);
 
+    uint64_t ts = 0; // last_updated (v2 field)
+    fwrite(&ts, sizeof(ts), 1, fp);
+
     // Two links: one valid, one with unsupported rel=prefetch
     uint16_t link_count = 2;
     fwrite(&link_count, sizeof(link_count), 1, fp);
@@ -962,6 +969,9 @@ TEST_CASE("Persistence: preload link missing as= is rejected on load", "[persist
 
     uint32_t lc = 1;
     fwrite(&lc, sizeof(lc), 1, fp);
+
+    uint64_t ts = 0; // last_updated (v2 field)
+    fwrite(&ts, sizeof(ts), 1, fp);
 
     uint16_t link_count = 1;
     fwrite(&link_count, sizeof(link_count), 1, fp);

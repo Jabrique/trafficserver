@@ -56,7 +56,7 @@ TEST_CASE("Config default values", "[config]")
     CHECK((config.mode() & EarlyHintsConfig::MODE_MANUAL) == 0);
 
     CHECK(config.max_links() == 10);
-    CHECK(config.persist_enabled() == true);
+    CHECK(config.persist_enabled() == false);
     CHECK(config.persist_dir().empty());
     CHECK(config.header_size_limit() == 3072);
     CHECK(config.skip_bots() == true);
@@ -952,11 +952,11 @@ TEST_CASE("Config boundary: persistence", "[config]")
     CHECK(config.persist_enabled() == true);
   }
 
-  SECTION("persistence defaults to enabled with empty dir")
+  SECTION("persistence defaults to disabled (opt-in via --persist-dir)")
   {
     EarlyHintsConfig config;
     CHECK(parse_config(config, {}));
-    CHECK(config.persist_enabled() == true);
+    CHECK(config.persist_enabled() == false);
     CHECK(config.persist_dir().empty());
   }
 
@@ -2008,12 +2008,12 @@ TEST_CASE("Config audit v2: --persist-dir with --no-persist", "[config][audit-v2
     CHECK(config.persist_dir() == "/tmp/hints/");
   }
 
-  SECTION("--no-persist then --persist-dir: persist stays disabled, dir set")
+  SECTION("--no-persist then --persist-dir: persist-dir re-enables (last-write-wins)")
   {
     EarlyHintsConfig config;
     CHECK(parse_config(config, {"--no-persist", "--persist-dir", "/tmp/hints/"}));
-    // persist_enabled_ was set false by --no-persist, --persist-dir only sets dir
-    CHECK(config.persist_enabled() == false);
+    // --persist-dir always enables persistence regardless of prior --no-persist
+    CHECK(config.persist_enabled() == true);
     CHECK(config.persist_dir() == "/tmp/hints/");
   }
 }

@@ -20,9 +20,9 @@ Test 103 Early Hints plugin — hints cache disk persistence
 Test.Summary = '''
 Test HTTP 103 Early Hints plugin hints cache persistence.
 Verifies:
-- Persistence is ON by default (auto-persist to runtime dir)
-- File is auto-created after auto-learn with hashed filename
-- --no-persist disables persistence
+- Persistence is OFF by default (no disk I/O without --persist-dir)
+- --persist-dir opts in to disk persistence with hashed filename
+- --no-persist explicitly disables (already the default, but keeps old remaps working)
 - --persist-dir allows custom directory
 '''
 
@@ -86,14 +86,15 @@ ts.addDefaultSSLFiles()
 ts.Disk.ssl_multicert_config.AddLine('dest_ip=* ssl_cert_name=server.pem ssl_key_name=server.key')
 
 ts.Disk.remap_config.AddLines([
-    # Default persistence (ON by default): hints auto-persist to runtime dir
+    # With --persist-dir: persist to runtime dir explicitly (default is OFF)
     'map /persist.html http://127.0.0.1:{0}/persist.html'.format(microserver.Variables.Port) +
     ' @plugin=early_hints.so'
     ' @pparam=--mode @pparam=auto-learn'
     ' @pparam=--min-hit-count @pparam=1'
     ' @pparam=--no-skip-bots'
     ' @pparam=--no-navigate-only'
-    ' @pparam=--debug-header @pparam=X-Early-Hints-Status',
+    ' @pparam=--debug-header @pparam=X-Early-Hints-Status'
+    ' @pparam=--persist-dir @pparam=' + ts.Variables.RUNTIMEDIR,
 
     # With --no-persist: hints will NOT be persisted
     'map /nopersist.html http://127.0.0.1:{0}/nopersist.html'.format(microserver.Variables.Port) +
@@ -159,13 +160,13 @@ tr2.StillRunningAfter = microserver
 # ----
 # TR3: Verify auto-persist file was created in runtime dir
 # ----
-tr3 = Test.AddTestRun("Persist: verify auto-persist .bin file exists in runtime dir")
+tr3 = Test.AddTestRun("Persist: verify --persist-dir .bin file exists in runtime dir")
 tr3.Processes.Default.Command = (
     "ls " + ts.Variables.RUNTIMEDIR + "/early_hints_*.bin 2>/dev/null"
     " && echo 'PERSIST_FILE_EXISTS'")
 tr3.Processes.Default.ReturnCode = 0
 tr3.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
-    "PERSIST_FILE_EXISTS", "Auto-persist file should exist in runtime dir after auto-learn")
+    "PERSIST_FILE_EXISTS", "Persist file should exist in runtime dir after explicit --persist-dir")
 tr3.StillRunningAfter = microserver
 
 # ----
@@ -191,7 +192,7 @@ tr5.Processes.Default.Command = (
     "sleep 1 && ls " + ts.Variables.RUNTIMEDIR + "/early_hints_*.bin 2>/dev/null | wc -l")
 tr5.Processes.Default.ReturnCode = 0
 tr5.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
-    "1", "Only 1 persist file should exist — --no-persist remap has none")
+    "1", "Only 1 persist file should exist — --no-persist remap has none (and default is OFF)")
 tr5.StillRunningAfter = microserver
 
 # ----
