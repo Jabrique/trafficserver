@@ -154,6 +154,7 @@ private:
 
   // --- Throttle state ---
   std::atomic<bool> is_dirty_{false};
+  std::atomic<uint64_t> dirty_generation_{0};
   time_t last_persist_time_      = 0;
   int persist_throttle_interval_ = 10;
 

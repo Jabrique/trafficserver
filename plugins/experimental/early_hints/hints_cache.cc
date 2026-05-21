@@ -138,6 +138,9 @@ HintsCache::put(const std::string &key, const std::vector<std::string> &links)
     }
 
     // Mark cache as dirty so the destructor will flush if put()'s persist fails.
+    // Increment generation BEFORE setting dirty flag so persist_to_disk() can
+    // detect if a put() occurred between its snapshot and completion.
+    dirty_generation_.fetch_add(1, std::memory_order_release);
     is_dirty_.store(true, std::memory_order_release);
   } // mutex released
 
@@ -231,6 +234,7 @@ HintsCache::persist_to_disk()
     int learn_count;
   };
   std::vector<SnapshotEntry> snapshot;
+  uint64_t gen_snapshot = 0;
 
   {
     TSMutexGuard guard(mutex_);
@@ -238,6 +242,7 @@ HintsCache::persist_to_disk()
     // Clearing before I/O means a crash or disk-full during fwrite/rename
     // would leave is_dirty_=false, causing the destructor to skip the final
     // flush and permanently lose the unsaved data.
+    gen_snapshot = dirty_generation_.load(std::memory_order_acquire);
     snapshot.reserve(entries_.size());
     for (const auto &pair : entries_) {
       snapshot.push_back({pair.first, pair.second.links, pair.second.learn_count});
@@ -335,10 +340,16 @@ HintsCache::persist_to_disk()
     return false;
   }
 
-  // Rename succeeded — data is safely on disk. Clear the dirty flag now.
+  // Rename succeeded — data is safely on disk.
+  // Only clear the dirty flag if no put() occurred between our snapshot and now.
+  // If dirty_generation_ advanced, a concurrent put() wrote new data that our
+  // snapshot does not include — the flag must remain true so the destructor
+  // or the next throttled persist will flush the unsaved data.
   {
     TSMutexGuard guard(mutex_);
-    is_dirty_.store(false, std::memory_order_release);
+    if (dirty_generation_.load(std::memory_order_acquire) == gen_snapshot) {
+      is_dirty_.store(false, std::memory_order_release);
+    }
   }
 
   TSDebug("early_hints", "persisted %u entries to %s", entry_count, persist_path_.c_str());
