@@ -397,20 +397,15 @@ EarlyHintsConfig::match_domain_list(const std::string &domain, const std::vector
   }
 
   for (const auto &pattern : list) {
-    std::string pattern_lower;
-    pattern_lower.reserve(pattern.size());
-    for (char c : pattern) {
-      pattern_lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    }
-
-    if (pattern_lower.size() > 2 && pattern_lower[0] == '*' && pattern_lower[1] == '.') {
+    // Patterns are pre-lowercased at init time, no per-call conversion needed
+    if (pattern.size() > 2 && pattern[0] == '*' && pattern[1] == '.') {
       // Wildcard match: *.example.com matches foo.example.com but NOT .example.com
-      std::string suffix = pattern_lower.substr(1); // .example.com
+      std::string suffix = pattern.substr(1); // .example.com
       if (domain_lower.size() > suffix.size() &&
           domain_lower.compare(domain_lower.size() - suffix.size(), suffix.size(), suffix) == 0) {
         return true;
       }
-    } else if (domain_lower == pattern_lower) {
+    } else if (domain_lower == pattern) {
       return true;
     }
   }
@@ -590,6 +585,8 @@ EarlyHintsConfig::init(int argc, const char *argv[])
         }
         std::string d = domains.substr(start, end - start);
         if (!d.empty()) {
+          std::transform(d.begin(), d.end(), d.begin(),
+                         [](unsigned char c) { return std::tolower(c); });
           crossorigin_whitelist_.push_back(d);
         }
         pos = comma + 1;
@@ -614,6 +611,8 @@ EarlyHintsConfig::init(int argc, const char *argv[])
         }
         std::string d = domains.substr(start, end - start);
         if (!d.empty()) {
+          std::transform(d.begin(), d.end(), d.begin(),
+                         [](unsigned char c) { return std::tolower(c); });
           preload_whitelist_.push_back(d);
         }
         pos = comma + 1;

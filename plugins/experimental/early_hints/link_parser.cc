@@ -107,7 +107,7 @@ dedup_link_segments(std::vector<std::string> segments, int max_links)
       bool is_preconnect = has_rel_type(seg_lower, "preconnect");
 
       for (const auto &existing : result) {
-        if (existing.size() > url_key.size() && existing.compare(0, url_key.size(), url_key.data(), url_key.size()) == 0) {
+        if (existing.size() >= url_key.size() && existing.compare(0, url_key.size(), url_key.data(), url_key.size()) == 0) {
           // Compare the existing entry's rel type against the incoming segment's rel type case-insensitively
           std::string existing_lower = existing;
           std::transform(existing_lower.begin(), existing_lower.end(), existing_lower.begin(),

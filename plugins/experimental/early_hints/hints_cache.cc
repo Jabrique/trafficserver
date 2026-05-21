@@ -311,8 +311,15 @@ HintsCache::persist_to_disk()
       return false;
     }
 
-    // Links
-    uint16_t link_count = entry.links ? static_cast<uint16_t>(entry.links->size()) : 0;
+    // Links — count excludes any oversized entries (> UINT16_MAX bytes)
+    uint16_t link_count = 0;
+    if (entry.links) {
+      for (const auto &link : *entry.links) {
+        if (link.size() <= UINT16_MAX) {
+          link_count++;
+        }
+      }
+    }
     if (fwrite(&link_count, sizeof(link_count), 1, fp) != 1) {
       fclose(fp);
       std::remove(tmp_path.c_str());
@@ -320,6 +327,9 @@ HintsCache::persist_to_disk()
     }
     if (entry.links) {
       for (const auto &link : *entry.links) {
+        if (link.size() > UINT16_MAX) {
+          continue; // skip oversized links that would truncate via uint16_t cast
+        }
         uint16_t link_len = static_cast<uint16_t>(link.size());
         if (fwrite(&link_len, sizeof(link_len), 1, fp) != 1 || fwrite(link.data(), link_len, 1, fp) != 1) {
           fclose(fp);

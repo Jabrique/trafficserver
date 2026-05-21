@@ -527,7 +527,7 @@ HtmlScanner::build_link_header(const std::string &tag)
       std::string_view url_key = std::string_view(result).substr(0, url_end + 1);
       bool is_preconnect       = result.find("rel=preconnect") != std::string::npos;
       for (const auto &existing : links_) {
-        if (existing.size() > url_key.size() && existing.compare(0, url_key.size(), url_key.data(), url_key.size()) == 0) {
+        if (existing.size() >= url_key.size() && existing.compare(0, url_key.size(), url_key.data(), url_key.size()) == 0) {
           bool ex_preconnect = existing.find("rel=preconnect") != std::string::npos;
           if (is_preconnect == ex_preconnect) {
             return; // same origin URL + same rel type already queued
