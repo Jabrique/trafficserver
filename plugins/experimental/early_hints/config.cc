@@ -677,6 +677,27 @@ EarlyHintsConfig::init(int argc, const char *argv[])
 // rel=stylesheet is converted to rel=preload; as=style so origin stylesheets
 // generate valid preload hints. Other rel types (rel=dns-prefetch etc.) are dropped.
 // Returns an empty string if the link cannot be represented as a hint.
+
+// Boundary-aware parameter match: ensures the needle is delimited by
+// start-of-string, ';', space, or tab on both sides. Prevents "xrel=stylesheet"
+// from matching "rel=stylesheet".
+static bool
+has_param_match(const std::string &haystack, const char *needle)
+{
+  size_t needle_len = strlen(needle);
+  size_t pos        = 0;
+  while ((pos = haystack.find(needle, pos)) != std::string::npos) {
+    bool before_ok = (pos == 0) || haystack[pos - 1] == ';' || haystack[pos - 1] == ' ' || haystack[pos - 1] == '\t';
+    size_t end     = pos + needle_len;
+    bool after_ok  = end >= haystack.size() || haystack[end] == ';' || haystack[end] == ' ' || haystack[end] == '\t';
+    if (before_ok && after_ok) {
+      return true;
+    }
+    pos += needle_len;
+  }
+  return false;
+}
+
 std::string
 normalize_link_for_hint(const std::string &link)
 {
@@ -697,20 +718,17 @@ normalize_link_for_hint(const std::string &link)
   std::transform(params_lower.begin(), params_lower.end(), params_lower.begin(), [](unsigned char c) { return std::tolower(c); });
 
   // Check for stylesheet — convert to preload; as=style.
-  // Match both rel=stylesheet and rel="stylesheet".
-  bool is_stylesheet =
-    (params_lower.find("rel=stylesheet") != std::string::npos || params_lower.find("rel=\"stylesheet\"") != std::string::npos);
-  if (is_stylesheet) {
+  if (has_param_match(params_lower, "rel=stylesheet") || has_param_match(params_lower, "rel=\"stylesheet\"") ||
+      has_param_match(params_lower, "rel='stylesheet'")) {
     return url_part + "; rel=preload; as=style";
   }
 
   // rel=preload, rel=preconnect, rel=modulepreload — return unchanged
-  bool is_hint_rel =
-    (params_lower.find("rel=preload") != std::string::npos || params_lower.find("rel=preconnect") != std::string::npos ||
-     params_lower.find("rel=modulepreload") != std::string::npos || params_lower.find("rel=\"preload\"") != std::string::npos ||
-     params_lower.find("rel=\"preconnect\"") != std::string::npos ||
-     params_lower.find("rel=\"modulepreload\"") != std::string::npos);
-  if (is_hint_rel) {
+  if (has_param_match(params_lower, "rel=preload") || has_param_match(params_lower, "rel=preconnect") ||
+      has_param_match(params_lower, "rel=modulepreload") || has_param_match(params_lower, "rel=\"preload\"") ||
+      has_param_match(params_lower, "rel=\"preconnect\"") || has_param_match(params_lower, "rel=\"modulepreload\"") ||
+      has_param_match(params_lower, "rel='preload'") || has_param_match(params_lower, "rel='preconnect'") ||
+      has_param_match(params_lower, "rel='modulepreload'")) {
     return link;
   }
 

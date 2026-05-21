@@ -2786,3 +2786,60 @@ TEST_CASE("normalize_link_for_hint: stylesheet conversion", "[config][normalize]
 
   SECTION("link with no rel returns empty") { CHECK(normalize_link_for_hint("</x.css>; foo=bar").empty()); }
 }
+
+TEST_CASE("normalize_link_for_hint: boundary-aware rel matching", "[config][normalize][boundary]")
+{
+  SECTION("xrel=stylesheet must NOT match (prefix boundary violation)")
+  {
+    std::string result = normalize_link_for_hint("</path>; xrel=stylesheet");
+    CHECK(result.empty());
+  }
+
+  SECTION("myrel=preload must NOT match")
+  {
+    std::string result = normalize_link_for_hint("</path>; myrel=preload; as=style");
+    CHECK(result.empty());
+  }
+
+  SECTION("rel=preloadx must NOT match (suffix boundary violation)")
+  {
+    std::string result = normalize_link_for_hint("</path>; rel=preloadx; as=style");
+    CHECK(result.empty());
+  }
+
+  SECTION("rel=stylesheetx must NOT match")
+  {
+    std::string result = normalize_link_for_hint("</path>; rel=stylesheetx");
+    CHECK(result.empty());
+  }
+
+  SECTION("rel=modulepreloadx must NOT match")
+  {
+    std::string result = normalize_link_for_hint("</path>; rel=modulepreloadx");
+    CHECK(result.empty());
+  }
+
+  SECTION("rel=preconnectx must NOT match")
+  {
+    std::string result = normalize_link_for_hint("</path>; rel=preconnectx");
+    CHECK(result.empty());
+  }
+
+  SECTION("valid rel=stylesheet with semicolon boundary")
+  {
+    std::string result = normalize_link_for_hint("</s.css>; rel=stylesheet; nonce=abc");
+    CHECK(result == "</s.css>; rel=preload; as=style");
+  }
+
+  SECTION("valid rel=preload with space boundary")
+  {
+    std::string result = normalize_link_for_hint("</j.js>; rel=preload ; as=script");
+    CHECK(result == "</j.js>; rel=preload ; as=script");
+  }
+
+  SECTION("valid rel=preconnect at end-of-string")
+  {
+    std::string result = normalize_link_for_hint("<https://cdn.test>; rel=preconnect");
+    CHECK(result == "<https://cdn.test>; rel=preconnect");
+  }
+}
