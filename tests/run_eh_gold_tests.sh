@@ -32,6 +32,7 @@ TESTS=(
     early_hints_origin_forward
     early_hints_hints_ttl
     early_hints_purge_header
+    early_hints_origin_forward_self_heal
 )
 
 PASSED=0

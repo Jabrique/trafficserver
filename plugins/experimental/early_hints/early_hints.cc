@@ -751,6 +751,52 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
       }
     }
 
+    // Commit 14: Origin-Forward self-healing from ATS cached response headers.
+    // When origin-forward mode is active and the hints entry was evicted from RAM
+    // (or never written — e.g. after a plugin restart), repopulate it from the
+    // Link headers stored in the ATS cached response. Same split/normalize/validate/
+    // dedup pipeline as READ_RESPONSE_HDR origin-forward path.
+    // Only runs when cached_links==nullptr (TSRemapDoRemap found no serveable entry).
+    if ((config->mode() & EarlyHintsConfig::MODE_ORIGIN_FORWARD) && !req_data->cached_links) {
+      TSMLoc link_field = TSMimeHdrFieldFind(cache_bufp, cache_hdr_loc, "Link", 4);
+      std::vector<std::string> origin_links;
+
+      while (link_field != TS_NULL_MLOC) {
+        int val_len         = 0;
+        const char *val_str = TSMimeHdrFieldValueStringGet(cache_bufp, cache_hdr_loc, link_field, -1, &val_len);
+        if (val_str && val_len > 0) {
+          std::string full_val(val_str, val_len);
+          int remaining = config->max_links() - static_cast<int>(origin_links.size());
+          auto segments = split_link_header_value(full_val, remaining);
+          for (auto &seg : segments) {
+            std::string normalized = normalize_link_for_hint(seg);
+            if (!normalized.empty() && is_valid_link_value(normalized) && has_valid_as_for_preload(normalized)) {
+              origin_links.push_back(std::move(normalized));
+            }
+          }
+          origin_links = dedup_link_segments(std::move(origin_links), config->max_links());
+        }
+        TSMLoc next = TSMimeHdrFieldNextDup(cache_bufp, cache_hdr_loc, link_field);
+        TSHandleMLocRelease(cache_bufp, cache_hdr_loc, link_field);
+        link_field = next;
+
+        if (static_cast<int>(origin_links.size()) >= config->max_links()) {
+          while (link_field != TS_NULL_MLOC) {
+            next = TSMimeHdrFieldNextDup(cache_bufp, cache_hdr_loc, link_field);
+            TSHandleMLocRelease(cache_bufp, cache_hdr_loc, link_field);
+            link_field = next;
+          }
+          break;
+        }
+      }
+
+      if (!origin_links.empty()) {
+        cache->put(req_data->cache_key, origin_links);
+        TSDebug(PLUGIN_NAME, "READ_CACHE_HDR: self-healed %zu origin-forward links for %s from ATS cache", origin_links.size(),
+                req_data->cache_key.c_str());
+      }
+    }
+
     TSHandleMLocRelease(cache_bufp, TS_NULL_MLOC, cache_hdr_loc);
     break;
   }
