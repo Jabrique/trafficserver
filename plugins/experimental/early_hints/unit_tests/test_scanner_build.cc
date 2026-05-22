@@ -116,13 +116,45 @@ TEST_CASE("HtmlScanner: cross-origin stylesheet becomes preconnect", "[html_scan
   CHECK(links[0].find("crossorigin") == std::string::npos);
 }
 
-TEST_CASE("HtmlScanner: cross-origin modulepreload becomes preconnect", "[html_scanner][build]")
+TEST_CASE("HtmlScanner: cross-origin modulepreload becomes preconnect with crossorigin=anonymous",
+          "[html_scanner][build][modulepreload]")
 {
+  // HTML spec §8.1.4.2: module scripts are always CORS-fetched.
+  // When the modulepreload target is non-whitelisted cross-origin, the scanner
+  // downgrades to rel=preconnect. Because modules ALWAYS require a CORS-capable
+  // connection, the preconnect MUST carry crossorigin=anonymous so the browser
+  // establishes the correct TLS + CORS-preflight connection.
   std::string html = R"(<html><head><link rel="modulepreload" href="https://cdn.example.com/mod.mjs"></head></html>)";
   auto links       = scan_html(html);
   REQUIRE(links.size() == 1);
   CHECK(links[0].find("rel=preconnect") != std::string::npos);
   CHECK(links[0].find("https://cdn.example.com") != std::string::npos);
+  // Module scripts are always CORS → preconnect MUST carry crossorigin=anonymous
+  CHECK(links[0].find("crossorigin=anonymous") != std::string::npos);
+}
+
+// Regression: font preconnect crossorigin=anonymous must not be removed by Commit 15
+TEST_CASE("HtmlScanner: non-whitelisted cross-origin font preconnect still has crossorigin=anonymous",
+          "[html_scanner][build][regression]")
+{
+  // W3C CSS Fonts spec: font fetches require CORS-capable connection.
+  // crossorigin=anonymous on the preconnect was pre-existing correct behavior.
+  std::string html = R"(<html><head><link rel="preload" href="https://cdn.example.com/font.woff2" as="font"></head></html>)";
+  auto links       = scan_html(html);
+  REQUIRE(links.size() == 1);
+  CHECK(links[0].find("rel=preconnect") != std::string::npos);
+  CHECK(links[0].find("crossorigin=anonymous") != std::string::npos);
+}
+
+// Regression: stylesheet preconnect must NOT have crossorigin (no regression from Commit 15)
+TEST_CASE("HtmlScanner: non-whitelisted cross-origin stylesheet preconnect has no crossorigin", "[html_scanner][build][regression]")
+{
+  // Stylesheets are NOT CORS-fetched — preconnect crossorigin would be wrong.
+  std::string html = R"(<html><head><link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto"></head></html>)";
+  auto links       = scan_html(html);
+  REQUIRE(links.size() == 1);
+  CHECK(links[0].find("rel=preconnect") != std::string::npos);
+  CHECK(links[0].find("crossorigin") == std::string::npos); // no crossorigin on stylesheet preconnect
 }
 
 TEST_CASE("HtmlScanner: cross-origin script src becomes preconnect", "[html_scanner][build]")
@@ -1284,13 +1316,16 @@ TEST_CASE("preconnect hints must not carry crossorigin attribute", "[html_scanne
     CHECK(links[0].find("crossorigin") == std::string::npos); // RED before fix
   }
 
-  SECTION("cross-origin modulepreload downgraded to preconnect: no crossorigin")
+  SECTION("cross-origin modulepreload downgraded to preconnect: carries crossorigin=anonymous")
   {
+    // Module scripts are always CORS-fetched (HTML spec §8.1.4.2).
+    // The preconnect hint MUST carry crossorigin=anonymous so the browser
+    // opens a CORS-capable connection, matching the module fetch semantics.
     std::string html = R"(<html><head><link rel="modulepreload" href="https://cdn.example.com/app.mjs"></head></html>)";
     auto links       = scan_html(html);
     REQUIRE(links.size() == 1);
     CHECK(links[0].find("rel=preconnect") != std::string::npos);
-    CHECK(links[0].find("crossorigin") == std::string::npos); // RED before fix
+    CHECK(links[0].find("crossorigin=anonymous") != std::string::npos); // FIXED: was incorrectly absent
   }
 
   SECTION("cross-origin font preload downgraded to preconnect: carries crossorigin=anonymous")

@@ -18,17 +18,18 @@ Test 103 Early Hints plugin — preconnect attribute correctness
 #  limitations under the License.
 
 Test.Summary = '''
-Validates that crossorigin and fetchpriority attributes are not emitted on
-rel=preconnect Early Hints, and that same-origin preloads continue to carry
-those attributes correctly.
+Validates crossorigin and fetchpriority attribute behavior on rel=preconnect Early Hints.
 
-A rel=preconnect hint tells the browser to warm up a TCP/TLS connection to a
-third-party origin. The crossorigin and fetchpriority attributes are defined
-only for preload hints and have no semantics on preconnect. Emitting them
-wastes bytes and produces malformed Link headers.
+Stylesheet and script preconnect hints must NOT carry crossorigin (those resource types
+are not CORS-fetched, so crossorigin on preconnect would be wrong and wasteful).
 
-This test covers four resource types that trigger the preconnect downgrade
-path: stylesheet, script, modulepreload, and font preload.
+Module preloads (modulepreload) ARE always CORS-fetched per HTML spec §8.1.4.2, so
+their preconnect downgrade correctly carries crossorigin=anonymous. This is tested in
+the unit tests (test_scanner_build.cc) and the early_hints_preconnect_attrs gold test
+focuses on the non-CORS types (stylesheet, script) plus same-origin regression guards.
+
+This test covers: stylesheet preconnect (no crossorigin), script preconnect (no
+crossorigin), and same-origin preload (fetchpriority=high must be preserved).
 '''
 
 Test.SkipUnless(

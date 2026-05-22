@@ -427,9 +427,11 @@ HtmlScanner::build_link_header(const std::string &tag)
           result = "<" + href_ + ">; rel=modulepreload";
           crossorigin_value_.clear();
         } else {
-          // Non-whitelisted: preconnect only — crossorigin not valid on preconnect
-          result = "<" + origin + ">; rel=preconnect";
-          crossorigin_value_.clear();
+          // Non-whitelisted: preconnect only — module scripts are always CORS-fetched
+          // (HTML spec §8.1.4.2), so the preconnect MUST carry crossorigin=anonymous
+          // to establish a CORS-capable connection (same requirement as rel=preload as=font).
+          result             = "<" + origin + ">; rel=preconnect";
+          crossorigin_value_ = "anonymous";
         }
       } else {
         result = "<" + href_ + ">; rel=modulepreload";
