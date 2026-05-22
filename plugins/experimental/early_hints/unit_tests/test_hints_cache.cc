@@ -1423,3 +1423,95 @@ TEST_CASE("HintsCache: peek() reads links without incrementing request_count", "
     CHECK(p.get() == g.get()); // same underlying LinkList object
   }
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Commit 12: get_age() and touch() for TTL + Stale-While-Revalidate
+// ═════════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("HintsCache: get_age() returns age of entry", "[hints_cache][ttl]")
+{
+  std::vector<std::string> links = {"</a.js>; rel=preload; as=script"};
+
+  SECTION("get_age returns -1 for missing key")
+  {
+    HintsCache cache;
+    CHECK(cache.get_age("/nonexistent") == -1);
+  }
+
+  SECTION("get_age returns 0 or small value immediately after put")
+  {
+    HintsCache cache;
+    cache.put("/page", links);
+    time_t age = cache.get_age("/page");
+    CHECK(age >= 0);
+    CHECK(age <= 2); // should be very recent
+  }
+
+  SECTION("get_age increases over time")
+  {
+    HintsCache cache;
+    cache.put("/page", links);
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    time_t age = cache.get_age("/page");
+    CHECK(age >= 2);
+  }
+}
+
+TEST_CASE("HintsCache: touch() resets age and marks dirty", "[hints_cache][ttl]")
+{
+  std::vector<std::string> links = {"</a.js>; rel=preload; as=script"};
+
+  SECTION("touch resets age to ~0")
+  {
+    HintsCache cache;
+    cache.put("/page", links);
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    // Before touch: age >= 2
+    CHECK(cache.get_age("/page") >= 2);
+    // After touch: age resets
+    cache.touch("/page");
+    CHECK(cache.get_age("/page") <= 1);
+  }
+
+  SECTION("touch marks entry dirty for persist")
+  {
+    std::string path = "/tmp/eh_touch_dirty_" + std::to_string(getpid()) + ".bin";
+    std::remove(path.c_str());
+
+    HintsCache cache;
+    cache.set_persist_path(path);
+    cache.set_persist_throttle(0); // persist on every change
+
+    cache.put("/page", links); // persist 1 (learn_count changed)
+    int count_before = cache.put_persist_count();
+
+    cache.touch("/page"); // should mark dirty and trigger persist
+    int count_after = cache.put_persist_count();
+    CHECK(count_after > count_before);
+
+    std::remove(path.c_str());
+    std::remove((path + ".tmp").c_str());
+  }
+
+  SECTION("touch is no-op for missing key")
+  {
+    HintsCache cache;
+    REQUIRE_NOTHROW(cache.touch("/nonexistent"));
+    CHECK(cache.size() == 0);
+  }
+
+  SECTION("touch does not change links (same shared_ptr)")
+  {
+    HintsCache cache;
+    cache.put("/page", links);
+
+    auto before = cache.peek("/page");
+    REQUIRE(before != nullptr);
+
+    cache.touch("/page");
+
+    auto after = cache.peek("/page");
+    REQUIRE(after != nullptr);
+    CHECK(before.get() == after.get()); // same LinkList object — touch only updates timestamp
+  }
+}

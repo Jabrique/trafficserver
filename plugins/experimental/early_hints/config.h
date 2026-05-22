@@ -159,6 +159,12 @@ public:
     return persist_throttle_;
   }
 
+  int
+  hints_ttl() const
+  {
+    return hints_ttl_;
+  }
+
 private:
   uint8_t mode_          = MODE_ORIGIN_FORWARD;
   int max_links_         = 10;
@@ -175,6 +181,7 @@ private:
   bool persist_enabled_ = false;
   int persist_throttle_ = 10;
   std::string persist_dir_;
+  int hints_ttl_ = 0; // 0 = disabled; range [1, 86400] seconds when set
 
   bool parse_mode(const char *mode_str);
   static bool match_domain_list(const std::string &domain, const std::vector<std::string> &list);

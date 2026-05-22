@@ -446,6 +446,7 @@ EarlyHintsConfig::init(int argc, const char *argv[])
     {const_cast<char *>("preload-whitelist"),         required_argument, nullptr, 'W'},
     {const_cast<char *>("max-cache-entries"),        required_argument, nullptr, 'c'},
     {const_cast<char *>("persist-throttle"),          required_argument, nullptr, 't'},
+    {const_cast<char *>("hints-ttl"),                 required_argument, nullptr, 'T'},
     {nullptr, 0, nullptr, 0},
   };
   // clang-format on
@@ -635,6 +636,16 @@ EarlyHintsConfig::init(int argc, const char *argv[])
       }
       if (persist_throttle_ < 0 || persist_throttle_ > 300) {
         TSError("[%s] persist-throttle must be between 0 and 300 seconds, got %d", PLUGIN_NAME, persist_throttle_);
+        return false;
+      }
+      break;
+    case 'T':
+      if (!safe_parse_int(optarg, &hints_ttl_)) {
+        TSError("[%s] invalid --hints-ttl value: %s", PLUGIN_NAME, optarg);
+        return false;
+      }
+      if (hints_ttl_ < 0 || hints_ttl_ > 86400) {
+        TSError("[%s] hints-ttl must be between 0 and 86400 seconds (0=disabled), got %d", PLUGIN_NAME, hints_ttl_);
         return false;
       }
       break;

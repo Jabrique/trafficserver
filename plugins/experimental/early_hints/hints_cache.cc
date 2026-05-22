@@ -208,6 +208,42 @@ HintsCache::put_persist_count() const
   return persist_count_.load(std::memory_order_relaxed);
 }
 
+time_t
+HintsCache::get_age(const std::string &key) const
+{
+  TSMutexGuard guard(mutex_);
+  auto it = entries_.find(key);
+  if (it == entries_.end()) {
+    return -1;
+  }
+  return time(nullptr) - it->second.last_updated;
+}
+
+void
+HintsCache::touch(const std::string &key)
+{
+  {
+    TSMutexGuard guard(mutex_);
+    auto it = entries_.find(key);
+    if (it == entries_.end()) {
+      return; // no-op: key not found
+    }
+    it->second.last_updated = time(nullptr);
+    is_dirty_.store(true, std::memory_order_release);
+  }
+  // Mirror the put() persist pattern: throttle-guarded, serialized via persist_mutex_.
+  if (!persist_path_.empty()) {
+    TSMutexGuard persist_guard(persist_mutex_);
+    time_t now = time(nullptr);
+    if (now - last_persist_time_ >= persist_throttle_interval_) {
+      if (persist_to_disk()) {
+        last_persist_time_ = now;
+        persist_count_.fetch_add(1, std::memory_order_relaxed);
+      }
+    }
+  }
+}
+
 std::string
 HintsCache::make_key(const char *path, int path_len)
 {

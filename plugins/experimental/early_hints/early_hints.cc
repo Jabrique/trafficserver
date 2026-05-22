@@ -73,6 +73,11 @@ struct RequestData {
   // Used by READ_RESPONSE_HDR and READ_CACHE_HDR to skip scanner when already learned.
   // Set once in TSRemapDoRemap, valid for all subsequent hooks in this transaction.
   bool has_learned = false;
+  // True when a TTL is configured and the cached hints are older than hints_ttl.
+  // Set in TSRemapDoRemap. When true:
+  //   READ_CACHE_HDR (ATS cache hit / frozen body): call touch() to refresh TTL, skip scanner.
+  //   READ_RESPONSE_HDR (origin response): re-attach scanner even though has_learned=true.
+  bool needs_relearn = false;
   // Guards stat_hints_learned against double-count in combined mode:
   // origin-forward and auto-learn may both fire for the same request.
   bool stat_learned_emitted = false;
@@ -581,7 +586,7 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
       // has_learned is set in TSRemapDoRemap via peek() to avoid double-counting request_count.
       bool already_learned = req_data->has_learned;
 
-      if (already_learned) {
+      if (already_learned && !req_data->needs_relearn) {
         TSDebug(PLUGIN_NAME, "READ_RESPONSE_HDR: already learned hints for %s, skipping scanner", req_data->cache_key.c_str());
         // For origin responses (ATS cache disabled or cache miss), READ_CACHE_HDR will not fire.
         // Call get() here to increment request_count and set cached_links if threshold is met.
@@ -592,6 +597,12 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
                   req_data->cached_links ? "hints ready" : "below threshold");
         }
       } else {
+        // Two cases: !already_learned (first learn) OR already_learned+needs_relearn (TTL expired).
+        // Both paths need a scanner. Only the debug message differs.
+        if (already_learned) {
+          TSDebug(PLUGIN_NAME, "READ_RESPONSE_HDR: TTL expired for %s, re-scanning origin response", req_data->cache_key.c_str());
+          // Stale cached_links already set in TSRemapDoRemap (SWR: serve stale while re-learning).
+        }
         // Check Content-Type: text/html
         TSMLoc ct_field = TSMimeHdrFieldFind(server_bufp, server_hdr_loc, TS_MIME_FIELD_CONTENT_TYPE, TS_MIME_LEN_CONTENT_TYPE);
         bool is_html    = false;
@@ -676,7 +687,15 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
       bool already_learned = req_data->has_learned;
 
       if (already_learned) {
-        TSDebug(PLUGIN_NAME, "READ_CACHE_HDR: already learned hints for %s, skipping scanner", req_data->cache_key.c_str());
+        if (req_data->needs_relearn) {
+          // TTL expired but HTML body is frozen in ATS cache — cannot re-scan.
+          // Just refresh the TTL so the entry remains valid for another hints_ttl period.
+          cache->touch(req_data->cache_key);
+          req_data->needs_relearn = false;
+          TSDebug(PLUGIN_NAME, "READ_CACHE_HDR: TTL refresh (touch) for frozen %s", req_data->cache_key.c_str());
+        } else {
+          TSDebug(PLUGIN_NAME, "READ_CACHE_HDR: already learned hints for %s, skipping scanner", req_data->cache_key.c_str());
+        }
       } else {
         // Not learned yet — we lost memory state but ATS has the cached response!
         // Re-learn it from ATS Cache without contacting the Origin server.
@@ -1118,6 +1137,18 @@ TSRemapDoRemap(void *ih, TSHttpTxn rh, TSRemapRequestInfo * /* rri ATS_UNUSED */
         req_data->has_learned = true;
         TSDebug(PLUGIN_NAME, "cache hit (serveable) for %s: %zu cached links", cache_key.c_str(), req_data->cached_links->size());
         cached_ptr = req_data->cached_links.get();
+
+        // TTL check: if hints_ttl is set and the entry is stale, schedule a re-learn.
+        // Stale-While-Revalidate: serve the existing (possibly stale) hints NOW,
+        // but flag the request so the scanner re-runs on the next origin response.
+        if (config->hints_ttl() > 0) {
+          time_t age = cache->get_age(cache_key);
+          if (age >= 0 && age >= config->hints_ttl()) {
+            req_data->needs_relearn = true;
+            TSDebug(PLUGIN_NAME, "cache hit STALE for %s: age=%lds >= ttl=%ds, will re-learn", cache_key.c_str(),
+                    static_cast<long>(age), config->hints_ttl());
+          }
+        }
       } else {
         // get() returned null: either entry doesn't exist OR request_count < min_hit_count.
         // peek() distinguishes the two cases without incrementing request_count again.

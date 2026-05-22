@@ -68,6 +68,7 @@ TEST_CASE("Config default values", "[config]")
     CHECK(config.manual_links().empty());
     CHECK(config.crossorigin_whitelist().empty());
     CHECK(config.preload_whitelist().empty());
+    CHECK(config.hints_ttl() == 0); // TTL disabled by default
   }
 }
 
@@ -2841,5 +2842,70 @@ TEST_CASE("normalize_link_for_hint: boundary-aware rel matching", "[config][norm
   {
     std::string result = normalize_link_for_hint("<https://cdn.test>; rel=preconnect");
     CHECK(result == "<https://cdn.test>; rel=preconnect");
+  }
+}
+
+// ─── Commit 12: --hints-ttl (TTL + Stale-While-Revalidate) ──────────────────
+
+TEST_CASE("Config: --hints-ttl parsing and validation", "[config][hints-ttl]")
+{
+  SECTION("default is 0 (TTL disabled)")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {}));
+    CHECK(config.hints_ttl() == 0);
+  }
+
+  SECTION("--hints-ttl 0 is valid (explicit disable)")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--hints-ttl", "0"}));
+    CHECK(config.hints_ttl() == 0);
+  }
+
+  SECTION("--hints-ttl 3600 sets one hour TTL")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--hints-ttl", "3600"}));
+    CHECK(config.hints_ttl() == 3600);
+  }
+
+  SECTION("--hints-ttl 86400 is valid (maximum: 24 hours)")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--hints-ttl", "86400"}));
+    CHECK(config.hints_ttl() == 86400);
+  }
+
+  SECTION("--hints-ttl 86401 is invalid (exceeds 24 hours)")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(config, {"--hints-ttl", "86401"}));
+  }
+
+  SECTION("--hints-ttl -1 is invalid (negative)")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(config, {"--hints-ttl", "-1"}));
+  }
+
+  SECTION("--hints-ttl non-numeric is invalid")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(config, {"--hints-ttl", "abc"}));
+  }
+
+  SECTION("--hints-ttl missing value is invalid")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(config, {"--hints-ttl"}));
+  }
+
+  SECTION("--hints-ttl can coexist with other options")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--hints-ttl", "300", "--min-hit-count", "3"}));
+    CHECK(config.hints_ttl() == 300);
+    CHECK(config.min_hit_count() == 3);
   }
 }

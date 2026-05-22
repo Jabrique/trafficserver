@@ -100,6 +100,22 @@ public:
    */
   void put(const std::string &key, const std::vector<std::string> &links);
 
+  /**
+   * Thread-safe age lookup: returns (now - last_updated) in seconds for the entry.
+   * Returns -1 if the entry does not exist.
+   * Does NOT increment request_count.
+   */
+  time_t get_age(const std::string &key) const;
+
+  /**
+   * Thread-safe touch: resets last_updated to now without changing links or learn_count.
+   * Marks the entry dirty so the next persist flush writes the fresh timestamp.
+   * No-op if the key does not exist.
+   * Used by READ_CACHE_HDR when hints are stale but the HTML body is frozen in
+   * the ATS cache — re-scanning is not possible, so just refresh the TTL.
+   */
+  void touch(const std::string &key);
+
   /** Get total entries (for stats). */
   size_t size() const;
 
