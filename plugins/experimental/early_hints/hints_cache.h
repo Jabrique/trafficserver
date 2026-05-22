@@ -116,6 +116,15 @@ public:
    */
   void touch(const std::string &key);
 
+  /**
+   * Thread-safe remove: erases the entry for key from the cache.
+   * Marks dirty so the next persist flush reflects the deletion.
+   * No-op if the key does not exist.
+   * Used by the purge-header path in TSRemapDoRemap to invalidate stale hints
+   * on deploy. The purging request itself will re-learn via the scanner.
+   */
+  void remove(const std::string &key);
+
   /** Get total entries (for stats). */
   size_t size() const;
 

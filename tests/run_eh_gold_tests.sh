@@ -31,6 +31,7 @@ TESTS=(
     early_hints_security
     early_hints_origin_forward
     early_hints_hints_ttl
+    early_hints_purge_header
 )
 
 PASSED=0

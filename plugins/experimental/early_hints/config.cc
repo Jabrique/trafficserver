@@ -27,8 +27,10 @@
 #include <algorithm>
 #include <unordered_set>
 
-// Validate header name according to RFC 7230 token (tchar) standard
-static bool
+// RFC 7230 §3.2: header field names must be non-empty tokens (1*tchar).
+// tchar = ALPHA / DIGIT / "!" / "#" / "$" / "%" / "&" / "'" / "*" / "+" / "-" / "."
+//       / "^" / "_" / "`" / "|" / "~"
+bool
 is_valid_header_name(const std::string &name)
 {
   if (name.empty()) {
@@ -447,6 +449,8 @@ EarlyHintsConfig::init(int argc, const char *argv[])
     {const_cast<char *>("max-cache-entries"),        required_argument, nullptr, 'c'},
     {const_cast<char *>("persist-throttle"),          required_argument, nullptr, 't'},
     {const_cast<char *>("hints-ttl"),                 required_argument, nullptr, 'T'},
+    {const_cast<char *>("purge-header"),              required_argument, nullptr, 'H'},
+    {const_cast<char *>("purge-secret"),              required_argument, nullptr, 'S'},
     {nullptr, 0, nullptr, 0},
   };
   // clang-format on
@@ -649,6 +653,24 @@ EarlyHintsConfig::init(int argc, const char *argv[])
         return false;
       }
       break;
+    case 'H':
+      if (!optarg || optarg[0] == '\0') {
+        TSError("[%s] --purge-header requires a non-empty header name", PLUGIN_NAME);
+        return false;
+      }
+      if (!is_valid_header_name(optarg)) {
+        TSError("[%s] --purge-header value is not a valid RFC 7230 token: %s", PLUGIN_NAME, optarg);
+        return false;
+      }
+      purge_header_name_ = optarg;
+      break;
+    case 'S':
+      if (!optarg || optarg[0] == '\0') {
+        TSError("[%s] --purge-secret requires a non-empty token", PLUGIN_NAME);
+        return false;
+      }
+      purge_secret_ = optarg;
+      break;
     default:
       TSError("[%s] unknown option", PLUGIN_NAME);
       return false;
@@ -658,6 +680,12 @@ EarlyHintsConfig::init(int argc, const char *argv[])
   // Validate: manual mode requires at least one --link
   if ((mode_ & MODE_MANUAL) && manual_links_.empty()) {
     TSError("[%s] manual mode requires at least one --link parameter", PLUGIN_NAME);
+    return false;
+  }
+
+  // Validate: --purge-header and --purge-secret must be specified together
+  if (purge_header_name_.empty() != purge_secret_.empty()) {
+    TSError("[%s] --purge-header and --purge-secret must be used together", PLUGIN_NAME);
     return false;
   }
 

@@ -1515,3 +1515,102 @@ TEST_CASE("HintsCache: touch() resets age and marks dirty", "[hints_cache][ttl]"
     CHECK(before.get() == after.get()); // same LinkList object — touch only updates timestamp
   }
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Commit 13: remove() for Purge Header Invalidation
+// ═════════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("HintsCache: remove() invalidates entry", "[hints_cache][purge]")
+{
+  std::vector<std::string> links = {"</a.js>; rel=preload; as=script"};
+
+  SECTION("remove erases entry — peek returns null after remove")
+  {
+    HintsCache cache;
+    cache.put("/page", links);
+    REQUIRE(cache.peek("/page") != nullptr);
+
+    cache.remove("/page");
+
+    CHECK(cache.peek("/page") == nullptr);
+    CHECK(cache.size() == 0);
+  }
+
+  SECTION("remove erases entry — get returns null after remove")
+  {
+    HintsCache cache;
+    cache.put("/page", links);
+    // Warm up request_count so get would normally return non-null
+    cache.get("/page", 1); // rc=0→1 >= 1 → would return links
+
+    cache.remove("/page");
+
+    auto result = cache.get("/page", 1);
+    CHECK(result == nullptr);
+    CHECK(cache.size() == 0);
+  }
+
+  SECTION("remove on non-existent key is no-op (no crash, size unchanged)")
+  {
+    HintsCache cache;
+    cache.put("/other", links);
+    size_t before = cache.size();
+
+    REQUIRE_NOTHROW(cache.remove("/nonexistent"));
+
+    CHECK(cache.size() == before);
+    CHECK(cache.peek("/other") != nullptr); // other entries intact
+  }
+
+  SECTION("remove marks entry dirty for persist")
+  {
+    std::string path = "/tmp/eh_remove_dirty_" + std::to_string(getpid()) + ".bin";
+    std::remove(path.c_str());
+
+    HintsCache cache;
+    cache.set_persist_path(path);
+    cache.set_persist_throttle(0); // persist on every change
+
+    cache.put("/page", links);
+    int count_before = cache.put_persist_count();
+
+    cache.remove("/page"); // should mark dirty and trigger persist
+    int count_after = cache.put_persist_count();
+    CHECK(count_after > count_before);
+
+    std::remove(path.c_str());
+    std::remove((path + ".tmp").c_str());
+  }
+
+  SECTION("remove only erases the target key, other entries unaffected")
+  {
+    HintsCache cache;
+    cache.put("/page1", links);
+    cache.put("/page2", links);
+    cache.put("/page3", links);
+
+    cache.remove("/page2");
+
+    CHECK(cache.peek("/page1") != nullptr);
+    CHECK(cache.peek("/page2") == nullptr);
+    CHECK(cache.peek("/page3") != nullptr);
+    CHECK(cache.size() == 2);
+  }
+
+  SECTION("put after remove creates fresh entry (request_count reset to 0)")
+  {
+    HintsCache cache;
+    cache.put("/page", links);
+    cache.get("/page", 1); // rc=0→1 >= 1
+
+    cache.remove("/page");
+
+    // Re-put creates brand-new entry with rc=0
+    cache.put("/page", links);
+    // rc=0 < min_hits=1 → get returns null first call... wait no
+    // After put, rc is reset to 0 in new entry. get() increments rc to 1.
+    // With min_hits=1: rc=0→1 >= 1 → returns non-null
+    auto result = cache.get("/page", 1);
+    CHECK(result != nullptr);
+  }
+}

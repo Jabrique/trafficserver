@@ -1123,6 +1123,29 @@ TSRemapDoRemap(void *ih, TSHttpTxn rh, TSRemapRequestInfo * /* rri ATS_UNUSED */
     goto register_hooks;
   }
 
+  // Purge header check: if --purge-header is configured and the request carries the correct
+  // secret, invalidate the cached hints entry for this URL so it can be re-learned.
+  // The purging request itself continues through normal processing: get() will find no entry,
+  // no 103 is sent, and the scanner attaches on READ_RESPONSE_HDR to re-learn the page.
+  if (!config->purge_header_name().empty()) {
+    TSMLoc purge_field_loc = TSMimeHdrFieldFind(req_bufp, req_hdr_loc, config->purge_header_name().c_str(),
+                                                static_cast<int>(config->purge_header_name().size()));
+    if (purge_field_loc != TS_NULL_MLOC) {
+      int val_len               = 0;
+      const char *val           = TSMimeHdrFieldValueStringGet(req_bufp, req_hdr_loc, purge_field_loc, -1, &val_len);
+      const std::string &secret = config->purge_secret();
+      // Note: not constant-time — acceptable for internal CDN use (per ATS remap_purge.c precedent)
+      bool token_ok = val && val_len == static_cast<int>(secret.size()) && memcmp(val, secret.c_str(), val_len) == 0;
+      TSHandleMLocRelease(req_bufp, req_hdr_loc, purge_field_loc);
+      if (token_ok) {
+        cache->remove(cache_key);
+        TSDebug(PLUGIN_NAME, "purge: removed hints entry for %s", cache_key.c_str());
+      } else {
+        TSDebug(PLUGIN_NAME, "purge: bad or missing token for %s, ignoring", cache_key.c_str());
+      }
+    }
+  }
+
   // Build merged links from all active modes
   {
     const std::vector<std::string> *cached_ptr = nullptr;

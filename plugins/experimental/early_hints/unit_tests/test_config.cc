@@ -2909,3 +2909,92 @@ TEST_CASE("Config: --hints-ttl parsing and validation", "[config][hints-ttl]")
     CHECK(config.min_hit_count() == 3);
   }
 }
+
+// ─── Commit 13: --purge-header / --purge-secret ──────────────────────────────
+
+TEST_CASE("Config: --purge-header and --purge-secret parsing", "[config][purge]")
+{
+  SECTION("default: purge_header_name is empty, purge_secret is empty")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {}));
+    CHECK(config.purge_header_name().empty());
+    CHECK(config.purge_secret().empty());
+  }
+
+  SECTION("--purge-header alone is invalid (requires --purge-secret)")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(config, {"--purge-header", "X-Purge"}));
+  }
+
+  SECTION("--purge-secret alone is invalid (requires --purge-header)")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(config, {"--purge-secret", "s3cr3t"}));
+  }
+
+  SECTION("both --purge-header and --purge-secret is valid")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--purge-header", "X-Purge", "--purge-secret", "s3cr3t"}));
+    CHECK(config.purge_header_name() == "X-Purge");
+    CHECK(config.purge_secret() == "s3cr3t");
+  }
+
+  SECTION("--purge-header with invalid name (space) is invalid")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(config, {"--purge-header", "X Purge", "--purge-secret", "s3cr3t"}));
+  }
+
+  SECTION("--purge-header with invalid name (colon) is invalid")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(config, {"--purge-header", "X:Purge", "--purge-secret", "s3cr3t"}));
+  }
+
+  SECTION("--purge-header with empty name is invalid")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(config, {"--purge-header", "", "--purge-secret", "s3cr3t"}));
+  }
+
+  SECTION("--purge-secret with empty value is invalid")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(config, {"--purge-header", "X-Purge", "--purge-secret", ""}));
+  }
+
+  SECTION("purge options can coexist with other options")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(
+      config, {"--purge-header", "X-Purge-Token", "--purge-secret", "abc123", "--min-hit-count", "2", "--hints-ttl", "300"}));
+    CHECK(config.purge_header_name() == "X-Purge-Token");
+    CHECK(config.purge_secret() == "abc123");
+    CHECK(config.min_hit_count() == 2);
+    CHECK(config.hints_ttl() == 300);
+  }
+}
+
+TEST_CASE("Config: is_valid_header_name() validates RFC 7230 tchar", "[config][purge]")
+{
+  SECTION("valid header names")
+  {
+    CHECK(is_valid_header_name("X-Purge"));
+    CHECK(is_valid_header_name("X-Purge-Token"));
+    CHECK(is_valid_header_name("Authorization"));
+    CHECK(is_valid_header_name("x-custom-123"));
+  }
+
+  SECTION("invalid: empty string") { CHECK_FALSE(is_valid_header_name("")); }
+
+  SECTION("invalid: contains space") { CHECK_FALSE(is_valid_header_name("X Purge")); }
+
+  SECTION("invalid: contains colon") { CHECK_FALSE(is_valid_header_name("X:Purge")); }
+
+  SECTION("invalid: contains control character") { CHECK_FALSE(is_valid_header_name("X-\x01Purge")); }
+
+  SECTION("invalid: contains parenthesis") { CHECK_FALSE(is_valid_header_name("X-(Purge)")); }
+}

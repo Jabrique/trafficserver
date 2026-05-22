@@ -35,6 +35,10 @@ static constexpr int LINK_HEADER_OVERHEAD = 8;
 // (origin-forward forwarding).
 bool is_valid_link_value(const std::string &link);
 
+// Validates an HTTP header field name per RFC 7230 §3.2 (tchar only, non-empty).
+// Used by config.cc (--purge-header validation) and unit tests.
+bool is_valid_header_name(const std::string &name);
+
 // Validates that a Link header value with rel=preload or rel=modulepreload
 // also contains a valid as= attribute (Fetch spec §8 destinations).
 // Returns true if as= is valid, or if rel is not preload/modulepreload.
@@ -165,6 +169,18 @@ public:
     return hints_ttl_;
   }
 
+  const std::string &
+  purge_header_name() const
+  {
+    return purge_header_name_;
+  }
+
+  const std::string &
+  purge_secret() const
+  {
+    return purge_secret_;
+  }
+
 private:
   uint8_t mode_          = MODE_ORIGIN_FORWARD;
   int max_links_         = 10;
@@ -181,7 +197,9 @@ private:
   bool persist_enabled_ = false;
   int persist_throttle_ = 10;
   std::string persist_dir_;
-  int hints_ttl_ = 0; // 0 = disabled; range [1, 86400] seconds when set
+  int hints_ttl_ = 0;             // 0 = disabled; range [1, 86400] seconds when set
+  std::string purge_header_name_; // empty = purge disabled
+  std::string purge_secret_;      // required when purge_header_name_ is set
 
   bool parse_mode(const char *mode_str);
   static bool match_domain_list(const std::string &domain, const std::vector<std::string> &list);
