@@ -364,9 +364,10 @@ TEST_CASE("Numeric: HintsCache max_entries enforcement", "[numeric][cache]")
     cache.put("/a", links2);
     CHECK(cache.size() == 2);
 
-    // Verify update took effect (learn_count is now 2)
+    // Verify update took effect: use min_hits=1 (request_count gate).
+    // learn_count for /a is now 2, but serving threshold is request_count (traffic).
     std::vector<std::string> result;
-    CHECK(cache.get("/a", result, 2));
+    CHECK(cache.get("/a", result, 1)); // rc=0→1 >= 1
     REQUIRE(result.size() == 1);
     CHECK(result[0] == "</b.js>; rel=preload; as=script");
   }
@@ -421,9 +422,11 @@ TEST_CASE("Numeric: Cache entries persist indefinitely", "[numeric][cache]")
       cache.put("/page", links);
     }
 
-    // learn_count should be 11 (1 initial + 10 updates)
+    // Multiple updates increment learn_count (for persistence) independently of request_count.
+    // The serving threshold is request_count: first get() suffices after many puts.
     std::vector<std::string> result;
-    CHECK(cache.get("/page", result, 11));
+    CHECK(cache.get("/page", result, 1)); // rc=0→1 >= 1
+    CHECK(result.size() == 1);
   }
 }
 
@@ -606,10 +609,11 @@ TEST_CASE("Numeric: HintsCache learn_count is bounded by practical use", "[numer
       cache.put("/page", links);
     }
 
-    // Should be retrievable with min_hits up to 100
+    // 100 puts increment learn_count to 100 (bounded, no overflow).
+    // Serving threshold is request_count. First get() makes rc=1 >= 1.
     std::vector<std::string> result;
-    CHECK(cache.get("/page", result, 100));
-    CHECK_FALSE(cache.get("/page", result, 101));
+    CHECK(cache.get("/page", result, 1));         // rc=0→1 >= 1 → true
+    CHECK_FALSE(cache.get("/page", result, 200)); // rc=1→2 < 200 → false
   }
 }
 

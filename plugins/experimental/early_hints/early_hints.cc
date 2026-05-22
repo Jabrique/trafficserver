@@ -68,7 +68,11 @@ struct RequestData {
   PluginInstance *instance = nullptr; // NOT owned
   std::string cache_key;
   std::string debug_status;
-  LinkListPtr cached_links; // Ref-counted, reused across hooks — no deep copy
+  LinkListPtr cached_links; // Non-null when hints are serveable (request_count >= min_hits)
+  // True when entry EXISTS in cache (links != nullptr), regardless of request_count.
+  // Used by READ_RESPONSE_HDR and READ_CACHE_HDR to skip scanner when already learned.
+  // Set once in TSRemapDoRemap, valid for all subsequent hooks in this transaction.
+  bool has_learned = false;
   // Guards stat_hints_learned against double-count in combined mode:
   // origin-forward and auto-learn may both fire for the same request.
   bool stat_learned_emitted = false;
@@ -572,13 +576,21 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
 
     // Auto-learn mode: set up HTML scanning transform
     if (config->mode() & EarlyHintsConfig::MODE_AUTO_LEARN) {
-      // ATS Cache Read Interception / Redundant Transform Skip:
-      // If the plugin already learned hints for this URL, skip scanning (saves CPU).
-      bool already_learned = (req_data->cached_links != nullptr);
+      // Scanner skip: if hints have been learned for this URL (entry exists in cache
+      // regardless of request_count), skip scanning — the HTML content won't change.
+      // has_learned is set in TSRemapDoRemap via peek() to avoid double-counting request_count.
+      bool already_learned = req_data->has_learned;
 
       if (already_learned) {
-        TSDebug(PLUGIN_NAME, "READ_RESPONSE_HDR: Redundant Transform Skip - already learned hints for %s, skipping scanner",
-                req_data->cache_key.c_str());
+        TSDebug(PLUGIN_NAME, "READ_RESPONSE_HDR: already learned hints for %s, skipping scanner", req_data->cache_key.c_str());
+        // For origin responses (ATS cache disabled or cache miss), READ_CACHE_HDR will not fire.
+        // Call get() here to increment request_count and set cached_links if threshold is met.
+        // (For ATS cache hits, READ_CACHE_HDR already called get(); cached_links may be non-null.)
+        if (req_data->cached_links == nullptr) {
+          req_data->cached_links = cache->get(req_data->cache_key, config->min_hit_count());
+          TSDebug(PLUGIN_NAME, "READ_RESPONSE_HDR: get() for %s → %s", req_data->cache_key.c_str(),
+                  req_data->cached_links ? "hints ready" : "below threshold");
+        }
       } else {
         // Check Content-Type: text/html
         TSMLoc ct_field = TSMimeHdrFieldFind(server_bufp, server_hdr_loc, TS_MIME_FIELD_CONTENT_TYPE, TS_MIME_LEN_CONTENT_TYPE);
@@ -659,13 +671,12 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
     }
 
     // ATS Cache Read Interception: Only attach HTML scanner if Auto-Learn is enabled.
-    // If the plugin already learned hints for this URL (cache hit in memory), skip scanning (saves CPU).
+    // Skip scanner if entry already learned (links exist regardless of request_count).
     if (config->mode() & EarlyHintsConfig::MODE_AUTO_LEARN) {
-      bool already_learned = (req_data->cached_links != nullptr);
+      bool already_learned = req_data->has_learned;
 
       if (already_learned) {
-        TSDebug(PLUGIN_NAME, "READ_CACHE_HDR: Redundant Transform Skip - already learned hints for %s, skipping scanner",
-                req_data->cache_key.c_str());
+        TSDebug(PLUGIN_NAME, "READ_CACHE_HDR: already learned hints for %s, skipping scanner", req_data->cache_key.c_str());
       } else {
         // Not learned yet — we lost memory state but ATS has the cached response!
         // Re-learn it from ATS Cache without contacting the Origin server.
@@ -750,19 +761,19 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
           cached_ptr = req_data->cached_links.get();
         } else if (!req_data->cache_key.empty()) {
           // Fallback: transform may have just populated the cache during this request.
-          // Use min_hit_count=1 intentionally: if the transform just learned during THIS request,
-          // learn_count is 1. Using config->min_hit_count() (default 2) would prevent showing
-          // links in the 200 response on the first learning request. The 103 in TSRemapDoRemap
-          // still respects config->min_hit_count() — this fallback is only for 200 compatibility.
-          TSDebug(PLUGIN_NAME, "SEND_RESPONSE_HDR: fallback cache lookup for %s (transform may have just learned)",
+          // Use peek() (not get()) to avoid double-incrementing request_count.
+          // get() was already called in TSRemapDoRemap; calling it again here would
+          // count this request twice toward min_hit_count, making the threshold
+          // effectively lower than configured.
+          TSDebug(PLUGIN_NAME, "SEND_RESPONSE_HDR: fallback peek for %s (transform may have just learned)",
                   req_data->cache_key.c_str());
-          req_data->cached_links = cache->get(req_data->cache_key, 1);
+          req_data->cached_links = cache->peek(req_data->cache_key);
           if (req_data->cached_links) {
-            TSDebug(PLUGIN_NAME, "SEND_RESPONSE_HDR: fallback cache hit for %s, %zu links", req_data->cache_key.c_str(),
+            TSDebug(PLUGIN_NAME, "SEND_RESPONSE_HDR: fallback peek hit for %s, %zu links", req_data->cache_key.c_str(),
                     req_data->cached_links->size());
             cached_ptr = req_data->cached_links.get();
           } else {
-            TSDebug(PLUGIN_NAME, "SEND_RESPONSE_HDR: fallback cache miss for %s", req_data->cache_key.c_str());
+            TSDebug(PLUGIN_NAME, "SEND_RESPONSE_HDR: fallback peek miss for %s", req_data->cache_key.c_str());
           }
         }
       }
@@ -1103,10 +1114,20 @@ TSRemapDoRemap(void *ih, TSHttpTxn rh, TSRemapRequestInfo * /* rri ATS_UNUSED */
               cache_key.c_str(), config->min_hit_count());
       req_data->cached_links = cache->get(cache_key, config->min_hit_count());
       if (req_data->cached_links) {
-        TSDebug(PLUGIN_NAME, "cache hit for %s: %zu cached links found", cache_key.c_str(), req_data->cached_links->size());
+        // Serveable: entry exists and request_count >= min_hit_count
+        req_data->has_learned = true;
+        TSDebug(PLUGIN_NAME, "cache hit (serveable) for %s: %zu cached links", cache_key.c_str(), req_data->cached_links->size());
         cached_ptr = req_data->cached_links.get();
       } else {
-        TSDebug(PLUGIN_NAME, "cache miss for %s (below min_hit_count=%d)", cache_key.c_str(), config->min_hit_count());
+        // get() returned null: either entry doesn't exist OR request_count < min_hit_count.
+        // peek() distinguishes the two cases without incrementing request_count again.
+        req_data->has_learned = (cache->peek(cache_key) != nullptr);
+        if (req_data->has_learned) {
+          TSDebug(PLUGIN_NAME, "cache entry exists for %s but below min_hit_count=%d — no 103 yet", cache_key.c_str(),
+                  config->min_hit_count());
+        } else {
+          TSDebug(PLUGIN_NAME, "cache miss for %s — scanner will run on response", cache_key.c_str());
+        }
       }
     }
 

@@ -48,13 +48,14 @@ using LinkListPtr = std::shared_ptr<const LinkList>;
 
 struct HintEntry {
   LinkListPtr links;
-  time_t last_updated = 0;
-  int learn_count     = 0;
+  time_t last_updated       = 0;
+  int learn_count           = 0;
+  mutable int request_count = 0; // Traffic gate: incremented by get(), NOT by put(). Not persisted.
   mutable std::list<std::string>::iterator lru_iterator;
 };
 
 // File format magic: "EH" (Early Hints) + version 2 (adds per-entry last_updated)
-static constexpr uint32_t HINTS_CACHE_MAGIC   = 0x45480002;
+static constexpr uint32_t HINTS_CACHE_MAGIC    = 0x45480002;
 static constexpr uint32_t HINTS_CACHE_MAGIC_V1 = 0x45480001;
 
 class HintsCache
@@ -71,16 +72,26 @@ public:
 
   /**
    * Thread-safe get: returns shared_ptr to immutable link list (no deep copy).
-   * Returns non-null if entry exists and learn_count >= min_hits.
+   * Returns non-null if entry exists and request_count >= min_hits.
+   * Increments request_count on every call (request_count is the traffic gate;
+   * learn_count is the scanner gate and is only incremented by put()).
    * Entries never expire — they live until evicted by capacity or process restart.
    */
   LinkListPtr get(const std::string &key, int min_hits) const;
 
   /**
    * Thread-safe get (legacy): copies links into output vector.
-   * Returns true if entry exists and learn_count >= min_hits.
+   * Returns true if entry exists and request_count >= min_hits.
    */
   bool get(const std::string &key, std::vector<std::string> &links, int min_hits) const;
+
+  /**
+   * Thread-safe peek: returns links if entry exists, regardless of request_count or min_hits.
+   * Does NOT increment request_count. Use for:
+   *   - Scanner skip check (entry has been learned before → skip scanner)
+   *   - SEND_RESPONSE_HDR fallback (get links without double-counting traffic)
+   */
+  LinkListPtr peek(const std::string &key) const;
 
   /**
    * Thread-safe put: updates or creates entry.
@@ -149,7 +160,7 @@ private:
   std::unordered_map<std::string, HintEntry> entries_;
   mutable std::list<std::string> lru_list_; // LRU list of keys (front = MRU, back = LRU)
   int64_t drop_counter_ = 0;
-  std::atomic<int64_t> persist_count_{0}; // Counts actual persist_to_disk() calls inside put()
+  std::atomic<int64_t> persist_count_{0};           // Counts actual persist_to_disk() calls inside put()
   mutable std::atomic<uint32_t> access_counter_{0}; // For probabilistic LRU promotion (1/16)
   int max_entries_;
   std::string persist_path_;

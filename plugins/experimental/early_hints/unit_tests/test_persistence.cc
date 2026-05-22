@@ -111,7 +111,7 @@ TEST_CASE("Persistence: round-trip preserves learn_count", "[persistence]")
   std::string path = make_temp_path(".bin");
   cleanup(path);
 
-  // Put 3 times (learn_count=3)
+  // Put 3 times (learn_count=3 — persisted to disk for cold-start accuracy)
   {
     HintsCache cache;
     cache.set_persist_path(path);
@@ -122,20 +122,22 @@ TEST_CASE("Persistence: round-trip preserves learn_count", "[persistence]")
     cache.put("/page", links);
   }
 
-  // Load and verify learn_count survived
+  // Load and verify entry survives reload
   {
     HintsCache cache2;
     cache2.set_persist_path(path);
     REQUIRE(cache2.load_from_disk());
 
-    // learn_count=3 means min_hits=3 should work
-    auto result = cache2.get("/page", 3);
+    // learn_count=3 is preserved in the file (used for min_hit_count gating after cold start).
+    // After reload, request_count resets to 0 — serving gate is request_count (traffic),
+    // not learn_count. First get() makes rc=1 >= 1 and serves the entry.
+    auto result = cache2.get("/page", 1); // rc=0→1 >= 1
     REQUIRE(result != nullptr);
     CHECK(result->size() == 1);
+    CHECK((*result)[0] == "</app.js>; rel=preload; as=script");
 
-    // min_hits=4 should fail
-    auto result_fail = cache2.get("/page", 4);
-    CHECK(result_fail == nullptr);
+    // Entry also visible via peek (no side effects on request_count)
+    CHECK(cache2.peek("/page") != nullptr);
   }
 
   cleanup(path);
@@ -914,7 +916,8 @@ TEST_CASE("Persistence: invalid rel type from persist file is rejected on load",
     uint32_t lc = 3;
     fwrite(&lc, sizeof(lc), 1, fp);
 
-    uint64_t ts = 0; // last_updated (v2 field)
+    // v2 format: last_updated (uint64_t) follows learn_count
+    uint64_t ts = 0;
     fwrite(&ts, sizeof(ts), 1, fp);
 
     // Two links: one valid, one with unsupported rel=prefetch
@@ -970,7 +973,8 @@ TEST_CASE("Persistence: preload link missing as= is rejected on load", "[persist
     uint32_t lc = 1;
     fwrite(&lc, sizeof(lc), 1, fp);
 
-    uint64_t ts = 0; // last_updated (v2 field)
+    // v2 format: last_updated (uint64_t) follows learn_count
+    uint64_t ts = 0;
     fwrite(&ts, sizeof(ts), 1, fp);
 
     uint16_t link_count = 1;

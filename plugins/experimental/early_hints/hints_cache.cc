@@ -61,8 +61,11 @@ HintsCache::get(const std::string &key, int min_hits) const
 
   const HintEntry &entry = it->second;
 
-  // Check minimum hit count before serving hints
-  if (entry.learn_count < min_hits) {
+  // Traffic gate: request_count controls when hints are served.
+  // Increment first so the very first call counts as request #1.
+  // learn_count (incremented by put()) is no longer the serving gate —
+  // it only controls persistence. This decouples scanner runs from traffic threshold.
+  if (++entry.request_count < min_hits) {
     return nullptr;
   }
 
@@ -86,6 +89,20 @@ HintsCache::get(const std::string &key, std::vector<std::string> &links, int min
   }
   links = *ptr;
   return true;
+}
+
+LinkListPtr
+HintsCache::peek(const std::string &key) const
+{
+  TSMutexGuard guard(mutex_);
+
+  auto it = entries_.find(key);
+  if (it == entries_.end()) {
+    return nullptr;
+  }
+  // Return links without touching request_count or LRU order.
+  // Used for scanner skip check and SEND_RESPONSE_HDR fallback.
+  return it->second.links;
 }
 
 void

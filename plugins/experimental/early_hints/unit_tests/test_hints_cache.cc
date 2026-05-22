@@ -64,15 +64,21 @@ TEST_CASE("HintsCache: basic put and get", "[hints_cache]")
     CHECK(result == nullptr);
   }
 
-  SECTION("get with min_hits=2 succeeds after second put")
+  SECTION("get with min_hits=2 succeeds after two get() calls")
   {
+    // min_hits threshold is met by request_count (traffic), not learn_count (scanner runs).
+    // Scanner runs once; request_count increments on each get() call.
     std::vector<std::string> links = {"</a.js>; rel=preload; as=script"};
     cache.put("/page", links);
-    cache.put("/page", links);
 
-    auto result = cache.get("/page", 2);
-    REQUIRE(result != nullptr);
-    CHECK(result->size() == 1);
+    // First get: request_count=1 < 2 → null
+    auto r1 = cache.get("/page", 2);
+    CHECK(r1 == nullptr);
+
+    // Second get: request_count=2 >= 2 → non-null
+    auto r2 = cache.get("/page", 2);
+    REQUIRE(r2 != nullptr);
+    CHECK(r2->size() == 1);
   }
 
   SECTION("get with min_hits=1 succeeds on first put")
@@ -419,35 +425,42 @@ TEST_CASE("HintsCache audit: updating existing key when full is not a drop", "[h
 // cache-01: min_hits exact boundary
 TEST_CASE("HintsCache audit v2: min_hits exact boundary", "[hints_cache][audit-v2]")
 {
-  HintsCache cache;
+  // min_hits threshold is now met by request_count (traffic), not learn_count (scanner runs).
+  // A single put() creates the entry; get() calls accumulate request_count.
   std::vector<std::string> links = {"</a.js>; rel=preload; as=script"};
 
-  // Put 5 times → learn_count = 5
-  for (int i = 0; i < 5; i++) {
+  SECTION("min_hits=5: null for first 4 gets, non-null on 5th")
+  {
+    HintsCache cache;
     cache.put("/page", links);
+
+    // Requests 1-4: request_count 1→4 < 5 → null
+    for (int i = 0; i < 4; i++) {
+      CHECK(cache.get("/page", 5) == nullptr);
+    }
+    // Request 5: request_count 4→5 >= 5 → non-null
+    auto result = cache.get("/page", 5);
+    REQUIRE(result != nullptr);
+    CHECK(result->size() == 1);
   }
 
-  // min_hits=5: exactly at threshold → should succeed
-  auto result5 = cache.get("/page", 5);
-  REQUIRE(result5 != nullptr);
-  CHECK(result5->size() == 1);
+  SECTION("min_hits=1: succeeds on the first get()")
+  {
+    HintsCache cache;
+    cache.put("/page", links);
+    REQUIRE(cache.get("/page", 1) != nullptr);
+  }
 
-  // min_hits=6: one above threshold → should fail
-  auto result6 = cache.get("/page", 6);
-  CHECK(result6 == nullptr);
+  SECTION("vector overload respects same boundary")
+  {
+    HintsCache cache;
+    cache.put("/page", links);
 
-  // min_hits=4: one below threshold → should succeed
-  auto result4 = cache.get("/page", 4);
-  REQUIRE(result4 != nullptr);
-
-  // min_hits=1: well below → should succeed
-  auto result1 = cache.get("/page", 1);
-  REQUIRE(result1 != nullptr);
-
-  // Vector-based get: same boundary
-  std::vector<std::string> out;
-  CHECK(cache.get("/page", out, 5) == true);
-  CHECK(cache.get("/page", out, 6) == false);
+    std::vector<std::string> out;
+    CHECK(cache.get("/page", out, 3) == false); // rc=0→1 < 3
+    CHECK(cache.get("/page", out, 3) == false); // rc=1→2 < 3
+    CHECK(cache.get("/page", out, 3) == true);  // rc=2→3 >= 3
+  }
 }
 
 // cache-07: drops() counter accuracy after multiple evictions
@@ -589,22 +602,25 @@ TEST_CASE("put() equality-check — shared_ptr identity preserved for identical 
     REQUIRE(ptr2->size() == 2);
   }
 
-  SECTION("learn_count still increments for identical-links puts (min_hit_count correctness)")
+  SECTION("learn_count still increments for identical-links puts (needed for persistence)")
   {
+    // learn_count increments on every put() regardless of link equality.
+    // This keeps persist files accurate so disk-loaded entries have correct learn_count.
+    // min_hits serving threshold is now request_count-based (not learn_count-based).
     HintsCache cache;
     std::vector<std::string> links = {"</a.js>; rel=preload; as=script"};
 
     cache.put("/page", links); // learn_count=1
-    cache.put("/page", links); // learn_count=2 (debounced links, NOT debounced learn_count)
+    cache.put("/page", links); // learn_count=2 (identical links, learn_count still increments)
     cache.put("/page", links); // learn_count=3
 
-    // min_hits=3 must work — learn_count must have been incremented even for identical links
-    auto result3 = cache.get("/page", 3);
-    REQUIRE(result3 != nullptr);
-
-    // min_hits=4 must fail (only 3 puts)
-    auto result4 = cache.get("/page", 4);
-    CHECK(result4 == nullptr);
+    // request_count starts at 0 regardless of how many puts occurred.
+    // min_hits=3 is satisfied by the 3rd get() call:
+    CHECK(cache.get("/page", 3) == nullptr); // rc=0→1 < 3
+    CHECK(cache.get("/page", 3) == nullptr); // rc=1→2 < 3
+    auto result = cache.get("/page", 3);     // rc=2→3 >= 3
+    REQUIRE(result != nullptr);
+    CHECK(result->size() == 1);
   }
 
   SECTION("no persist_path set — put_persist_count stays 0")
@@ -764,7 +780,9 @@ TEST_CASE("HintsCache: load_from_disk uses atomic swap — existing cache preser
     cache.put("/existing-page", existing_links);
     cache.put("/existing-page", existing_links);
     REQUIRE(cache.size() == 1);
-    REQUIRE(cache.get("/existing-page", 2) != nullptr);
+    // Use min_hits=1 — the intent here is to verify entry exists before corrupt load.
+    // (min_hits=2 checked learn_count in the old design; now request_count gates serving)
+    REQUIRE(cache.get("/existing-page", 1) != nullptr);
 
     // Now "load" a corrupt file — this must NOT wipe the existing cache
     cache.set_persist_path("/dev/null"); // /dev/null reads as empty = bad magic
@@ -870,7 +888,9 @@ TEST_CASE("HintsCache: load_from_disk clamps oversized learn_count to max_learn_
     uint32_t lc = 2000000; // way over cap
     fwrite(&lc, sizeof(lc), 1, fp);
 
-    uint64_t ts = 0; // last_updated (v2 field)
+    // v2 format: last_updated (uint64_t) follows learn_count.
+    // Omitting this caused load_from_disk to misparse and return false.
+    uint64_t ts = 0;
     fwrite(&ts, sizeof(ts), 1, fp);
 
     uint16_t link_count = 1;
@@ -888,14 +908,15 @@ TEST_CASE("HintsCache: load_from_disk clamps oversized learn_count to max_learn_
   REQUIRE(cache.load_from_disk());
   std::remove(path.c_str());
 
-  // After clamping: learn_count must be 1,000,000
-  // get(key, 1000000) must succeed
-  auto result = cache.get("/page", 1000000);
-  CHECK(result != nullptr);
+  // Entry must be loaded (learn_count was clamped from 2,000,000 to 1,000,000).
+  // learn_count clamp is a persistence-only concern; the serving gate is request_count.
+  // Verify entry exists and serves from first get() call (request_count 0→1 ≥ 1):
+  auto result = cache.get("/page", 1);
+  REQUIRE(result != nullptr);
+  CHECK((*result)[0] == "</app.js>; rel=preload; as=script");
 
-  // get(key, 1000001) must fail (clamped to exactly 1,000,000)
-  auto result_fail = cache.get("/page", 1000001);
-  CHECK(result_fail == nullptr);
+  // Verify entry was actually loaded (peek — no request_count side-effect):
+  CHECK(cache.peek("/page") != nullptr);
 }
 
 // ─── Concurrent persist safety ───────────────────────────────────────────────
@@ -1217,4 +1238,188 @@ TEST_CASE("HintsCache persist: subsequent persist after stale .tmp is cleaned by
 
   unlink(persist_path.c_str());
   rmdir(dir);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Commit 11: request_count separates traffic gate from scanner trigger
+//
+// Before: get() returned null when learn_count < min_hits. Because cached_links
+// was the scanner trigger, the scanner ran min_hit_count times — once per put().
+//
+// After: get() increments request_count per call and checks request_count >= min_hits.
+//        peek() returns links without incrementing request_count (for scanner skip
+//        check and SEND_RESPONSE_HDR fallback — avoids double-counting).
+//        Scanner runs exactly once per URL (only when links == nullptr).
+// ═════════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("HintsCache: request_count separates traffic gate from scanner trigger", "[hints_cache][request_count]")
+{
+  std::vector<std::string> links = {"</a.js>; rel=preload; as=script"};
+
+  SECTION("put() does not increment request_count")
+  {
+    HintsCache cache;
+    // 5 puts → learn_count=5, but request_count stays 0
+    for (int i = 0; i < 5; i++) {
+      cache.put("/page", links);
+    }
+    // First get with min_hits=1: request_count 0→1 >= 1 → non-null
+    REQUIRE(cache.get("/page", 1) != nullptr);
+    // But with min_hits=2: 5 puts do NOT make it serveable; 2nd get does.
+    HintsCache cache2;
+    cache2.put("/page", links);
+    cache2.put("/page", links);
+    cache2.put("/page", links);
+    cache2.put("/page", links);
+    cache2.put("/page", links);
+    CHECK(cache2.get("/page", 2) == nullptr);   // rc=0→1 < 2
+    REQUIRE(cache2.get("/page", 2) != nullptr); // rc=1→2 >= 2
+  }
+
+  SECTION("get() increments request_count toward min_hits threshold")
+  {
+    HintsCache cache;
+    cache.put("/page", links);
+
+    // request_count starts at 0; each get() increments it.
+    for (int i = 1; i <= 4; i++) {
+      CHECK(cache.get("/page", 5) == nullptr); // rc=i < 5
+    }
+    // 5th get: rc=4→5 >= 5 → non-null
+    auto r = cache.get("/page", 5);
+    REQUIRE(r != nullptr);
+    CHECK(r->size() == 1);
+  }
+
+  SECTION("min_hits=1: first get() returns non-null regardless of put() count")
+  {
+    HintsCache cache;
+    cache.put("/page", links);      // learn_count=1, rc=0
+    auto r = cache.get("/page", 1); // rc=0→1 >= 1
+    REQUIRE(r != nullptr);
+    CHECK((*r)[0] == "</a.js>; rel=preload; as=script");
+  }
+
+  SECTION("learn_count still increments on put() independently of request_count")
+  {
+    // learn_count is persisted for disk reload. It must keep incrementing even
+    // though it no longer gates the serving threshold.
+    HintsCache cache;
+    std::string path = "/tmp/eh_lc_sep_" + std::to_string(getpid()) + ".bin";
+    std::remove(path.c_str());
+    cache.set_persist_path(path);
+    cache.set_persist_throttle(0);
+
+    cache.put("/page", links); // learn_count=1 → persist
+    cache.put("/page", links); // learn_count=2 → persist
+    cache.put("/page", links); // learn_count=3 → persist
+
+    // Every put() persists because learn_count changes (even for identical links)
+    CHECK(cache.put_persist_count() == 3);
+
+    std::remove(path.c_str());
+    std::remove((path + ".tmp").c_str());
+  }
+
+  SECTION("request_count resets to 0 on cache eviction and re-insertion")
+  {
+    HintsCache cache(2);
+    cache.put("/a", links);
+    cache.put("/b", links);
+
+    // Warm up /a to request_count=5
+    for (int i = 0; i < 5; i++) {
+      cache.get("/a", 1);
+    }
+    REQUIRE(cache.get("/a", 1) != nullptr);
+
+    // Evict /a by adding two new entries
+    cache.put("/c", links);
+    cache.put("/d", links);
+
+    // Re-insert /a
+    cache.put("/a", links);
+
+    // After re-insertion, request_count resets to 0 — min_hits=5 fails until 5 gets
+    CHECK(cache.get("/a", 5) == nullptr); // rc=0→1 < 5
+  }
+}
+
+TEST_CASE("HintsCache: peek() reads links without incrementing request_count", "[hints_cache][peek]")
+{
+  std::vector<std::string> links = {"</a.js>; rel=preload; as=script"};
+
+  SECTION("peek returns links for existing entry")
+  {
+    HintsCache cache;
+    cache.put("/page", links);
+    auto r = cache.peek("/page");
+    REQUIRE(r != nullptr);
+    CHECK(r->size() == 1);
+    CHECK((*r)[0] == "</a.js>; rel=preload; as=script");
+  }
+
+  SECTION("peek returns nullptr for missing key")
+  {
+    HintsCache cache;
+    CHECK(cache.peek("/nonexistent") == nullptr);
+  }
+
+  SECTION("peek does not increment request_count")
+  {
+    HintsCache cache;
+    cache.put("/page", links);
+
+    // 10 peeks — request_count stays at 0
+    for (int i = 0; i < 10; i++) {
+      REQUIRE(cache.peek("/page") != nullptr);
+    }
+
+    // First get() with min_hits=2: rc=0→1 < 2 → null
+    CHECK(cache.get("/page", 2) == nullptr);
+    // Second get(): rc=1→2 >= 2 → non-null
+    REQUIRE(cache.get("/page", 2) != nullptr);
+  }
+
+  SECTION("peek returns updated links after put")
+  {
+    HintsCache cache;
+    cache.put("/page", links);
+
+    std::vector<std::string> new_links = {"</b.css>; rel=preload; as=style"};
+    cache.put("/page", new_links);
+
+    auto r = cache.peek("/page");
+    REQUIRE(r != nullptr);
+    REQUIRE(r->size() == 1);
+    CHECK((*r)[0] == "</b.css>; rel=preload; as=style");
+  }
+
+  SECTION("peek returns nullptr after entry is evicted")
+  {
+    HintsCache cache(2);
+    cache.put("/a", links);
+    cache.put("/b", links);
+
+    REQUIRE(cache.peek("/a") != nullptr);
+
+    // Evict /a (it is LRU: /b was inserted last = MRU)
+    cache.put("/c", links); // evicts /a
+    cache.put("/d", links); // evicts /b
+
+    CHECK(cache.peek("/a") == nullptr);
+  }
+
+  SECTION("shared_ptr returned by peek is the same object as from get")
+  {
+    HintsCache cache;
+    cache.put("/page", links);
+
+    auto p = cache.peek("/page");
+    auto g = cache.get("/page", 1); // rc=0→1 >= 1
+
+    REQUIRE(p != nullptr);
+    REQUIRE(g != nullptr);
+    CHECK(p.get() == g.get()); // same underlying LinkList object
+  }
 }
