@@ -992,8 +992,20 @@ TSRemapNewInstance(int argc, char *argv[], void **ih, char *errbuf, int errbuf_s
       }
     }
     if (!dir.empty()) {
-      // 0750: owner rwx, group rx, no world access — persist dir contains URL path data
-      bool dir_ready = (mkdir(dir.c_str(), 0750) == 0 || errno == EEXIST);
+      // 0750: owner rwx, group rx, no world access — persist dir contains URL path data.
+      // On EEXIST, verify via stat() that the path is actually a directory.
+      // A file at that path (planted by attacker or leftover crash) must block persistence.
+      bool dir_ready = false;
+      if (mkdir(dir.c_str(), 0750) == 0) {
+        dir_ready = true;
+      } else if (errno == EEXIST) {
+        struct stat st;
+        if (stat(dir.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
+          dir_ready = true;
+        } else {
+          TSError("[%s] persist dir path '%s' exists but is not a directory — persistence disabled", PLUGIN_NAME, dir.c_str());
+        }
+      }
       if (!dir_ready) {
         TSError("[%s] failed to create persist dir '%s' — persistence disabled", PLUGIN_NAME, dir.c_str());
       } else {

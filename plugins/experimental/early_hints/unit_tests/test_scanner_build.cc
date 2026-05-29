@@ -1714,7 +1714,7 @@ TEST_CASE("HtmlScanner: backslash evasion variants are rejected by is_safe_url",
   }
 }
 
-// Tests for fetchpriority preservation on rel=modulepreload (B-05 fix).
+// Tests for fetchpriority preservation on rel=modulepreload .
 // is_preload_hint must include modulepreload so that fetchpriority= is appended.
 
 TEST_CASE("HtmlScanner: fetchpriority is preserved for modulepreload", "[html_scanner][build]")
@@ -1737,7 +1737,7 @@ TEST_CASE("HtmlScanner: fetchpriority is preserved for modulepreload", "[html_sc
   }
 }
 
-// Tests for script type=module emitting rel=modulepreload (A-24 fix).
+// Tests for script type=module emitting rel=modulepreload .
 // Per HTML spec, <script type="module" src="..."> loads an ES module.
 // The early hints plugin should emit rel=modulepreload (not rel=preload; as=script)
 // so the browser can use the module-aware preload path.

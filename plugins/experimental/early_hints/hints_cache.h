@@ -51,7 +51,7 @@ struct HintEntry {
   time_t last_updated       = 0;
   int learn_count           = 0;
   mutable int request_count = 0; // Traffic gate: incremented by get(), NOT by put(). Not persisted.
-  mutable std::list<std::string>::iterator lru_iterator;
+  mutable std::list<std::string>::iterator lru_iterator{};
 };
 
 // File format magic: "EH" (Early Hints) + version 2 (adds per-entry last_updated)
@@ -179,6 +179,16 @@ public:
     persist_throttle_interval_ = seconds;
   }
 
+  /** Current dirty generation counter value (for unit testing). */
+  uint64_t
+  dirty_generation() const
+  {
+    return dirty_generation_.load(std::memory_order_acquire);
+  }
+
+  /** Number of entries evicted due to capacity (for unit testing). */
+  int64_t evict_count() const;
+
 private:
   mutable TSMutex mutex_;
   mutable TSMutex persist_mutex_; // Serialize persist_to_disk() — prevents concurrent disk writes
@@ -186,6 +196,7 @@ private:
   mutable std::list<std::string> lru_list_; // LRU list of keys (front = MRU, back = LRU)
   int64_t drop_counter_ = 0;
   std::atomic<int64_t> persist_count_{0};           // Counts actual persist_to_disk() calls inside put()
+  std::atomic<int64_t> evict_count_{0};             // Counts entries evicted by evict_oldest()
   mutable std::atomic<uint32_t> access_counter_{0}; // For probabilistic LRU promotion (1/16)
   int max_entries_;
   std::string persist_path_;

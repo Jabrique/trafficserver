@@ -35,6 +35,7 @@ TESTS=(
     early_hints_origin_forward_self_heal
     early_hints_backslash_rcdata     # backslash URL bypass; RCDATA elements
     early_hints_modulepreload        # modulepreload: as= optional, fetchpriority preserved, script type=module
+    early_hints_persist_hardening    # oversized link skip (A-25), future ts clamp (A-09)
 )
 
 PASSED=0

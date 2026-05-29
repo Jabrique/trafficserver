@@ -27,7 +27,13 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-HintsCache::HintsCache(int max_entries) : mutex_(TSMutexCreate()), persist_mutex_(TSMutexCreate()), max_entries_(max_entries) {}
+HintsCache::HintsCache(int max_entries) : mutex_(TSMutexCreate()), persist_mutex_(TSMutexCreate()), max_entries_(max_entries)
+{
+  // Assert non-null to catch TSMutexCreate failures early (before any TSMutexLock call).
+  // TSMutexCreate() must not return nullptr in a healthy ATS environment.
+  TSAssert(mutex_ != nullptr);
+  TSAssert(persist_mutex_ != nullptr);
+}
 
 HintsCache::~HintsCache()
 {
@@ -208,6 +214,12 @@ HintsCache::put_persist_count() const
   return persist_count_.load(std::memory_order_relaxed);
 }
 
+int64_t
+HintsCache::evict_count() const
+{
+  return evict_count_.load(std::memory_order_relaxed);
+}
+
 time_t
 HintsCache::get_age(const std::string &key) const
 {
@@ -229,6 +241,7 @@ HintsCache::touch(const std::string &key)
       return; // no-op: key not found
     }
     it->second.last_updated = time(nullptr);
+    dirty_generation_.fetch_add(1, std::memory_order_release);
     is_dirty_.store(true, std::memory_order_release);
   }
   // Mirror the put() persist pattern: throttle-guarded, serialized via persist_mutex_.
@@ -256,6 +269,7 @@ HintsCache::remove(const std::string &key)
     // Remove from LRU order list to keep LRU bookkeeping consistent.
     lru_list_.erase(it->second.lru_iterator);
     entries_.erase(it);
+    dirty_generation_.fetch_add(1, std::memory_order_release);
     is_dirty_.store(true, std::memory_order_release);
   }
   // Mirror the put() persist pattern: throttle-guarded, serialized via persist_mutex_.
@@ -300,6 +314,7 @@ HintsCache::evict_oldest()
   std::string oldest_key = lru_list_.back();
   entries_.erase(oldest_key);
   lru_list_.pop_back();
+  evict_count_.fetch_add(1, std::memory_order_relaxed);
 }
 
 void
@@ -351,7 +366,9 @@ HintsCache::persist_to_disk()
   FILE *fp = fdopen(fd, "wb");
   if (!fp) {
     close(fd);
-    std::remove(tmp_path.c_str());
+    if (std::remove(tmp_path.c_str()) != 0 && errno != ENOENT) {
+      TSDebug("early_hints", "persist: failed to remove temp file %s (%s)", tmp_path.c_str(), strerror(errno));
+    }
     TSDebug("early_hints", "persist: fdopen failed for %s", tmp_path.c_str());
     return false;
   }
@@ -361,7 +378,9 @@ HintsCache::persist_to_disk()
   uint32_t entry_count = static_cast<uint32_t>(snapshot.size());
   if (fwrite(&magic, sizeof(magic), 1, fp) != 1 || fwrite(&entry_count, sizeof(entry_count), 1, fp) != 1) {
     fclose(fp);
-    std::remove(tmp_path.c_str());
+    if (std::remove(tmp_path.c_str()) != 0 && errno != ENOENT) {
+      TSDebug("early_hints", "persist: failed to remove temp file %s (%s)", tmp_path.c_str(), strerror(errno));
+    }
     return false;
   }
 
@@ -371,7 +390,9 @@ HintsCache::persist_to_disk()
     uint16_t key_len = static_cast<uint16_t>(entry.key.size());
     if (fwrite(&key_len, sizeof(key_len), 1, fp) != 1 || fwrite(entry.key.data(), key_len, 1, fp) != 1) {
       fclose(fp);
-      std::remove(tmp_path.c_str());
+      if (std::remove(tmp_path.c_str()) != 0 && errno != ENOENT) {
+        TSDebug("early_hints", "persist: failed to remove temp file %s (%s)", tmp_path.c_str(), strerror(errno));
+      }
       return false;
     }
 
@@ -379,7 +400,9 @@ HintsCache::persist_to_disk()
     uint32_t lc = static_cast<uint32_t>(entry.learn_count);
     if (fwrite(&lc, sizeof(lc), 1, fp) != 1) {
       fclose(fp);
-      std::remove(tmp_path.c_str());
+      if (std::remove(tmp_path.c_str()) != 0 && errno != ENOENT) {
+        TSDebug("early_hints", "persist: failed to remove temp file %s (%s)", tmp_path.c_str(), strerror(errno));
+      }
       return false;
     }
 
@@ -387,7 +410,9 @@ HintsCache::persist_to_disk()
     uint64_t ts = static_cast<uint64_t>(entry.last_updated);
     if (fwrite(&ts, sizeof(ts), 1, fp) != 1) {
       fclose(fp);
-      std::remove(tmp_path.c_str());
+      if (std::remove(tmp_path.c_str()) != 0 && errno != ENOENT) {
+        TSDebug("early_hints", "persist: failed to remove temp file %s (%s)", tmp_path.c_str(), strerror(errno));
+      }
       return false;
     }
 
@@ -402,7 +427,9 @@ HintsCache::persist_to_disk()
     }
     if (fwrite(&link_count, sizeof(link_count), 1, fp) != 1) {
       fclose(fp);
-      std::remove(tmp_path.c_str());
+      if (std::remove(tmp_path.c_str()) != 0 && errno != ENOENT) {
+        TSDebug("early_hints", "persist: failed to remove temp file %s (%s)", tmp_path.c_str(), strerror(errno));
+      }
       return false;
     }
     if (entry.links) {
@@ -413,7 +440,9 @@ HintsCache::persist_to_disk()
         uint16_t link_len = static_cast<uint16_t>(link.size());
         if (fwrite(&link_len, sizeof(link_len), 1, fp) != 1 || fwrite(link.data(), link_len, 1, fp) != 1) {
           fclose(fp);
-          std::remove(tmp_path.c_str());
+          if (std::remove(tmp_path.c_str()) != 0 && errno != ENOENT) {
+            TSDebug("early_hints", "persist: failed to remove temp file %s (%s)", tmp_path.c_str(), strerror(errno));
+          }
           return false;
         }
       }
@@ -425,17 +454,28 @@ HintsCache::persist_to_disk()
   // fdatasync ensures data reaches stable storage before the atomic rename,
   // preventing a post-rename crash from leaving a zero-length or partial file.
   int sync_fd = fileno(fp);
-  if (sync_fd >= 0) {
-    fdatasync(sync_fd);
+  if (sync_fd >= 0 && fdatasync(sync_fd) != 0) {
+    // fdatasync failure (EIO, ENOSPC, etc.) — data may not be on stable storage.
+    // Abort the persist: don't rename a potentially incomplete file.
+    fclose(fp);
+    if (std::remove(tmp_path.c_str()) != 0 && errno != ENOENT) {
+      TSDebug("early_hints", "persist: failed to remove temp file %s (%s)", tmp_path.c_str(), strerror(errno));
+    }
+    TSDebug("early_hints", "persist: fdatasync failed (%s), aborting rename", strerror(errno));
+    return false;
   }
   if (ferror(fp)) {
     fclose(fp);
-    std::remove(tmp_path.c_str());
+    if (std::remove(tmp_path.c_str()) != 0 && errno != ENOENT) {
+      TSDebug("early_hints", "persist: failed to remove temp file %s (%s)", tmp_path.c_str(), strerror(errno));
+    }
     TSDebug("early_hints", "persist: write error detected (disk full?), aborting rename");
     return false;
   }
   if (fclose(fp) != 0) {
-    std::remove(tmp_path.c_str());
+    if (std::remove(tmp_path.c_str()) != 0 && errno != ENOENT) {
+      TSDebug("early_hints", "persist: failed to remove temp file %s (%s)", tmp_path.c_str(), strerror(errno));
+    }
     TSDebug("early_hints", "persist: fclose failed, aborting rename");
     return false;
   }
@@ -443,7 +483,9 @@ HintsCache::persist_to_disk()
   // Step 3: Atomic rename — only reached when all bytes are confirmed flushed.
   if (rename(tmp_path.c_str(), persist_path_.c_str()) != 0) {
     TSDebug("early_hints", "persist: rename failed");
-    std::remove(tmp_path.c_str());
+    if (std::remove(tmp_path.c_str()) != 0 && errno != ENOENT) {
+      TSDebug("early_hints", "persist: failed to remove temp file %s (%s)", tmp_path.c_str(), strerror(errno));
+    }
     return false;
   }
 
@@ -563,9 +605,28 @@ HintsCache::load_from_disk()
     links.reserve(link_count);
     for (uint16_t j = 0; j < link_count; j++) {
       uint16_t link_len = 0;
-      if (fread(&link_len, sizeof(link_len), 1, fp) != 1 || link_len == 0 || link_len > 8192) {
+      if (fread(&link_len, sizeof(link_len), 1, fp) != 1) {
+        // Unrecoverable: can't determine link offset — abort entire load.
         fclose(fp);
         return false;
+      }
+      if (link_len == 0) {
+        // Zero-length link: protocol error (plugin never writes link_len=0).
+        fclose(fp);
+        return false;
+      }
+      if (link_len > 8192) {
+        // Oversized link: skip the data and continue. We know the byte count
+        // (link_len is a uint16_t: max 65535), so we can seek past it safely.
+        // This recovers from files written by future plugin versions with
+        // longer link values, or from file corruption in the length field.
+        if (fseek(fp, link_len, SEEK_CUR) != 0) {
+          // Seek failure (e.g. non-seekable fd): unrecoverable.
+          fclose(fp);
+          return false;
+        }
+        TSDebug("early_hints", "load: skipping oversized link (len=%u), continuing", link_len);
+        continue;
       }
       std::string link(link_len, '\0');
       if (fread(&link[0], link_len, 1, fp) != 1) {
@@ -587,8 +648,20 @@ HintsCache::load_from_disk()
     // Entries whose every link failed validation are skipped entirely.
     if (static_cast<int>(new_entries.size()) < max_entries_ && !links.empty()) {
       HintEntry entry;
+      // Clamp last_updated to now if the disk value is in the future.
+      // A misconfigured clock or crafted file could otherwise produce a future
+      // timestamp that corrupts LRU ordering (oldest-first sort) and TTL logic.
+      time_t ts_clamped = static_cast<time_t>(ts_on_disk);
+      {
+        time_t now_load = time(nullptr);
+        if (ts_clamped > now_load) {
+          TSDebug("early_hints", "load: clamping future ts %lld to now %lld", static_cast<long long>(ts_clamped),
+                  static_cast<long long>(now_load));
+          ts_clamped = now_load;
+        }
+      }
       entry.links        = std::make_shared<const LinkList>(std::move(links));
-      entry.last_updated = static_cast<time_t>(ts_on_disk);
+      entry.last_updated = ts_clamped;
       entry.learn_count  = static_cast<int>(lc);
       new_entries[key]   = std::move(entry);
     }

@@ -1547,7 +1547,7 @@ TEST_CASE("extract_origin() direct test — RFC 3986 scheme detection", "[html_s
   }
 }
 
-// ─── AUDIT FIX A-22: is_safe_url() backslash authority bypass ───────────────
+// ─── is_safe_url() backslash authority bypass ────────────────────────────────
 // Bug: http:\attacker.com passes is_safe_url() — scheme detected as "http" but
 // colon is not followed by "//", so the URL is misidentified as same-origin.
 // Per WHATWG URL spec §4.2, browsers treat http:\ as http:// in special schemes.

@@ -1144,3 +1144,204 @@ TEST_CASE("Persistence: destructor flushes dirty data even when throttled", "[pe
 
   cleanup(path);
 }
+
+// =============================================================================
+// Commit 3 persist hardening tests
+// =============================================================================
+
+// Helper: write a minimal binary header (magic + entry_count)
+static void
+write_bin_header(FILE *fp, uint32_t entry_count)
+{
+  uint32_t magic = HINTS_CACHE_MAGIC;
+  fwrite(&magic, sizeof(magic), 1, fp);
+  fwrite(&entry_count, sizeof(entry_count), 1, fp);
+}
+
+// Helper: write a single binary entry
+static void
+write_bin_entry(FILE *fp, const char *key, uint32_t lc, uint64_t ts, const std::vector<std::pair<uint16_t, std::string>> &raw_links)
+{
+  uint16_t key_len = static_cast<uint16_t>(strlen(key));
+  fwrite(&key_len, sizeof(key_len), 1, fp);
+  fwrite(key, key_len, 1, fp);
+  fwrite(&lc, sizeof(lc), 1, fp);
+  fwrite(&ts, sizeof(ts), 1, fp);
+  uint16_t link_count = static_cast<uint16_t>(raw_links.size());
+  fwrite(&link_count, sizeof(link_count), 1, fp);
+  for (const auto &p : raw_links) {
+    // Use actual data length as link_len so the binary file is well-formed.
+    // For intentionally-oversized links, caller must pass a string of exactly
+    // the intended length (e.g. std::string(9000, 'x')).
+    uint16_t link_len = static_cast<uint16_t>(p.second.size());
+    fwrite(&link_len, sizeof(link_len), 1, fp);
+    if (!p.second.empty()) {
+      fwrite(p.second.data(), p.second.size(), 1, fp);
+    }
+  }
+}
+
+// --- Oversized link skipped, valid entries survive -------------------------
+
+TEST_CASE("Persist hardening: oversized link is skipped, valid entries survive", "[persistence][hardening]")
+{
+  std::string path = make_temp_path(".bin");
+  cleanup(path);
+
+  {
+    FILE *fp = fopen(path.c_str(), "wb");
+    REQUIRE(fp);
+    write_bin_header(fp, 2);
+
+    // Entry 1: fully valid
+    uint64_t ts1 = static_cast<uint64_t>(time(nullptr) - 60);
+    write_bin_entry(fp, "/page1", 2, ts1, {{38, "</app.js>; rel=preload; as=script"}});
+
+    // Entry 2: oversized link (9000 bytes > 8192) then a valid link
+    {
+      const char *key = "/page2";
+      uint16_t klen   = 6;
+      fwrite(&klen, sizeof(klen), 1, fp);
+      fwrite(key, klen, 1, fp);
+      uint32_t lc2 = 1;
+      uint64_t ts2 = static_cast<uint64_t>(time(nullptr) - 30);
+      fwrite(&lc2, sizeof(lc2), 1, fp);
+      fwrite(&ts2, sizeof(ts2), 1, fp);
+      uint16_t link_count = 2;
+      fwrite(&link_count, sizeof(link_count), 1, fp);
+      // Oversized link
+      uint16_t big_len = 9000;
+      std::string pad(9000, 'x');
+      fwrite(&big_len, sizeof(big_len), 1, fp);
+      fwrite(pad.data(), pad.size(), 1, fp);
+      // Valid link
+      const char *vlink = "</style.css>; rel=preload; as=style";
+      uint16_t vlen     = static_cast<uint16_t>(strlen(vlink));
+      fwrite(&vlen, sizeof(vlen), 1, fp);
+      fwrite(vlink, vlen, 1, fp);
+    }
+    fclose(fp);
+  }
+
+  HintsCache cache;
+  cache.set_persist_path(path);
+  // After fix: load must succeed even with oversized link
+  CHECK(cache.load_from_disk());
+  // Entry 1 (no oversized) must survive
+  CHECK(cache.get("/page1", 1) != nullptr);
+
+  cleanup(path);
+}
+
+TEST_CASE("Persist hardening: file with only oversized link still returns true", "[persistence][hardening]")
+{
+  std::string path = make_temp_path(".bin");
+  cleanup(path);
+
+  {
+    FILE *fp = fopen(path.c_str(), "wb");
+    REQUIRE(fp);
+    write_bin_header(fp, 1);
+    uint64_t ts = static_cast<uint64_t>(time(nullptr) - 60);
+    std::string pad(9000, 'y');
+    write_bin_entry(fp, "/alone", 1, ts, {{9000, pad}});
+    fclose(fp);
+  }
+
+  HintsCache cache;
+  cache.set_persist_path(path);
+  // After fix: load returns true (no I/O error), entry skipped since no valid links
+  CHECK(cache.load_from_disk());
+  CHECK(cache.size() == 0);
+
+  cleanup(path);
+}
+
+// --- touch() and remove() bump dirty_generation_ ----------------------------
+
+TEST_CASE("Persist hardening: touch() increments dirty_generation", "[persistence][hardening]")
+{
+  HintsCache cache;
+  cache.set_persist_throttle(3600);
+
+  std::vector<std::string> links = {"</app.js>; rel=preload; as=script"};
+  cache.put("/page", links);
+
+  uint64_t gen_before = cache.dirty_generation();
+  cache.touch("/page");
+  CHECK(cache.dirty_generation() > gen_before);
+}
+
+TEST_CASE("Persist hardening: remove() increments dirty_generation", "[persistence][hardening]")
+{
+  HintsCache cache;
+  cache.set_persist_throttle(3600);
+
+  std::vector<std::string> links = {"</app.js>; rel=preload; as=script"};
+  cache.put("/page", links);
+
+  uint64_t gen_before = cache.dirty_generation();
+  cache.remove("/page");
+  CHECK(cache.dirty_generation() > gen_before);
+}
+
+// --- Future last_updated timestamp clamped to wall-clock on load ------------
+
+TEST_CASE("Persist hardening: future ts_on_disk is clamped to now on load", "[persistence][hardening]")
+{
+  std::string path = make_temp_path(".bin");
+  cleanup(path);
+
+  time_t now = time(nullptr);
+
+  {
+    FILE *fp = fopen(path.c_str(), "wb");
+    REQUIRE(fp);
+    write_bin_header(fp, 1);
+    uint64_t future_ts = static_cast<uint64_t>(now) + 1000000000ULL; // +~31 years
+    write_bin_entry(fp, "/page", 1, future_ts, {{38, "</app.js>; rel=preload; as=script"}});
+    fclose(fp);
+  }
+
+  HintsCache cache;
+  cache.set_persist_path(path);
+  REQUIRE(cache.load_from_disk());
+  REQUIRE(cache.get("/page", 1) != nullptr);
+
+  // Re-persist and reload: clamped ts must produce a valid, reloadable file
+  REQUIRE(cache.persist_to_disk());
+  HintsCache cache2;
+  cache2.set_persist_path(path);
+  REQUIRE(cache2.load_from_disk());
+  CHECK(cache2.get("/page", 1) != nullptr);
+
+  cleanup(path);
+}
+
+// --- evict_oldest() increments evict_count_ ---------------------------------
+
+TEST_CASE("Persist hardening: evict_count increments on capacity eviction", "[persistence][hardening]")
+{
+  HintsCache cache(2);
+  cache.set_persist_throttle(3600);
+
+  std::vector<std::string> links = {"</app.js>; rel=preload; as=script"};
+  cache.put("/page1", links);
+  cache.put("/page2", links);
+  CHECK(cache.evict_count() == 0);
+
+  cache.put("/page3", links); // triggers eviction
+  CHECK(cache.evict_count() == 1);
+}
+
+TEST_CASE("Persist hardening: evict_count accumulates across multiple evictions", "[persistence][hardening]")
+{
+  HintsCache cache(1);
+  cache.set_persist_throttle(3600);
+
+  std::vector<std::string> links = {"</app.js>; rel=preload; as=script"};
+  cache.put("/page1", links);
+  cache.put("/page2", links); // evicts page1
+  cache.put("/page3", links); // evicts page2
+  CHECK(cache.evict_count() == 2);
+}

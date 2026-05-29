@@ -94,6 +94,16 @@ TSError(const char * /* fmt */, ...)
 {
 }
 
+// _TSAssert is used by TSAssert() macro in production ATS code.
+// In unit tests, delegate to abort() so the assertion fires visibly
+// rather than crashing with an unresolved symbol.
+void
+_TSAssert(const char *text, const char *file, int line)
+{
+  fprintf(stderr, "TSAssert failed: %s at %s:%d\n", text, file, line);
+  abort();
+}
+
 // ─── Stats (mock) ───────────────────────────────────────────────────────────
 
 int
