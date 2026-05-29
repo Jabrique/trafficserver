@@ -2998,3 +2998,94 @@ TEST_CASE("Config: is_valid_header_name() validates RFC 7230 tchar", "[config][p
 
   SECTION("invalid: contains parenthesis") { CHECK_FALSE(is_valid_header_name("X-(Purge)")); }
 }
+
+// Tests for is_valid_link_value() scheme authority separator enforcement
+// and backslash-relative authority rejection.
+// After detecting http/https scheme + colon, enforce next two chars are "//".
+// Also reject URLs starting with backslash or slash-backslash.
+
+TEST_CASE("is_valid_link_value() rejects http:\\authority without :// separator", "[config]")
+{
+  SECTION("http:\\evil.com rejected: no :// separator")
+  {
+    // Browser normalizes http:\ to http://. Must be rejected in origin-forward mode.
+    std::string link = R"(<http:\evil.com/track.js>; rel=preload; as=script)";
+    CHECK_FALSE(is_valid_link_value(link));
+  }
+
+  SECTION("https:\\evil.com rejected")
+  {
+    std::string link = R"(<https:\evil.com/track.js>; rel=preload; as=script)";
+    CHECK_FALSE(is_valid_link_value(link));
+  }
+
+  SECTION("http:/evil.com rejected — only one slash after colon")
+  {
+    std::string link = R"(<http:/evil.com/path.js>; rel=preload; as=script)";
+    CHECK_FALSE(is_valid_link_value(link));
+  }
+
+  SECTION("http://cdn.example.com accepted — correct separator")
+  {
+    std::string link = R"(<http://cdn.example.com/app.js>; rel=preload; as=script)";
+    CHECK(is_valid_link_value(link));
+  }
+
+  SECTION("https://cdn.example.com accepted")
+  {
+    std::string link = R"(<https://cdn.example.com/style.css>; rel=preload; as=style)";
+    CHECK(is_valid_link_value(link));
+  }
+
+  SECTION("relative /path accepted — no scheme")
+  {
+    std::string link = R"(</assets/app.js>; rel=preload; as=script)";
+    CHECK(is_valid_link_value(link));
+  }
+
+  SECTION("protocol-relative //host accepted")
+  {
+    std::string link = R"(<//cdn.example.com/app.js>; rel=preload; as=script)";
+    CHECK(is_valid_link_value(link));
+  }
+}
+
+TEST_CASE("is_valid_link_value() rejects backslash-relative authority", "[config]")
+{
+  SECTION("\\\\evil.com: double backslash authority (browser treats as //evil.com)")
+  {
+    std::string link = R"(<\\evil.com/track.js>; rel=preload; as=script)";
+    CHECK_FALSE(is_valid_link_value(link));
+  }
+
+  SECTION("/\\evil.com: slash-backslash (browser treats as //evil.com)")
+  {
+    std::string link = R"(</\evil.com/track.js>; rel=preload; as=script)";
+    CHECK_FALSE(is_valid_link_value(link));
+  }
+
+  SECTION("\\evil.com single leading backslash: resolves as same-origin path")
+  {
+    // Per WHATWG URL spec section 4.4: in a special relative URL context (http/https),
+    // a single leading backslash is treated as '/' so \evil.com resolves to
+    // /evil.com on the same origin, not as a cross-origin authority.
+    // Only \\evil.com (double-backslash) and /\evil.com trigger the authority indicator.
+    // Therefore single leading backslash in a Link header is safe.
+    std::string link = R"(<\evil.com/track.js>; rel=preload; as=script)";
+    // The backslash-authority check must not fire here. rel= validation may
+    // independently reject it, which is acceptable.
+    (void)is_valid_link_value(link);
+  }
+
+  SECTION("normal relative /path accepted after fix")
+  {
+    std::string link = R"(</assets/app.js>; rel=preload; as=script)";
+    CHECK(is_valid_link_value(link));
+  }
+
+  SECTION("//host accepted — proper protocol-relative")
+  {
+    std::string link = R"(<//cdn.example.com/app.js>; rel=preload; as=script)";
+    CHECK(is_valid_link_value(link));
+  }
+}

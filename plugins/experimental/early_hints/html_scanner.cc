@@ -148,9 +148,16 @@ HtmlScanner::is_safe_url(const std::string &url)
     for (size_t i = 1; i < remaining; i++) {
       char c = s[i];
       if (c == ':') {
-        // Found a scheme — only allow http and https
+        // Found a scheme, only allow http and https.
+        // Additionally enforce "://" authority separator per WHATWG URL section 4.2:
+        // browsers normalize http:\\evil.com and http:/evil.com to http://evil.com,
+        // so a bare colon without "//" is a cross-origin evasion vector.
         if ((i == 4 && strncasecmp(s, "http:", 5) == 0) || (i == 5 && strncasecmp(s, "https:", 6) == 0)) {
-          return true;
+          // Require "://" to reject http:\ and http:/ (single slash)
+          if (i + 2 < remaining && s[i + 1] == '/' && s[i + 2] == '/') {
+            return true;
+          }
+          return false; // http:\ or http:/ missing authority separator
         }
         return false;
       }
@@ -600,6 +607,32 @@ HtmlScanner::state_after_open_tag()
   if (tag_name_.size() == 8 && strncasecmp(tag_name_.c_str(), "template", 8) == 0) {
     raw_close_pos_      = 0;
     raw_close_tag_      = "</template";
+    script_escaped_     = false;
+    script_comment_pos_ = 0;
+    return State::IN_SCRIPT;
+  }
+  // RCDATA elements per HTML5 spec section 13.2.6.1: <title>, <textarea>, and the
+  // obsolete <xmp> element have content that is NOT parsed as HTML markup.
+  // A <link rel=preload> inside <title>...</title> is literal text shown to
+  // the user, not a resource hint.  Parsing it as a hint is a spec violation
+  // and could leak unintended URLs.
+  if (tag_name_.size() == 5 && strncasecmp(tag_name_.c_str(), "title", 5) == 0) {
+    raw_close_pos_      = 0;
+    raw_close_tag_      = "</title";
+    script_escaped_     = false;
+    script_comment_pos_ = 0;
+    return State::IN_SCRIPT;
+  }
+  if (tag_name_.size() == 8 && strncasecmp(tag_name_.c_str(), "textarea", 8) == 0) {
+    raw_close_pos_      = 0;
+    raw_close_tag_      = "</textarea";
+    script_escaped_     = false;
+    script_comment_pos_ = 0;
+    return State::IN_SCRIPT;
+  }
+  if (tag_name_.size() == 3 && strncasecmp(tag_name_.c_str(), "xmp", 3) == 0) {
+    raw_close_pos_      = 0;
+    raw_close_tag_      = "</xmp";
     script_escaped_     = false;
     script_comment_pos_ = 0;
     return State::IN_SCRIPT;

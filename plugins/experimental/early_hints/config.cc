@@ -133,7 +133,14 @@ is_valid_link_value(const std::string &link)
           ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
         }
         if (scheme_lower == "http" || scheme_lower == "https") {
-          break; // safe — continue to rel= check
+          // Enforce "://" authority separator per WHATWG URL section 4.2:
+          // browsers normalize http:\\evil.com and http:/evil.com to
+          // http://evil.com, so a bare colon without "//" is a cross-origin
+          // evasion vector in origin-forward mode.
+          if (i + 2 < remaining && s[i + 1] == '/' && s[i + 2] == '/') {
+            break; // proper "://" — safe, continue to rel= check
+          }
+          return false; // http:\ or http:/ — missing authority separator
         }
         return false; // exotic scheme: file:, ftp:, chrome-extension:, etc.
       }
@@ -143,7 +150,19 @@ is_valid_link_value(const std::string &link)
       }
     }
   }
-  // No scheme (relative URL) or http/https scheme — allowed.
+  // No scheme (relative URL) or http/https with "://" — allowed.
+
+  // Reject backslash-based authority references per WHATWG URL spec section 4.2.
+  // Browsers normalize \\evil.com, \/evil.com, /\evil.com, all resolve as
+  // cross-origin. This mirrors the same check in is_safe_url() and prevents
+  // SSRF via origin-forward path when origin sends crafted Link headers.
+  if (remaining >= 2) {
+    char c0 = s[0], c1 = s[1];
+    if ((c0 == '\\' && (c1 == '\\' || c1 == '/')) || (c0 == '/' && c1 == '\\')) {
+      return false; // backslash authority reference — cross-origin evasion
+    }
+  }
+  // No scheme (relative URL) or http/https with "://" — allowed.
 
   // Must contain a valid rel= value — search only in params portion (after '>'), not the URL
   std::string params_lower;

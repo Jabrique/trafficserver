@@ -33,6 +33,7 @@ TESTS=(
     early_hints_hints_ttl
     early_hints_purge_header
     early_hints_origin_forward_self_heal
+    early_hints_backslash_rcdata     # A-22/B-01/B-02: backslash URL bypass; A-21: RCDATA elements
 )
 
 PASSED=0

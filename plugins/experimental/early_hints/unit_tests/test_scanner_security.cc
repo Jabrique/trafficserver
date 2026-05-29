@@ -1482,16 +1482,12 @@ TEST_CASE("HtmlScanner: extract_origin integration — proxy URL must emit same-
 //   Step 4: returns url.substr(0, 33) = "/proxy?url=https://cdn.example.com"
 //   WRONG! Should return url as-is because there is no scheme at position 0.
 //
-// AFTER FIX: extract_origin uses RFC 3986 scheme detection (ALPHA prefix at pos 0).
-// ═══════════════════════════════════════════════════════════════════════════════
+// These tests call HtmlScanner::extract_origin() DIRECTLY.
 
 TEST_CASE("extract_origin() direct test — RFC 3986 scheme detection", "[html_scanner][rfc3986][extract_origin][direct]")
 {
   SECTION("BUG: proxy URL with :// in query string must return URL as-is")
   {
-    // BUG: url.find("://") returns 16 (inside query string), producing
-    // "/proxy?url=https://cdn.example.com" as the "origin" — completely wrong.
-    // FIX: RFC 3986 detection — '/' at position 0, no scheme — return url as-is.
     std::string url    = "/proxy?url=https://cdn.example.com/app.js";
     std::string result = HtmlScanner::extract_origin(url);
     // After fix: must return the URL as-is (no scheme at pos 0)
@@ -1548,5 +1544,144 @@ TEST_CASE("extract_origin() direct test — RFC 3986 scheme detection", "[html_s
     std::string url    = "/assets/app.js";
     std::string result = HtmlScanner::extract_origin(url);
     CHECK(result == "/assets/app.js");
+  }
+}
+
+// ─── AUDIT FIX A-22: is_safe_url() backslash authority bypass ───────────────
+// Bug: http:\attacker.com passes is_safe_url() — scheme detected as "http" but
+// colon is not followed by "//", so the URL is misidentified as same-origin.
+// Per WHATWG URL spec §4.2, browsers treat http:\ as http:// in special schemes.
+// Fix: after detecting a scheme, verify the separator is "://" not just ":".
+// Regression: existing http:// and https:// URLs must still be accepted.
+
+TEST_CASE("is_safe_url() rejects http:\\authority without :// separator", "[security]")
+{
+  SECTION("http:\\evil.com: browser normalizes to http://evil.com")
+  {
+    // Per WHATWG URL section 4.2, http:\evil.com resolves to http://evil.com in browser.
+    // Must be rejected: scheme without "://" is a cross-origin evasion vector.
+    std::string html = R"(<html><head><link rel="preload" href="http:\evil.com/track.js" as="script"></head></html>)";
+    auto links       = scan_html(html);
+    CHECK(links.empty());
+  }
+
+  SECTION("https:\\evil.com — browser normalizes to https://evil.com")
+  {
+    std::string html = R"(<html><head><link rel="preload" href="https:\evil.com/track.js" as="script"></head></html>)";
+    auto links       = scan_html(html);
+    CHECK(links.empty());
+  }
+
+  SECTION("http:/evil.com — single slash after colon")
+  {
+    // http:/evil.com: after scheme detection, only one slash — relative path on same origin?
+    // Browser treats as same-origin: http://example.com/evil.com/. Should be allowed.
+    // But plugin must NOT emit cross-origin hint without whitelist.
+    // Since this has no authority component it resolves same-origin — allowed as relative.
+    std::string html = R"(<html><head><link rel="preload" href="http:/evil.com/path.js" as="script"></head></html>)";
+    auto links       = scan_html(html);
+    // http: scheme without "//": per WHATWG treated as http://evil.com.
+    // Reject: scheme without proper "://" authority separator is attacker vector.
+    CHECK(links.empty());
+  }
+
+  SECTION("http://cdn.example.com — correct URL still accepted")
+  {
+    std::string html = R"(<html><head><link rel="preload" href="http://cdn.example.com/app.js" as="script"></head></html>)";
+    auto links       = scan_html(html);
+    CHECK(!links.empty());
+  }
+
+  SECTION("https://cdn.example.com — correct URL still accepted")
+  {
+    std::string html = R"(<html><head><link rel="preload" href="https://cdn.example.com/app.css" as="style"></head></html>)";
+    auto links       = scan_html(html);
+    CHECK(!links.empty());
+  }
+
+  SECTION("relative /path still accepted")
+  {
+    std::string html = R"(<html><head><link rel="preload" href="/assets/app.js" as="script"></head></html>)";
+    auto links       = scan_html(html);
+    CHECK(!links.empty());
+  }
+
+  SECTION("protocol-relative //host still accepted")
+  {
+    std::string html = R"(<html><head><link rel="preload" href="//cdn.example.com/app.js" as="script"></head></html>)";
+    auto links       = scan_html(html);
+    CHECK(!links.empty());
+  }
+}
+
+// Tests for HTML scanner raw-text element skip (title, textarea, xmp).
+// Per HTML5 spec section 13.2.6.1, these are RCDATA elements whose content
+// is not parsed as markup. A <link> inside <title> is display text.
+
+TEST_CASE("HTML scanner skips link parsing inside RCDATA elements", "[security]")
+{
+  SECTION("<link> inside <title> is NOT a hint — RCDATA content")
+  {
+    // HTML5 spec section 13.2.6.1: <title> content is RCDATA, not parsed as HTML tags.
+    // A <link rel=preload> inside <title> is literal text displayed to the user,
+    // not a resource hint. Extracting it as a hint is a misparse.
+    std::string html = R"(<html><head><title><link rel="preload" href="/evil.js" as="script"></title>)"
+                       R"(<link rel="preload" href="/real.css" as="style"></head></html>)";
+    auto links = scan_html(html);
+    // /evil.js inside <title> must NOT be extracted
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("/real.css") != std::string::npos);
+    CHECK(links[0].find("/evil.js") == std::string::npos);
+  }
+
+  SECTION("<link> inside <textarea> is NOT a hint — RCDATA content")
+  {
+    std::string html = R"(<html><head></head><body>)"
+                       R"(<textarea><link rel="preload" href="/evil.css" as="style"></textarea>)"
+                       R"(<link rel="preload" href="/real.js" as="script"></body></html>)";
+    auto links = scan_html(html);
+    for (const auto &link : links) {
+      CHECK(link.find("/evil.css") == std::string::npos);
+    }
+  }
+
+  SECTION("<link> inside <xmp> is NOT a hint — obsolete raw text element")
+  {
+    // <xmp> is an obsolete raw text element (HTML5 section 13.2.6, section 8.1.2.6).
+    // Its content must not be parsed as markup.
+    std::string html = R"(<html><head></head><body>)"
+                       R"(<xmp><link rel="preload" href="/evil.js" as="script"></xmp>)"
+                       R"(<link rel="preload" href="/real.css" as="style"></body></html>)";
+    auto links = scan_html(html);
+    for (const auto &link : links) {
+      CHECK(link.find("/evil.js") == std::string::npos);
+    }
+  }
+
+  SECTION("Normal links after closing </title> are extracted correctly")
+  {
+    std::string html = R"(<html><head><title>Page Title with /fake.js content</title>)"
+                       R"(<link rel="preload" href="/real.css" as="style">)"
+                       R"(<link rel="preload" href="/real.js" as="script"></head></html>)";
+    auto links = scan_html(html);
+    REQUIRE(links.size() == 2);
+    bool has_css = false, has_js = false;
+    for (const auto &l : links) {
+      if (l.find("/real.css") != std::string::npos)
+        has_css = true;
+      if (l.find("/real.js") != std::string::npos)
+        has_js = true;
+    }
+    CHECK(has_css);
+    CHECK(has_js);
+  }
+
+  SECTION("<script> still suppresses inner links (existing behavior preserved)")
+  {
+    std::string html = R"(<html><head><script>var x = '<link rel="preload" href="/evil.js" as="script">';</script>)"
+                       R"(<link rel="preload" href="/real.css" as="style"></head></html>)";
+    auto links = scan_html(html);
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("/real.css") != std::string::npos);
   }
 }
