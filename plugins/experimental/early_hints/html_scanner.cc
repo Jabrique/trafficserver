@@ -318,7 +318,10 @@ HtmlScanner::finish_attr()
         safe_type += c;
       }
     }
-    type_ = safe_type;
+    // Lowercase: MIME types are case-insensitive per RFC 2045, consistent with
+    // rel_, as_, fetchpriority_. Also makes type="Module" match "module" for
+    // script module detection.
+    type_ = tolower_str(safe_type);
   } else if (name == "crossorigin") {
     // Empty value or "anonymous" both mean anonymous mode
     crossorigin_value_ = attr_value_.empty() ? "anonymous" : tolower_str(attr_value_);
@@ -447,35 +450,63 @@ HtmlScanner::build_link_header(const std::string &tag)
       return; // Unsupported rel value
     }
   } else if (tag == "script") {
-    // <script src="..."> without async or defer
-    if (href_.empty() || has_async_ || has_defer_) {
-      return;
-    }
-    if (is_crossorigin(href_)) {
-      std::string origin = extract_origin(href_);
-      size_t scheme_sep  = origin.find("://");
-      std::string domain = (scheme_sep != std::string::npos) ? origin.substr(scheme_sep + 3) : origin;
-      if (config_ && config_->is_whitelisted_domain(domain)) {
-        // crossorigin-whitelist: preload with crossorigin
-        result = "<" + href_ + ">; rel=preload; as=script";
-        as_    = "script";
-        if (crossorigin_value_.empty()) {
+    // <script type="module" src="..."> -- ES module. Emit rel=modulepreload.
+    // Per HTML spec, modules are always CORS-fetched and deferred implicitly.
+    // type_ is stored lowercased by finish_attr(), so compare lowercase.
+    if (!type_.empty() && type_ == "module") {
+      if (href_.empty() || has_async_) {
+        return; // no src or explicitly async -- skip
+      }
+      if (is_crossorigin(href_)) {
+        std::string origin = extract_origin(href_);
+        size_t scheme_sep  = origin.find("://");
+        std::string domain = (scheme_sep != std::string::npos) ? origin.substr(scheme_sep + 3) : origin;
+        if (config_ && config_->is_whitelisted_domain(domain)) {
+          result = "<" + href_ + ">; rel=modulepreload";
+          if (crossorigin_value_.empty()) {
+            crossorigin_value_ = "anonymous";
+          }
+        } else if (config_ && config_->is_preload_domain(domain)) {
+          result = "<" + href_ + ">; rel=modulepreload";
+          crossorigin_value_.clear();
+        } else {
+          // Non-whitelisted cross-origin module: preconnect with crossorigin=anonymous
+          // (module scripts are always CORS-fetched per HTML spec).
+          result             = "<" + origin + ">; rel=preconnect";
           crossorigin_value_ = "anonymous";
         }
-      } else if (config_ && config_->is_preload_domain(domain)) {
-        // preload-whitelist: full preload without crossorigin
-        result = "<" + href_ + ">; rel=preload; as=script";
-        as_    = "script";
-        crossorigin_value_.clear();
       } else {
-        // Non-whitelisted: preconnect only — crossorigin not valid on preconnect
-        result = "<" + origin + ">; rel=preconnect";
-        crossorigin_value_.clear();
+        result = "<" + href_ + ">; rel=modulepreload";
       }
     } else {
-      result = "<" + href_ + ">; rel=preload; as=script";
-      as_    = "script";
-    }
+      // Classic script: <script src="..."> without async or defer
+      if (href_.empty() || has_async_ || has_defer_) {
+        return;
+      }
+      if (is_crossorigin(href_)) {
+        std::string origin = extract_origin(href_);
+        size_t scheme_sep  = origin.find("://");
+        std::string domain = (scheme_sep != std::string::npos) ? origin.substr(scheme_sep + 3) : origin;
+        if (config_ && config_->is_whitelisted_domain(domain)) {
+          result = "<" + href_ + ">; rel=preload; as=script";
+          as_    = "script";
+          if (crossorigin_value_.empty()) {
+            crossorigin_value_ = "anonymous";
+          }
+        } else if (config_ && config_->is_preload_domain(domain)) {
+          result = "<" + href_ + ">; rel=preload; as=script";
+          as_    = "script";
+          crossorigin_value_.clear();
+        } else {
+          // Non-whitelisted: preconnect only
+          result = "<" + origin + ">; rel=preconnect";
+          crossorigin_value_.clear();
+        }
+      } else {
+        result = "<" + href_ + ">; rel=preload; as=script";
+        as_    = "script";
+      }
+    } // end else { // Classic script }
   } else {
     return;
   }
@@ -492,8 +523,11 @@ HtmlScanner::build_link_header(const std::string &tag)
     crossorigin_value_ = "anonymous";
   }
 
-  // Cache the rel=preload check once — used by both type= and fetchpriority= guards.
-  const bool is_preload_hint = (result.find("rel=preload") != std::string::npos);
+  // Cache the rel=preload / rel=modulepreload check once -- used by both
+  // type= and fetchpriority= guards. rel=modulepreload output does NOT
+  // contain the substring "rel=preload", so it must be checked separately.
+  const bool is_preload_hint =
+    (result.find("rel=preload") != std::string::npos || result.find("rel=modulepreload") != std::string::npos);
 
   // Append type attribute — validate as "type/subtype" MIME structure before
   // emitting. A MIME type without a "/" separator (e.g. type="font") is invalid

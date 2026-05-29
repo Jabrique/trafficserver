@@ -2210,9 +2210,10 @@ TEST_CASE("Config preload whitelist", "[config]")
 }
 
 // ==================== as= validation for rel=preload (Todo 2) ====================
-// has_valid_as_for_preload() returns true when as= is valid OR when rel is not preload/modulepreload.
-// Returns false when rel=preload/modulepreload present but as= missing or invalid.
-// In soft-warn mode: link is still accepted but warning is logged.
+// has_valid_as_for_preload() returns true when as= is valid OR when rel is not preload.
+// For rel=preload, as= is required. For rel=modulepreload, as= is optional per the
+// HTML spec — the browser defaults to script. Returns false only for rel=preload
+// with missing or invalid as=.
 
 TEST_CASE("has_valid_as_for_preload validation", "[config][as-validation]")
 {
@@ -2256,12 +2257,15 @@ TEST_CASE("has_valid_as_for_preload validation", "[config][as-validation]")
     CHECK_FALSE(has_valid_as_for_preload("</app.js>; rel=preload; as=banana"));
   }
 
-  SECTION("rel=modulepreload WITHOUT as= returns false")
+  SECTION("rel=modulepreload WITHOUT as= returns true (as= is optional for modulepreload)")
   {
-    CHECK_FALSE(has_valid_as_for_preload("</module.mjs>; rel=modulepreload"));
+    // HTML spec: as= is optional for rel=modulepreload. Without it, the browser
+    // defaults to script destination. The plugin must NOT drop modulepreload links
+    // that omit as=, because that would cause data loss on every disk reload.
+    CHECK(has_valid_as_for_preload("</module.mjs>; rel=modulepreload"));
   }
 
-  SECTION("rel=modulepreload with valid as=script returns true")
+  SECTION("rel=modulepreload with valid as=script still returns true")
   {
     CHECK(has_valid_as_for_preload("</module.mjs>; rel=modulepreload; as=script"));
   }

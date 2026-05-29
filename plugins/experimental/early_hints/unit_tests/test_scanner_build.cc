@@ -792,13 +792,14 @@ TEST_CASE("QA: type attribute only appended for rel=preload links", "[html_scann
     CHECK(links[0].find("type=\"font/woff2\"") != std::string::npos);
   }
 
-  SECTION("type NOT appended for modulepreload")
+  SECTION("type IS appended for modulepreload")
   {
-    // modulepreload output doesn't contain "rel=preload", so type is not appended
+    // rel=modulepreload should also carry type= when present, same as rel=preload.
+    // The is_preload_hint check must include modulepreload, not just preload.
     std::string html = R"(<html><head><link rel="modulepreload" href="/mod.mjs" type="text/javascript"></head></html>)";
     auto links       = scan_html(html);
     REQUIRE(links.size() == 1);
-    CHECK(links[0].find("type=") == std::string::npos);
+    CHECK(links[0].find("type=\"") != std::string::npos);
   }
 
   SECTION("type IS appended for stylesheet-converted preload")
@@ -1710,5 +1711,84 @@ TEST_CASE("HtmlScanner: backslash evasion variants are rejected by is_safe_url",
   {
     auto links = scan_html(make_link("/path/to/x.js"));
     CHECK(links.size() == 1);
+  }
+}
+
+// Tests for fetchpriority preservation on rel=modulepreload (B-05 fix).
+// is_preload_hint must include modulepreload so that fetchpriority= is appended.
+
+TEST_CASE("HtmlScanner: fetchpriority is preserved for modulepreload", "[html_scanner][build]")
+{
+  SECTION("fetchpriority=high on same-origin modulepreload is preserved")
+  {
+    std::string html = R"(<html><head><link rel="modulepreload" href="/app.mjs" fetchpriority="high"></head></html>)";
+    auto links       = scan_html(html);
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=modulepreload") != std::string::npos);
+    CHECK(links[0].find("fetchpriority=high") != std::string::npos);
+  }
+
+  SECTION("fetchpriority=low on same-origin modulepreload is preserved")
+  {
+    std::string html = R"(<html><head><link rel="modulepreload" href="/lib.mjs" fetchpriority="low"></head></html>)";
+    auto links       = scan_html(html);
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("fetchpriority=low") != std::string::npos);
+  }
+}
+
+// Tests for script type=module emitting rel=modulepreload (A-24 fix).
+// Per HTML spec, <script type="module" src="..."> loads an ES module.
+// The early hints plugin should emit rel=modulepreload (not rel=preload; as=script)
+// so the browser can use the module-aware preload path.
+
+TEST_CASE("HtmlScanner: script type=module emits rel=modulepreload", "[html_scanner][build]")
+{
+  SECTION("same-origin module script emits modulepreload")
+  {
+    std::string html = R"(<html><head><script type="module" src="/app.mjs"></script></head></html>)";
+    auto links       = scan_html(html);
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=modulepreload") != std::string::npos);
+    CHECK(links[0].find("/app.mjs") != std::string::npos);
+    // Must NOT emit rel=preload; as=script for a module script
+    CHECK(links[0].find("rel=preload") == std::string::npos);
+    CHECK(links[0].find("as=script") == std::string::npos);
+  }
+
+  SECTION("module script with type=Module (case-insensitive) emits modulepreload")
+  {
+    std::string html = R"(<html><head><script type="Module" src="/case.mjs"></script></head></html>)";
+    auto links       = scan_html(html);
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=modulepreload") != std::string::npos);
+  }
+
+  SECTION("script without type is still treated as classic script")
+  {
+    std::string html = R"(<html><head><script src="/classic.js"></script></head></html>)";
+    auto links       = scan_html(html);
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=preload") != std::string::npos);
+    CHECK(links[0].find("as=script") != std::string::npos);
+  }
+
+  SECTION("script with type=text/javascript is still classic script")
+  {
+    std::string html = R"(<html><head><script type="text/javascript" src="/classic.js"></script></head></html>)";
+    auto links       = scan_html(html);
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=preload") != std::string::npos);
+    CHECK(links[0].find("as=script") != std::string::npos);
+  }
+
+  SECTION("module script with async is skipped (async module scripts defer by spec)")
+  {
+    // <script type="module" async> is explicitly async; still useful to preload.
+    // Current policy: skip async scripts. Verify no crash.
+    std::string html = R"(<html><head><script type="module" async src="/async-mod.mjs"></script></head></html>)";
+    auto links       = scan_html(html);
+    // async module scripts are skipped same as async classic scripts
+    CHECK(links.empty());
   }
 }

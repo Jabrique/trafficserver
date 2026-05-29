@@ -257,8 +257,11 @@ has_valid_as_for_preload(const std::string &link)
     return false;
   };
 
-  bool needs_as = has_rel("rel=preload") || has_rel("rel=modulepreload") || has_rel("rel=\"preload\"") ||
-                  has_rel("rel='preload'") || has_rel("rel=\"modulepreload\"") || has_rel("rel='modulepreload'");
+  // as= is required for rel=preload but optional for rel=modulepreload.
+  // Per the HTML spec, a modulepreload without as= defaults to script destination.
+  // Including modulepreload in needs_as would drop disk-cached hints without as=
+  // on every ATS restart, causing silent data loss.
+  bool needs_as = has_rel("rel=preload") || has_rel("rel=\"preload\"") || has_rel("rel='preload'");
 
   if (!needs_as) {
     return true; // rel=preconnect, rel=stylesheet etc — as= not required
