@@ -725,28 +725,33 @@ TEST_CASE("HtmlScanner additional edge cases", "[html_scanner][edge]")
 
 TEST_CASE("HtmlScanner: duplicate attribute handling", "[html_scanner][edge]")
 {
-  SECTION("duplicate href — last value wins")
+  SECTION("duplicate href — first value wins (A-28)")
   {
+    // Per HTML spec §13.1.2.3: first occurrence of a duplicate attribute wins.
     std::string html = R"(<html><head><link rel="preload" href="/first.css" href="/second.css" as="style"></head></html>)";
     auto links       = scan_html(html);
     REQUIRE(links.size() == 1);
-    CHECK(links[0].find("/second.css") != std::string::npos);
+    CHECK(links[0].find("/first.css") != std::string::npos);
+    CHECK(links[0].find("/second.css") == std::string::npos);
   }
 
-  SECTION("duplicate rel — last value wins")
+  SECTION("duplicate rel — first value wins")
   {
+    // First rel="preload" wins; second rel="stylesheet" is ignored.
     std::string html = R"(<html><head><link rel="preload" as="style" href="/x.css" rel="stylesheet"></head></html>)";
     auto links       = scan_html(html);
-    // Last rel="stylesheet" wins — should still produce a link
+    // First rel="preload" wins — should still produce a preload link
     REQUIRE(links.size() == 1);
   }
 
-  SECTION("duplicate as — last value wins")
+  SECTION("duplicate as — first value wins (A-28)")
   {
+    // First as="style" wins; second as="script" is ignored.
     std::string html = R"(<html><head><link rel="preload" as="style" as="script" href="/x.js"></head></html>)";
     auto links       = scan_html(html);
     REQUIRE(links.size() == 1);
-    CHECK(links[0].find("as=script") != std::string::npos);
+    CHECK(links[0].find("as=style") != std::string::npos);
+    CHECK(links[0].find("as=script") == std::string::npos);
   }
 }
 
@@ -1099,3 +1104,112 @@ TEST_CASE("HtmlScanner: MAX_ATTR_VALUE_LEN boundary (4096)", "[html_scanner][bou
 // of the Link header and inject arbitrary response headers. If the raw CRLF
 // bytes survive into the Link header value, a downstream proxy or browser will
 // interpret the injected bytes as a separate HTTP header.
+
+// ─── Commit 4: Scanner correctness fixes ─────────────────────────────────────
+
+// B-06: </script> in script_escaped mode should close the script element.
+// The HTML spec (§13.2.6.4) treats </script> as a valid end tag in
+// "script data escaped" state. The scanner's script_escaped_ branch currently
+// breaks before reaching the close-tag detection logic, so the script is never
+// closed and content after it is consumed silently.
+TEST_CASE("IN_SCRIPT: </script> inside <!--...--> escaped region closes script", "[html_scanner][script][escaped]")
+{
+  // First <script src> extracts a preload.
+  // Second <script><!-- ... </script> — the <!-- enters escaped mode.
+  // </script> must still close the script per HTML spec §13.2.6.4.
+  // A <link> after the second </script> must then be extracted.
+  std::string html = "<html><head>"
+                     "<script src=\"/pre.js\"></script>"
+                     "<script><!-- inline </script>"
+                     "<link rel=\"stylesheet\" href=\"/after.css\">"
+                     "</head></html>";
+  auto links = scan_html(html);
+
+  bool has_pre   = false;
+  bool has_after = false;
+  for (const auto &l : links) {
+    if (l.find("/pre.js") != std::string::npos) {
+      has_pre = true;
+    }
+    if (l.find("/after.css") != std::string::npos) {
+      has_after = true;
+    }
+  }
+  // /pre.js comes from the first script open tag.
+  // /after.css is only reachable if </script> in escaped mode closes the script.
+  CHECK(has_pre);
+  CHECK(has_after);
+}
+
+// A-06: Carriage-return (\r) is valid HTML whitespace (per HTML spec §13.1.2.6)
+// and must be accepted as a separator between the close-tag name and '>'.
+// The close-tag path checks for tab/LF/FF/space but was missing \r.
+TEST_CASE("IN_SCRIPT: </script\\r> carriage-return separator closes script", "[html_scanner][script]")
+{
+  // </script\r> — \r appears between the tag name and '>'.
+  // Per HTML spec §13.2.6.3 this is a valid separator (ASCII whitespace).
+  // Without the fix the \r hits the else-branch and resets raw_close_pos_,
+  // so the script is never closed and /after.css is consumed inside it.
+  std::string html = "<html><head>"
+                     "<script src=\"/x.js\"></script\r>"
+                     "<link rel=\"stylesheet\" href=\"/after.css\">"
+                     "</head></html>";
+  auto links = scan_html(html);
+  // /x.js from the script open-tag + /after.css from the link after the script.
+  REQUIRE(links.size() == 2);
+  bool has_xjs   = false;
+  bool has_after = false;
+  for (const auto &l : links) {
+    if (l.find("/x.js") != std::string::npos) {
+      has_xjs = true;
+    }
+    if (l.find("/after.css") != std::string::npos) {
+      has_after = true;
+    }
+  }
+  CHECK(has_xjs);
+  CHECK(has_after);
+}
+
+// A-28: Per the HTML spec (§13.1.2.3), when the same attribute name appears
+// more than once in an element, the first occurrence wins and subsequent ones
+// are ignored.  finish_attr() currently overwrites on every call (last-wins).
+TEST_CASE("finish_attr: first occurrence of duplicate attribute wins", "[html_scanner][attrs]")
+{
+  SECTION("duplicate href — first value wins")
+  {
+    // href appears twice: /first.css then /second.css.
+    // First-wins: the scanner must use /first.css.
+    std::string html = R"(<html><head><link rel="preload" href="/first.css" as="style" href="/second.css"></head></html>)";
+    auto links       = scan_html(html);
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("/first.css") != std::string::npos);
+    CHECK(links[0].find("/second.css") == std::string::npos);
+  }
+
+  SECTION("duplicate as — first value wins")
+  {
+    // as appears twice: style then script.
+    // First-wins: the scanner must use as=style.
+    std::string html = R"(<html><head><link rel="preload" href="/x.css" as="style" as="script"></head></html>)";
+    auto links       = scan_html(html);
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("as=style") != std::string::npos);
+    CHECK(links[0].find("as=script") == std::string::npos);
+  }
+}
+
+// A-29: The HTML spec (§2.5.3) defines only two valid crossorigin states:
+// "anonymous" and "use-credentials". Any other value maps to "anonymous".
+// finish_attr() currently stores the raw lowercased value without validation,
+// so crossorigin="garbage" leaks into the Link header as crossorigin=garbage.
+TEST_CASE("finish_attr: unrecognized crossorigin value normalizes to anonymous", "[html_scanner][attrs]")
+{
+  // crossorigin="garbage" is not a recognised keyword.
+  // Per HTML spec it must be treated the same as crossorigin="anonymous".
+  std::string html = R"(<html><head><link rel="preload" href="/font.woff2" as="font" crossorigin="garbage"></head></html>)";
+  auto links       = scan_html(html);
+  REQUIRE(links.size() == 1);
+  CHECK(links[0].find("crossorigin=anonymous") != std::string::npos);
+  CHECK(links[0].find("crossorigin=garbage") == std::string::npos);
+}

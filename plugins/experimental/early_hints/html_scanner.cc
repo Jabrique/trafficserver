@@ -294,43 +294,61 @@ HtmlScanner::finish_attr()
 {
   std::string name = tolower_str(attr_name_);
 
+  // Per HTML spec §13.1.2.3, when the same attribute name appears more
+  // than once in an element the FIRST occurrence wins; subsequent duplicates
+  // must be silently ignored.  All branches below guard with an empty-check so
+  // that a second appearance of the same attribute is a no-op.
   if (name == "href" || name == "src") {
-    href_ = attr_value_;
+    if (href_.empty()) {
+      href_ = attr_value_;
+    }
   } else if (name == "rel") {
-    rel_ = tolower_str(attr_value_);
+    if (rel_.empty()) {
+      rel_ = tolower_str(attr_value_);
+    }
   } else if (name == "as") {
-    // Validate against the set of known fetch destinations (Fetch spec §8).
-    // Passing an unsanitized value through to the Link header would allow
-    // parameter injection via ';', ',' or '<'/'>' embedded in the value.
-    std::string val = tolower_str(attr_value_);
-    if (val == "audio" || val == "document" || val == "embed" || val == "fetch" || val == "font" || val == "frame" ||
-        val == "iframe" || val == "image" || val == "object" || val == "script" || val == "style" || val == "track" ||
-        val == "video" || val == "worker" || val == "sharedworker") {
-      as_ = val;
-    } else {
-      as_.clear(); // Unknown/malicious value — drop it
+    if (as_.empty()) {
+      // Validate against the set of known fetch destinations (Fetch spec §8).
+      // Passing an unsanitized value through to the Link header would allow
+      // parameter injection via ';', ',' or '<'/'>' embedded in the value.
+      std::string val = tolower_str(attr_value_);
+      if (val == "audio" || val == "document" || val == "embed" || val == "fetch" || val == "font" || val == "frame" ||
+          val == "iframe" || val == "image" || val == "object" || val == "script" || val == "style" || val == "track" ||
+          val == "video" || val == "worker" || val == "sharedworker") {
+        as_ = val;
+      }
+      // Unknown/malicious value — leave as_ empty (dropped).
     }
   } else if (name == "type") {
-    // Sanitize: only allow safe MIME-type characters to prevent header injection
-    std::string safe_type;
-    for (char c : attr_value_) {
-      if (std::isalnum(static_cast<unsigned char>(c)) || c == '/' || c == '+' || c == '.' || c == '-') {
-        safe_type += c;
+    if (type_.empty()) {
+      // Sanitize: only allow safe MIME-type characters to prevent header injection
+      std::string safe_type;
+      for (char c : attr_value_) {
+        if (std::isalnum(static_cast<unsigned char>(c)) || c == '/' || c == '+' || c == '.' || c == '-') {
+          safe_type += c;
+        }
       }
+      // Lowercase: MIME types are case-insensitive per RFC 2045, consistent with
+      // rel_, as_, fetchpriority_. Also makes type="Module" match "module" for
+      // script module detection.
+      type_ = tolower_str(safe_type);
     }
-    // Lowercase: MIME types are case-insensitive per RFC 2045, consistent with
-    // rel_, as_, fetchpriority_. Also makes type="Module" match "module" for
-    // script module detection.
-    type_ = tolower_str(safe_type);
   } else if (name == "crossorigin") {
-    // Empty value or "anonymous" both mean anonymous mode
-    crossorigin_value_ = attr_value_.empty() ? "anonymous" : tolower_str(attr_value_);
+    if (crossorigin_value_.empty()) {
+      // Per HTML spec §2.5.3 only two enumerated states are valid:
+      // "anonymous" (the default, including empty-string) and "use-credentials".
+      // Any other value — including misspellings — maps to "anonymous".
+      std::string cv     = attr_value_.empty() ? "anonymous" : tolower_str(attr_value_);
+      crossorigin_value_ = (cv == "use-credentials") ? "use-credentials" : "anonymous";
+    }
   } else if (name == "fetchpriority") {
-    fetchpriority_ = tolower_str(attr_value_);
+    if (fetchpriority_.empty()) {
+      fetchpriority_ = tolower_str(attr_value_);
+    }
   } else if (name == "async") {
-    has_async_ = true;
+    has_async_ = true; // boolean presence attr — no first-wins guard needed
   } else if (name == "defer") {
-    has_defer_ = true;
+    has_defer_ = true; // boolean presence attr — no first-wins guard needed
   }
 
   attr_name_.clear();
@@ -388,8 +406,13 @@ HtmlScanner::build_link_header(const std::string &tag)
           }
         }
       } else {
-        // Same-origin: normal preload
+        // Same-origin: normal preload.
+        // Fonts require crossorigin=anonymous per W3C CSS Fonts spec so the browser
+        // does not open a second connection for the CORS-checked @font-face fetch.
         result = "<" + href_ + ">; rel=preload; as=" + as_;
+        if (as_ == "font" && crossorigin_value_.empty()) {
+          crossorigin_value_ = "anonymous";
+        }
       }
     } else if (rel_ == "stylesheet") {
       // <link rel="stylesheet" href="..."> → preload as style
@@ -515,13 +538,8 @@ HtmlScanner::build_link_header(const std::string &tag)
     return;
   }
 
-  // Auto-add crossorigin for fonts (W3C CSS Fonts spec — prevents double-fetch).
-  // Applies to both preload and preconnect: for same-origin fonts the preload carries
-  // crossorigin, and for cross-origin font preconnects (handled above) crossorigin is
-  // also required so the browser reuses the CORS-capable pre-established connection.
-  if (as_ == "font" && crossorigin_value_.empty()) {
-    crossorigin_value_ = "anonymous";
-  }
+  // (font crossorigin is handled inside each whitelist branch and the same-origin
+  //  branch above; the preload-whitelist path explicitly keeps no-cors mode)
 
   // Cache the rel=preload / rel=modulepreload check once -- used by both
   // type= and fetchpriority= guards. rel=modulepreload output does NOT
@@ -876,21 +894,72 @@ HtmlScanner::feed(const char *data, int64_t length)
     case State::IN_SCRIPT: {
       // Skip raw text content until the matching close tag (case-insensitive).
       // HTML spec §13.2.6.2-6.3: if <!-- appears inside <script>, we enter
-      // "script data escaped" state where </script> does NOT close the script.
-      // Only --> exits the escaped state, then the next </script> closes it.
+      // "script data escaped" state.  Per §13.2.6.4 ("script data escaped"
+      // end tag name" state), </script> IS a valid end tag in escaped mode and
+      // MUST close the script element.  Only --> additionally exits escaped mode
+      // while keeping the script open.
       int tag_len = static_cast<int>(raw_close_tag_.size());
 
       if (script_escaped_) {
-        // In escaped mode: look for --> to exit
+        // Track --> to exit escaped mode (returns to script data state).
         if (c == '-') {
           if (script_comment_pos_ < 2) {
             script_comment_pos_++;
           }
         } else if (c == '>' && script_comment_pos_ >= 2) {
+          // --> complete: exit escaped mode, stay in IN_SCRIPT.
           script_escaped_     = false;
           script_comment_pos_ = 0;
+          raw_close_pos_      = 0;
+          break;
         } else {
           script_comment_pos_ = 0;
+        }
+
+        // Track </script> close-tag sequence even in escaped mode.
+        // Per HTML spec §13.2.6.4, </script> is a valid end tag in escaped
+        // state and must close the script element.
+        if (raw_close_pos_ == 0) {
+          if (c == '<') {
+            raw_close_pos_ = 1;
+          }
+        } else if (raw_close_pos_ == 1) {
+          if (c == '/') {
+            raw_close_pos_ = 2;
+          } else if (c != '<') {
+            raw_close_pos_ = 0;
+          }
+        } else if (raw_close_pos_ >= 2 && raw_close_pos_ < tag_len) {
+          char expected = raw_close_tag_[raw_close_pos_];
+          if (std::tolower(static_cast<unsigned char>(c)) == std::tolower(static_cast<unsigned char>(expected))) {
+            raw_close_pos_++;
+          } else {
+            raw_close_pos_ = (c == '<') ? 1 : 0;
+          }
+        } else if (raw_close_pos_ == tag_len) {
+          // Matched full close-tag name in escaped mode — check for valid separator.
+          if (c == '>') {
+            state_              = State::IN_HEAD;
+            script_escaped_     = false;
+            script_comment_pos_ = 0;
+            raw_close_pos_      = 0;
+          } else if (c == '/' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == ' ') {
+            raw_close_pos_ = tag_len + 1;
+          } else if (c == '<') {
+            raw_close_pos_ = 1;
+          } else {
+            raw_close_pos_ = 0;
+          }
+        } else {
+          // raw_close_pos_ > tag_len: inside trailing content, waiting for >
+          if (c == '>') {
+            state_              = State::IN_HEAD;
+            script_escaped_     = false;
+            script_comment_pos_ = 0;
+            raw_close_pos_      = 0;
+          } else if (c == '<') {
+            raw_close_pos_ = 1;
+          }
         }
         break;
       }
@@ -944,7 +1013,8 @@ HtmlScanner::feed(const char *data, int64_t length)
           state_              = State::IN_HEAD;
           raw_close_pos_      = 0;
           script_comment_pos_ = 0;
-        } else if (c == '/' || c == '\t' || c == '\n' || c == '\f' || c == ' ') {
+        } else if (c == '/' || c == '\t' || c == '\n' || c == '\r' || c == '\f' ||
+                   c == ' ') { // \r is valid ASCII whitespace per HTML spec §13.2.6
           raw_close_pos_ = tag_len + 1;
         } else if (c == '<') {
           raw_close_pos_ = 1;

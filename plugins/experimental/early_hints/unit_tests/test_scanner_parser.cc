@@ -519,14 +519,24 @@ TEST_CASE("Chunk splitting: close tag </script> boundary", "[html_scanner][chunk
 
 TEST_CASE("Chunk splitting: script escaped <!-- boundary", "[html_scanner][chunking]")
 {
-  // Per HTML spec §13.2.6.2: <!-- inside script enters escaped mode.
-  // </script> in escaped mode does NOT close the script.
+  // Per HTML spec §13.2.6.4 ("script data escaped end tag name" state),
+  // </script> IS a valid end tag in escaped mode and MUST close the script element.
+  // After B-06 fix: the first </script> closes the script, exposing /evil.css.
+  // Then --> and the second </script> are stray in IN_HEAD and ignored.
   std::string html = "<html><head><script><!--</script>"
                      "<link rel=\"preload\" href=\"/evil.css\" as=\"style\">"
                      "--></script><link rel=\"preload\" href=\"/real.css\" as=\"style\"></head></html>";
   auto ref = scan_html(html);
-  REQUIRE(ref.size() == 1);
-  CHECK(ref[0].find("/real.css") != std::string::npos);
+  REQUIRE(ref.size() == 2); // Both links exposed: /evil.css and /real.css
+  bool has_evil = false, has_real = false;
+  for (const auto &l : ref) {
+    if (l.find("/evil.css") != std::string::npos)
+      has_evil = true;
+    if (l.find("/real.css") != std::string::npos)
+      has_real = true;
+  }
+  CHECK(has_evil);
+  CHECK(has_real);
 
   SECTION("split at <! | -- inside script (escaped entry)")
   {
@@ -884,17 +894,27 @@ TEST_CASE("IN_SCRIPT: --> in non-escaped mode has no effect", "[html_scanner][sc
 TEST_CASE("IN_SCRIPT: --!> in escaped mode does NOT exit escaped", "[html_scanner][script][audit]")
 {
   // Per HTML spec §13.2.6.6: in escaped dash-dash state, '!' goes back to escaped.
-  // So --!> does NOT exit escaped mode. Only --> does.
-  // After <!--, the first --!> should NOT exit escaped. The --> after it should.
+  // So --!> does NOT exit escaped mode.
+  // However, per §13.2.6.4: </script> in escaped mode IS a valid end tag (B-06 fix).
+  // After <!--, the first --!> should NOT exit escaped. But </script> after it closes.
   std::string html = R"(<html><head><script><!--)"
                      R"(--!></script><link rel="preload" href="/evil.css" as="style">)"
                      R"(--></script><link rel="stylesheet" href="/real.css"></head></html>)";
   auto links = scan_html(html);
-  REQUIRE(links.size() == 1);
-  CHECK(links[0].find("/real.css") != std::string::npos);
+  // --!> does NOT exit escaped → </script> in escaped mode closes (B-06 fix).
+  // → /evil.css is exposed after the first </script>.
+  // --> and second </script> are stray in IN_HEAD.
+  // → /real.css is also exposed.
+  REQUIRE(links.size() == 2);
+  bool has_evil = false, has_real = false;
   for (const auto &l : links) {
-    CHECK(l.find("/evil.css") == std::string::npos);
+    if (l.find("/evil.css") != std::string::npos)
+      has_evil = true;
+    if (l.find("/real.css") != std::string::npos)
+      has_real = true;
   }
+  CHECK(has_evil);
+  CHECK(has_real);
 }
 
 TEST_CASE("IN_SCRIPT: double <!-- does not stack", "[html_scanner][script][audit]")

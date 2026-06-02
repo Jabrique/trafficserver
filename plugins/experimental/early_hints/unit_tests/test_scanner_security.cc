@@ -239,18 +239,27 @@ TEST_CASE("HtmlScanner: CDATA bogus comment handling", "[html_scanner][security]
 
 TEST_CASE("HtmlScanner: script data escaped state", "[html_scanner][security][edge]")
 {
-  SECTION("script with HTML comment prevents first close tag from matching")
+  SECTION("</script> in escaped mode closes the script (B-06 fix)")
   {
-    // Per HTML spec §13.2.6.2, <!-- inside <script> enters "script data escaped" state.
-    // In this state, </script> does NOT close the script. Only --> exits escaped state.
-    // Then the second </script> actually closes the script.
+    // Per HTML spec §13.2.6.4 ("script data escaped end tag name" state),
+    // </script> IS a valid end tag in escaped mode and MUST close the script element.
+    // After B-06 fix: the first </script> closes the script — /evil.css is exposed.
+    // --> and the second </script> are stray in IN_HEAD and ignored.
+    // /real.css is then also extracted after the second </script>.
     std::string html = R"(<html><head><script><!--</script>)"
                        R"(<link rel="preload" href="/evil.css" as="style">)"
                        R"(--></script><link rel="preload" href="/real.css" as="style"></head></html>)";
     auto links = scan_html(html);
-    REQUIRE(links.size() == 1);
-    CHECK(links[0].find("/real.css") != std::string::npos);
-    CHECK(links[0].find("/evil.css") == std::string::npos);
+    REQUIRE(links.size() == 2);
+    bool has_evil = false, has_real = false;
+    for (const auto &l : links) {
+      if (l.find("/evil.css") != std::string::npos)
+        has_evil = true;
+      if (l.find("/real.css") != std::string::npos)
+        has_real = true;
+    }
+    CHECK(has_evil);
+    CHECK(has_real);
   }
 }
 

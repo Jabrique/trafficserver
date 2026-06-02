@@ -815,16 +815,19 @@ TEST_CASE("QA: type attribute only appended for rel=preload links", "[html_scann
 
 // ─── build_link_header: crossorigin invalid values ──────────────────────────
 
-TEST_CASE("QA: crossorigin with invalid value is NOT emitted", "[html_scanner][qa][build_link_header]")
+TEST_CASE("QA: crossorigin with invalid value normalizes to anonymous (A-29)", "[html_scanner][qa][build_link_header]")
 {
-  SECTION("crossorigin=invalid is silently dropped")
+  SECTION("crossorigin=invalid normalizes to crossorigin=anonymous")
   {
-    // Only "anonymous" and "use-credentials" are valid per HTML spec
+    // Per HTML spec §2.5.3 (CORS settings attribute), only "anonymous" and
+    // "use-credentials" are valid enumerated states. Any other value — including
+    // misspellings — maps to "anonymous" (the missing-value and invalid-value default).
     std::string html = R"(<html><head><link rel="preload" href="/app.js" as="script" crossorigin="invalid"></head></html>)";
     auto links       = scan_html(html);
     REQUIRE(links.size() == 1);
-    // The code only emits crossorigin for "anonymous" or "use-credentials"
-    CHECK(links[0].find("crossorigin") == std::string::npos);
+    // After A-29 fix: "invalid" is normalized to "anonymous" and emitted.
+    CHECK(links[0].find("crossorigin=anonymous") != std::string::npos);
+    CHECK(links[0].find("crossorigin=invalid") == std::string::npos);
   }
 }
 
@@ -1264,8 +1267,11 @@ TEST_CASE("HtmlScanner: --preload-whitelist emits no-cors preload", "[html_scann
     CHECK(links[0].find("rel=preconnect") != std::string::npos);
   }
 
-  SECTION("font in preload-whitelist → safety net adds crossorigin=anonymous automatically")
+  SECTION("font in preload-whitelist → no crossorigin (admin no-cors intent respected)")
   {
+    // Admin placed fonts.example.com in --preload-whitelist, signaling no-cors mode.
+    // The plugin must NOT auto-add crossorigin=anonymous for preload-whitelist fonts;
+    // this is consistent with all other resource types in the preload-whitelist path.
     const char *argv[] = {"from", "to", "--mode", "auto-learn", "--preload-whitelist", "fonts.example.com"};
     EarlyHintsConfig config;
     config.init(6, argv);
@@ -1278,8 +1284,8 @@ TEST_CASE("HtmlScanner: --preload-whitelist emits no-cors preload", "[html_scann
     REQUIRE(links.size() == 1);
     CHECK(links[0].find("rel=preload") != std::string::npos);
     CHECK(links[0].find("as=font") != std::string::npos);
-    // Font safety net at line 363-366 auto-adds crossorigin=anonymous even in preload-whitelist
-    CHECK(links[0].find("crossorigin=anonymous") != std::string::npos);
+    // preload-whitelist = no-cors: crossorigin must NOT be added
+    CHECK(links[0].find("crossorigin") == std::string::npos);
   }
 }
 
@@ -1790,5 +1796,62 @@ TEST_CASE("HtmlScanner: script type=module emits rel=modulepreload", "[html_scan
     auto links       = scan_html(html);
     // async module scripts are skipped same as async classic scripts
     CHECK(links.empty());
+  }
+}
+
+// ─── Font crossorigin handling per whitelist type ────────────────────────────
+//
+// W3C CSS Fonts spec requires CORS for cross-origin fonts, but when an admin
+// explicitly places a font CDN in --preload-whitelist (no-cors mode), the plugin
+// must respect that intent and NOT auto-add crossorigin=anonymous.
+// This is consistent with how all other resource types behave in preload-whitelist.
+// Inconsistency with modulepreload (which does clear crossorigin for preload-domain)
+// was the root cause of the bug.
+
+TEST_CASE("build: font crossorigin handling per whitelist type", "[html_scanner][build][font]")
+{
+  SECTION("same-origin font auto-adds crossorigin=anonymous (W3C CSS Fonts spec)")
+  {
+    // Same-origin fonts must carry crossorigin so the browser does not open a
+    // second connection for the CORS-checked @font-face fetch.
+    std::string html = R"(<html><head><link rel="preload" href="/fonts/font.woff2" as="font"></head></html>)";
+    auto links       = scan_html(html);
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("crossorigin=anonymous") != std::string::npos);
+  }
+
+  SECTION("crossorigin-whitelist font keeps crossorigin=anonymous")
+  {
+    // Font CDN on the crossorigin-whitelist: admin allows CORS preload.
+    std::string html = R"(<html><head><link rel="preload" href="https://fonts.gstatic.com/f.woff2" as="font"></head></html>)";
+    auto links       = scan_html_with_crossorigin_domain(html, "fonts.gstatic.com");
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=preload") != std::string::npos);
+    CHECK(links[0].find("crossorigin=anonymous") != std::string::npos);
+  }
+
+  SECTION("preload-whitelist font must NOT get crossorigin (no-cors mode, admin intent)")
+  {
+    // Admin put this font CDN in --preload-whitelist, signaling no-cors mode.
+    // The plugin must respect that and omit crossorigin, consistent with how
+    // modulepreload and other resource types behave in the preload-whitelist path.
+    std::string html = R"(<html><head><link rel="preload" href="https://fonts.example.com/font.woff2" as="font"></head></html>)";
+    auto links       = scan_html_with_preload_domain(html, "fonts.example.com");
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=preload") != std::string::npos);
+    CHECK(links[0].find("as=font") != std::string::npos);
+    // preload-whitelist = no-cors: crossorigin must NOT be appended
+    CHECK(links[0].find("crossorigin") == std::string::npos);
+  }
+
+  SECTION("non-whitelisted cross-origin font downgrades to preconnect with crossorigin")
+  {
+    // Not on any whitelist: downgrade to preconnect. Font preconnect MUST carry
+    // crossorigin=anonymous so the browser reuses the CORS-capable connection.
+    std::string html = R"(<html><head><link rel="preload" href="https://unknown-cdn.com/font.woff2" as="font"></head></html>)";
+    auto links       = scan_html(html); // no whitelist configured
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=preconnect") != std::string::npos);
+    CHECK(links[0].find("crossorigin=anonymous") != std::string::npos);
   }
 }

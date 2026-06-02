@@ -36,6 +36,7 @@ TESTS=(
     early_hints_backslash_rcdata     # backslash URL bypass; RCDATA elements
     early_hints_modulepreload        # modulepreload: as= optional, fetchpriority preserved, script type=module
     early_hints_persist_hardening    # oversized link skip (A-25), future ts clamp (A-09)
+    early_hints_scanner_correctness   # </script> escaped close (B-06), \r separator (A-06), first-wins (A-28), crossorigin norm (A-29), preload-whitelist font (A-07)
 )
 
 PASSED=0
@@ -74,15 +75,10 @@ for TEST in "${TESTS[@]}"; do
             echo "TIMEOUT  (>90s) — pre-existing hang"
             TIMEOUT_TESTS+=("$TEST")
         else
-            # Non-timeout non-zero exit — check log for result
-            if grep -q " Passed" "$LOG" 2>/dev/null; then
-                echo "PASSED"
-                PASSED=$((PASSED + 1))
-            else
-                echo "FAILED (exit=$EXIT) — see $LOG"
-                FAILED=$((FAILED + 1))
-                FAILED_TESTS+=("$TEST")
-            fi
+            # Non-zero exit from autest run = test(s) failed
+            echo "FAILED (exit=$EXIT) — see $LOG"
+            FAILED=$((FAILED + 1))
+            FAILED_TESTS+=("$TEST")
         fi
     fi
 done

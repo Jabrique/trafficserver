@@ -62,3 +62,33 @@ scan_html_split(const std::string &html, size_t split_pos, int scan_limit = 1310
   }
   return scanner.get_links();
 }
+
+// Helper to scan HTML with a preload-whitelist domain (no-cors mode).
+// Use this to test the preload-whitelist code path in build_link_header().
+static inline std::vector<std::string>
+scan_html_with_preload_domain(const std::string &html, const std::string &preload_domain, int scan_limit = 131072,
+                              int max_links = 10)
+{
+  EarlyHintsConfig config;
+  std::vector<const char *> argv = {"http://from.example.com", "http://to.example.com", "--preload-whitelist",
+                                    preload_domain.c_str()};
+  config.init(static_cast<int>(argv.size()), argv.data());
+  HtmlScanner scanner(scan_limit, max_links, &config);
+  scanner.feed(html.c_str(), static_cast<int64_t>(html.size()));
+  return scanner.get_links();
+}
+
+// Helper to scan HTML with a crossorigin-whitelist domain (CORS preload mode).
+// Use this to test the crossorigin-whitelist code path in build_link_header().
+static inline std::vector<std::string>
+scan_html_with_crossorigin_domain(const std::string &html, const std::string &cors_domain, int scan_limit = 131072,
+                                  int max_links = 10)
+{
+  EarlyHintsConfig config;
+  std::vector<const char *> argv = {"http://from.example.com", "http://to.example.com", "--crossorigin-whitelist",
+                                    cors_domain.c_str()};
+  config.init(static_cast<int>(argv.size()), argv.data());
+  HtmlScanner scanner(scan_limit, max_links, &config);
+  scanner.feed(html.c_str(), static_cast<int64_t>(html.size()));
+  return scanner.get_links();
+}
