@@ -231,6 +231,17 @@ HintsCache::get_age(const std::string &key) const
   return time(nullptr) - it->second.last_updated;
 }
 
+int
+HintsCache::get_count(const std::string &key) const
+{
+  TSMutexGuard guard(mutex_);
+  auto it = entries_.find(key);
+  if (it == entries_.end()) {
+    return 0;
+  }
+  return it->second.request_count;
+}
+
 void
 HintsCache::touch(const std::string &key)
 {

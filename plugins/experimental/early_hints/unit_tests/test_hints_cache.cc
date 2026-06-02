@@ -1614,3 +1614,47 @@ TEST_CASE("HintsCache: remove() invalidates entry", "[hints_cache][purge]")
     CHECK(result != nullptr);
   }
 }
+
+// ─── A-26: get_count() for min_hit_count guard in 200 Link header path ────────
+
+TEST_CASE("HintsCache: get_count returns request count without incrementing", "[hints_cache]")
+{
+  SECTION("get_count returns 0 for unknown key")
+  {
+    HintsCache cache;
+    CHECK(cache.get_count("/unknown") == 0);
+  }
+
+  SECTION("put() does not increment count; get() does")
+  {
+    HintsCache cache;
+    std::vector<std::string> links = {"</app.js>; rel=preload; as=script"};
+    cache.put("/page", links);
+    CHECK(cache.get_count("/page") == 0);
+    cache.get("/page", 5); // count 0 -> 1
+    CHECK(cache.get_count("/page") == 1);
+    cache.get("/page", 5); // count 1 -> 2
+    CHECK(cache.get_count("/page") == 2);
+  }
+
+  SECTION("peek() does not increment get_count")
+  {
+    HintsCache cache;
+    std::vector<std::string> links = {"</app.js>; rel=preload; as=script"};
+    cache.put("/page", links);
+    cache.get("/page", 5); // count = 1
+    cache.peek("/page");   // must NOT increment
+    CHECK(cache.get_count("/page") == 1);
+  }
+
+  SECTION("below threshold: peek returns data but count < min_hit_count")
+  {
+    HintsCache cache;
+    std::vector<std::string> links = {"</app.js>; rel=preload; as=script"};
+    cache.put("/page", links);
+    cache.get("/page", 2);                 // count=1, threshold=2 → null returned
+    CHECK(cache.peek("/page") != nullptr); // peek ignores threshold
+    CHECK(cache.get_count("/page") == 1);  // count below threshold
+    CHECK(cache.get_count("/page") < 2);   // 200 header MUST NOT be served
+  }
+}

@@ -625,10 +625,24 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
           if (ce_field != TS_NULL_MLOC) {
             int ce_len         = 0;
             const char *ce_str = TSMimeHdrFieldValueStringGet(server_bufp, server_hdr_loc, ce_field, -1, &ce_len);
-            if (ce_str && ce_len > 0 && !(ce_len == 8 && strncasecmp(ce_str, "identity", 8) == 0)) {
-              is_compressed = true;
-              TSDebug(PLUGIN_NAME, "auto-learn: skipping for %s, response is compressed (Content-Encoding: %.*s)",
-                      req_data->cache_key.c_str(), ce_len, ce_str);
+            if (ce_str && ce_len > 0) {
+              // Trim leading/trailing whitespace before comparing.
+              // Some origins add a trailing space: "identity " — exact
+              // length check without trim would incorrectly mark as compressed.
+              const char *ce_p = ce_str;
+              int ce_l         = ce_len;
+              while (ce_l > 0 && (*ce_p == ' ' || *ce_p == '\t')) {
+                ce_p++;
+                ce_l--;
+              }
+              while (ce_l > 0 && (ce_p[ce_l - 1] == ' ' || ce_p[ce_l - 1] == '\t')) {
+                ce_l--;
+              }
+              if (!(ce_l == 8 && strncasecmp(ce_p, "identity", 8) == 0)) {
+                is_compressed = true;
+                TSDebug(PLUGIN_NAME, "auto-learn: skipping for %s, response is compressed (Content-Encoding: %.*s)",
+                        req_data->cache_key.c_str(), ce_len, ce_str);
+              }
             }
             TSHandleMLocRelease(server_bufp, server_hdr_loc, ce_field);
           }
@@ -719,9 +733,21 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
           if (ce_field != TS_NULL_MLOC) {
             int ce_len         = 0;
             const char *ce_str = TSMimeHdrFieldValueStringGet(cache_bufp, cache_hdr_loc, ce_field, -1, &ce_len);
-            if (ce_str && ce_len > 0 && !(ce_len == 8 && strncasecmp(ce_str, "identity", 8) == 0)) {
-              is_compressed = true;
-              TSDebug(PLUGIN_NAME, "auto-learn (cache): skipping for %s, response is compressed", req_data->cache_key.c_str());
+            if (ce_str && ce_len > 0) {
+              // Trim leading/trailing whitespace (same rationale as READ_RESPONSE_HDR).
+              const char *ce_p = ce_str;
+              int ce_l         = ce_len;
+              while (ce_l > 0 && (*ce_p == ' ' || *ce_p == '\t')) {
+                ce_p++;
+                ce_l--;
+              }
+              while (ce_l > 0 && (ce_p[ce_l - 1] == ' ' || ce_p[ce_l - 1] == '\t')) {
+                ce_l--;
+              }
+              if (!(ce_l == 8 && strncasecmp(ce_p, "identity", 8) == 0)) {
+                is_compressed = true;
+                TSDebug(PLUGIN_NAME, "auto-learn (cache): skipping for %s, response is compressed", req_data->cache_key.c_str());
+              }
             }
             TSHandleMLocRelease(cache_bufp, cache_hdr_loc, ce_field);
           }
@@ -756,8 +782,11 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
     // (or never written — e.g. after a plugin restart), repopulate it from the
     // Link headers stored in the ATS cached response. Same split/normalize/validate/
     // dedup pipeline as READ_RESPONSE_HDR origin-forward path.
-    // Only runs when cached_links==nullptr (TSRemapDoRemap found no serveable entry).
-    if ((config->mode() & EarlyHintsConfig::MODE_ORIGIN_FORWARD) && !req_data->cached_links) {
+    // Only runs when cached_links==nullptr (TSRemapDoRemap found no serveable entry)
+    // AND has_learned==false (entry does not exist in the hints cache).
+    // Guarding on !has_learned prevents overwriting existing HTML-learned hints
+    // with origin Link headers on requests where the entry is below threshold.
+    if ((config->mode() & EarlyHintsConfig::MODE_ORIGIN_FORWARD) && !req_data->cached_links && !req_data->has_learned) {
       TSMLoc link_field = TSMimeHdrFieldFind(cache_bufp, cache_hdr_loc, "Link", 4);
       std::vector<std::string> origin_links;
 
@@ -834,9 +863,20 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
                   req_data->cache_key.c_str());
           req_data->cached_links = cache->peek(req_data->cache_key);
           if (req_data->cached_links) {
-            TSDebug(PLUGIN_NAME, "SEND_RESPONSE_HDR: fallback peek hit for %s, %zu links", req_data->cache_key.c_str(),
-                    req_data->cached_links->size());
-            cached_ptr = req_data->cached_links.get();
+            // Enforce min_hit_count for the 200 Link header path.
+            // peek() returns data regardless of request_count by design, but we
+            // should only serve hints in the 200 response once the URL is popular
+            // enough (request_count >= min_hit_count).  get_count() is non-incrementing.
+            int count = cache->get_count(req_data->cache_key);
+            if (count >= config->min_hit_count()) {
+              TSDebug(PLUGIN_NAME, "SEND_RESPONSE_HDR: fallback peek hit for %s, %zu links (count=%d)", req_data->cache_key.c_str(),
+                      req_data->cached_links->size(), count);
+              cached_ptr = req_data->cached_links.get();
+            } else {
+              TSDebug(PLUGIN_NAME, "SEND_RESPONSE_HDR: fallback peek hit for %s below threshold (count=%d < min=%d), not serving",
+                      req_data->cache_key.c_str(), count, config->min_hit_count());
+              req_data->cached_links = nullptr; // do not serve below threshold
+            }
           } else {
             TSDebug(PLUGIN_NAME, "SEND_RESPONSE_HDR: fallback peek miss for %s", req_data->cache_key.c_str());
           }

@@ -3093,3 +3093,165 @@ TEST_CASE("is_valid_link_value() rejects backslash-relative authority", "[config
     CHECK(is_valid_link_value(link));
   }
 }
+
+// ─── normalize_link_for_hint: preserve crossorigin/fetchpriority ──────────────
+
+TEST_CASE("normalize_link_for_hint: rel=stylesheet preserves crossorigin", "[config][normalize]")
+{
+  SECTION("stylesheet crossorigin=anonymous carries into preload hint")
+  {
+    std::string link   = "</style.css>; rel=stylesheet; crossorigin=anonymous";
+    std::string result = normalize_link_for_hint(link);
+    // Before fix: result = "</style.css>; rel=preload; as=style" (crossorigin lost)
+    // After fix: crossorigin=anonymous must be present
+    CHECK(result.find("crossorigin=anonymous") != std::string::npos);
+    CHECK(result.find("rel=preload") != std::string::npos);
+    CHECK(result.find("as=style") != std::string::npos);
+  }
+
+  SECTION("stylesheet crossorigin=use-credentials carries into preload hint")
+  {
+    std::string link   = "</style.css>; rel=stylesheet; crossorigin=use-credentials";
+    std::string result = normalize_link_for_hint(link);
+    CHECK(result.find("crossorigin=use-credentials") != std::string::npos);
+  }
+
+  SECTION("stylesheet fetchpriority=high carries into preload hint")
+  {
+    std::string link   = "</critical.css>; rel=stylesheet; fetchpriority=high";
+    std::string result = normalize_link_for_hint(link);
+    CHECK(result.find("fetchpriority=high") != std::string::npos);
+    CHECK(result.find("rel=preload") != std::string::npos);
+  }
+
+  SECTION("stylesheet without crossorigin — no crossorigin added (no spurious attr)")
+  {
+    std::string link   = "</style.css>; rel=stylesheet";
+    std::string result = normalize_link_for_hint(link);
+    CHECK(result.find("crossorigin") == std::string::npos);
+    CHECK(result.find("rel=preload; as=style") != std::string::npos);
+  }
+
+  SECTION("rel=preload path regression — attrs still preserved (was already working)")
+  {
+    std::string link   = "</app.js>; rel=preload; as=script; crossorigin=anonymous";
+    std::string result = normalize_link_for_hint(link);
+    CHECK(result.find("crossorigin=anonymous") != std::string::npos);
+  }
+}
+
+// ─── A-30: rfind('@') for multi-@ userinfo ───────────────────────────────────
+
+TEST_CASE("Config whitelist: multi-@ userinfo stripped with rfind", "[config][regression]")
+{
+  SECTION("user:p@ssword@cdn.example.com — second @ is authority separator")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--crossorigin-whitelist", "cdn.example.com"}));
+    // Before fix: find('@') at first '@' → "ssword@cdn.example.com" → no match
+    // After fix: rfind('@') → "cdn.example.com" → match
+    CHECK(config.is_whitelisted_domain("user:p@ssword@cdn.example.com"));
+  }
+
+  SECTION("simple user@host still works (regression guard)")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--crossorigin-whitelist", "cdn.example.com"}));
+    CHECK(config.is_whitelisted_domain("user@cdn.example.com"));
+  }
+
+  SECTION("no @ in domain — unaffected")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--crossorigin-whitelist", "cdn.example.com"}));
+    CHECK(config.is_whitelisted_domain("cdn.example.com"));
+  }
+}
+
+// ─── A-32: has_valid_as_for_preload accepts quoted as= variants ───────────────
+
+TEST_CASE("has_valid_as_for_preload: quoted as= variants accepted", "[config]")
+{
+  SECTION("as=\"script\" double-quoted is valid per RFC 8288")
+  {
+    // Origin may send: Link: </app.js>; rel=preload; as="script"
+    CHECK(has_valid_as_for_preload(R"(<app.js>; rel=preload; as="script")"));
+  }
+
+  SECTION("as='script' single-quoted is valid") { CHECK(has_valid_as_for_preload(R"(<app.js>; rel=preload; as='script')")); }
+
+  SECTION("as=\"style\" double-quoted is valid") { CHECK(has_valid_as_for_preload(R"(<style.css>; rel=preload; as="style")")); }
+
+  SECTION("as=\"font\" double-quoted is valid") { CHECK(has_valid_as_for_preload(R"(<font.woff2>; rel=preload; as="font")")); }
+
+  SECTION("unquoted as=script still works (regression guard)")
+  {
+    CHECK(has_valid_as_for_preload("<app.js>; rel=preload; as=script"));
+  }
+}
+
+// ─── B-10: merge_hint_links case-insensitive URL deduplication ───────────────
+
+TEST_CASE("merge_hint_links: case-insensitive host deduplication", "[config][merge]")
+{
+  SECTION("same URL different host casing is treated as duplicate")
+  {
+    std::vector<std::string> manual = {"<https://CDN.EXAMPLE.COM/app.js>; rel=preload; as=script"};
+    std::vector<std::string> cached = {"<https://cdn.example.com/app.js>; rel=preload; as=script"};
+    auto result                     = merge_hint_links(manual, &cached, 10);
+    // Before fix: case-sensitive compare → both pass dedup → size=2
+    // After fix: lowercase compare → deduped → size=1
+    CHECK(result.size() == 1);
+  }
+
+  SECTION("same URL same casing is always deduped (existing behavior, regression)")
+  {
+    std::vector<std::string> manual = {"<https://cdn.example.com/app.js>; rel=preload; as=script"};
+    std::vector<std::string> cached = {"<https://cdn.example.com/app.js>; rel=preload; as=script"};
+    auto result                     = merge_hint_links(manual, &cached, 10);
+    CHECK(result.size() == 1);
+  }
+
+  SECTION("different URLs (same host, different paths) are not deduped")
+  {
+    std::vector<std::string> manual = {"<https://cdn.example.com/a.js>; rel=preload; as=script"};
+    std::vector<std::string> cached = {"<https://cdn.example.com/b.js>; rel=preload; as=script"};
+    auto result                     = merge_hint_links(manual, &cached, 10);
+    CHECK(result.size() == 2);
+  }
+}
+
+// ─── A-14: whitelist port strip at parse time ─────────────────────────────────
+
+TEST_CASE("Config whitelist: port in pattern stripped at parse time", "[config]")
+{
+  SECTION("crossorigin whitelist cdn.example.com:8080 matches portless cdn.example.com")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--crossorigin-whitelist", "cdn.example.com:8080"}));
+    // Before fix: pattern stored as "cdn.example.com:8080", incoming "cdn.example.com" → no match
+    // After fix: port stripped at parse time → stored "cdn.example.com" → match
+    CHECK(config.is_whitelisted_domain("cdn.example.com"));
+  }
+
+  SECTION("preload whitelist fonts.example.com:443 matches portless fonts.example.com")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--preload-whitelist", "fonts.example.com:443"}));
+    CHECK(config.is_preload_domain("fonts.example.com"));
+  }
+
+  SECTION("portless pattern still works (regression guard)")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--crossorigin-whitelist", "cdn.example.com"}));
+    CHECK(config.is_whitelisted_domain("cdn.example.com"));
+  }
+
+  SECTION("wildcard with port: *.example.com:8080 → stored *.example.com → match cdn.example.com")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--crossorigin-whitelist", "*.example.com:8080"}));
+    CHECK(config.is_whitelisted_domain("cdn.example.com"));
+  }
+}

@@ -132,6 +132,15 @@ public:
   int64_t drops() const;
 
   /**
+   * Thread-safe request count lookup: returns request_count for the entry.
+   * Returns 0 if the entry does not exist.
+   * Does NOT increment request_count. Used by SEND_RESPONSE_HDR to guard the
+   * peek() fallback path against serving 200 Link headers before min_hit_count
+   * is reached (peek() ignores the threshold by design).
+   */
+  int get_count(const std::string &key) const;
+
+  /**
    * Number of times persist_to_disk() was actually called inside put().
    * Used by unit tests to verify the equality-check debounce:
    * identical link content for an existing key must NOT increment this counter.

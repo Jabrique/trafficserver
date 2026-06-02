@@ -271,18 +271,29 @@ has_valid_as_for_preload(const std::string &link)
   static const char *valid_as[] = {"audio",  "document", "embed",        "fetch", "font",  "frame", "iframe", "image",
                                    "object", "script",   "sharedworker", "style", "track", "video", "worker"};
 
-  // Search for as=<value> with word boundaries
+  // Search for as=<value> with word boundaries — unquoted and quoted (RFC 8288 §3)
   for (const char *as_val : valid_as) {
-    std::string needle = std::string("as=") + as_val;
-    size_t pos         = 0;
-    while ((pos = params.find(needle, pos)) != std::string::npos) {
-      bool before_ok = (pos == 0) || params[pos - 1] == ';' || params[pos - 1] == ' ' || params[pos - 1] == '\t';
-      size_t end     = pos + needle.size();
-      bool after_ok  = end >= params.size() || params[end] == ';' || params[end] == ' ' || params[end] == '\t';
-      if (before_ok && after_ok) {
-        return true;
+    // Helper: search for needle with word boundaries
+    auto check_needle = [&](const std::string &needle) -> bool {
+      size_t pos = 0;
+      while ((pos = params.find(needle, pos)) != std::string::npos) {
+        bool before_ok = (pos == 0) || params[pos - 1] == ';' || params[pos - 1] == ' ' || params[pos - 1] == '\t';
+        size_t end     = pos + needle.size();
+        bool after_ok  = end >= params.size() || params[end] == ';' || params[end] == ' ' || params[end] == '\t';
+        if (before_ok && after_ok) {
+          return true;
+        }
+        pos += needle.size();
       }
-      pos += needle.size();
+      return false;
+    };
+
+    // Check unquoted: as=script
+    // Check double-quoted: as="script" (origin may send quoted attr per RFC 8288)
+    // Check single-quoted: as='script'
+    if (check_needle(std::string("as=") + as_val) || check_needle(std::string("as=\"") + as_val + "\"") ||
+        check_needle(std::string("as='") + as_val + "'")) {
+      return true;
     }
   }
 
@@ -295,11 +306,15 @@ has_valid_as_for_preload(const std::string &link)
 static std::string
 extract_dedup_key(const std::string &link)
 {
-  size_t url_end = link.find('>');
-  if (url_end != std::string::npos) {
-    return link.substr(0, url_end + 1);
+  size_t url_end  = link.find('>');
+  std::string key = (url_end != std::string::npos) ? link.substr(0, url_end + 1) : link;
+  // DNS host names are case-insensitive (RFC 4343); lowercase the URL portion
+  // so <CDN.EXAMPLE.COM/app.js> and <cdn.example.com/app.js> are treated
+  // as the same resource and correctly deduplicated.
+  for (char &c : key) {
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
   }
-  return link;
+  return key;
 }
 
 std::vector<std::string>
@@ -402,8 +417,10 @@ EarlyHintsConfig::match_domain_list(const std::string &domain, const std::vector
     domain_lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
   }
 
-  // Strip userinfo (RFC 3986 §3.2.1): "user@host" → "host"
-  size_t at_pos = domain_lower.find('@');
+  // Strip userinfo (RFC 3986 §3.2.1): "user@host" → "host".
+  // rfind('@') is used because passwords may legally contain '@'
+  // e.g. user:p@ssword@host — the last '@' separates userinfo from host.
+  size_t at_pos = domain_lower.rfind('@');
   if (at_pos != std::string::npos) {
     domain_lower = domain_lower.substr(at_pos + 1);
   }
@@ -614,7 +631,19 @@ EarlyHintsConfig::init(int argc, const char *argv[])
         std::string d = domains.substr(start, end - start);
         if (!d.empty()) {
           std::transform(d.begin(), d.end(), d.begin(), [](unsigned char c) { return std::tolower(c); });
-          crossorigin_whitelist_.push_back(d);
+          // Strip port from pattern at parse time so the portless incoming
+          // domain (from RFC 7239 / Host header) matches correctly.
+          // match_domain_list() strips port from the incoming domain side;
+          // patterns must be stored without port for the comparison to work.
+          if (d[0] != '[') { // IPv6 literals handled separately
+            size_t colon = d.find(':');
+            if (colon != std::string::npos) {
+              d = d.substr(0, colon);
+            }
+          }
+          if (!d.empty()) {
+            crossorigin_whitelist_.push_back(d);
+          }
         }
         pos = comma + 1;
       }
@@ -639,7 +668,16 @@ EarlyHintsConfig::init(int argc, const char *argv[])
         std::string d = domains.substr(start, end - start);
         if (!d.empty()) {
           std::transform(d.begin(), d.end(), d.begin(), [](unsigned char c) { return std::tolower(c); });
-          preload_whitelist_.push_back(d);
+          // Strip port from pattern at parse time (same rationale as crossorigin_whitelist_).
+          if (d[0] != '[') { // IPv6 literals handled separately
+            size_t colon = d.find(':');
+            if (colon != std::string::npos) {
+              d = d.substr(0, colon);
+            }
+          }
+          if (!d.empty()) {
+            preload_whitelist_.push_back(d);
+          }
         }
         pos = comma + 1;
       }
@@ -776,10 +814,37 @@ normalize_link_for_hint(const std::string &link)
   std::string params_lower = link.substr(url_end + 1);
   std::transform(params_lower.begin(), params_lower.end(), params_lower.begin(), [](unsigned char c) { return std::tolower(c); });
 
-  // Check for stylesheet — convert to preload; as=style.
+  // Carry optional crossorigin and fetchpriority attributes into the converted hint.
+  // Without crossorigin, a preloaded CORS stylesheet triggers a double-fetch:
+  // the preload uses no-cors mode but the actual <link> fetch uses cors mode.
+  // Without fetchpriority, the browser cannot prioritise the preload correctly.
+  auto carry_param = [&](const char *name) -> std::string {
+    std::string needle = std::string(name) + "=";
+    size_t pos         = 0;
+    while ((pos = params_lower.find(needle, pos)) != std::string::npos) {
+      bool before_ok = (pos == 0) || params_lower[pos - 1] == ';' || params_lower[pos - 1] == ' ' || params_lower[pos - 1] == '\t';
+      if (before_ok) {
+        size_t val_start = pos + needle.size();
+        size_t val_end   = params_lower.find(';', val_start);
+        if (val_end == std::string::npos) {
+          val_end = params_lower.size();
+        }
+        while (val_end > val_start && (params_lower[val_end - 1] == ' ' || params_lower[val_end - 1] == '\t')) {
+          val_end--;
+        }
+        if (val_end > val_start) {
+          return std::string("; ") + name + "=" + params_lower.substr(val_start, val_end - val_start);
+        }
+      }
+      pos += needle.size();
+    }
+    return {};
+  };
+
+  // Check for stylesheet — convert to preload; as=style, preserving optional attrs.
   if (has_param_match(params_lower, "rel=stylesheet") || has_param_match(params_lower, "rel=\"stylesheet\"") ||
       has_param_match(params_lower, "rel='stylesheet'")) {
-    return url_part + "; rel=preload; as=style";
+    return url_part + "; rel=preload; as=style" + carry_param("crossorigin") + carry_param("fetchpriority");
   }
 
   // rel=preload, rel=preconnect, rel=modulepreload — return unchanged
