@@ -21,26 +21,31 @@ split_link_header_value(const std::string &header_value, int max_links)
   int angle_depth             = 0;
   bool in_quotes              = false;
   size_t start                = 0;
+  int consecutive_backslashes = 0; // forward-tracked; reset on any non-backslash char
 
   while (pos <= full_val.size()) {
     if (pos < full_val.size()) {
       char ch = full_val[pos];
       if (!in_quotes && ch == '<') {
         angle_depth++;
+        consecutive_backslashes = 0;
       } else if (!in_quotes && ch == '>' && angle_depth > 0) {
         angle_depth--;
+        consecutive_backslashes = 0;
       } else if (angle_depth == 0 && ch == '"') {
-        // Count consecutive backslashes before this quote.
-        // Odd count = quote is escaped; even count = quote is real delimiter.
-        int backslash_count = 0;
-        for (size_t bp = pos; bp > 0 && full_val[bp - 1] == '\\'; bp--) {
-          backslash_count++;
-        }
-        if (in_quotes && (backslash_count % 2) != 0) {
-          // Odd backslashes: quote is escaped — do not toggle
+        // Odd consecutive backslashes immediately before this quote = escaped quote.
+        // Even (incl. 0) = real delimiter.  consecutive_backslashes was tracked
+        // forward as we scanned, so this check is O(1).
+        if (in_quotes && (consecutive_backslashes % 2) != 0) {
+          // Escaped quote — do not toggle
         } else {
           in_quotes = !in_quotes;
         }
+        consecutive_backslashes = 0;
+      } else if (ch == '\\') {
+        consecutive_backslashes++;
+      } else {
+        consecutive_backslashes = 0;
       }
     }
     if (pos == full_val.size() || (full_val[pos] == ',' && angle_depth == 0 && !in_quotes)) {
@@ -57,7 +62,8 @@ split_link_header_value(const std::string &header_value, int max_links)
           break;
         }
       }
-      start = pos + 1;
+      start                   = pos + 1;
+      consecutive_backslashes = 0;
     }
     pos++;
   }

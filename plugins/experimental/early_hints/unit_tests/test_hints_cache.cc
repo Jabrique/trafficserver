@@ -162,9 +162,15 @@ TEST_CASE("HintsCache: legacy get (vector overload)", "[hints_cache]")
 
 TEST_CASE("HintsCache: make_key", "[hints_cache]")
 {
-  SECTION("strips query string") { CHECK(HintsCache::make_key("/page?q=1", 9) == "/page"); }
+  SECTION("strips query string")
+  {
+    CHECK(HintsCache::make_key("/page?q=1", 9) == "/page");
+  }
 
-  SECTION("no query string — returns full path") { CHECK(HintsCache::make_key("/page/sub", 9) == "/page/sub"); }
+  SECTION("no query string — returns full path")
+  {
+    CHECK(HintsCache::make_key("/page/sub", 9) == "/page/sub");
+  }
 
   SECTION("empty path")
   {
@@ -178,7 +184,10 @@ TEST_CASE("HintsCache: make_key", "[hints_cache]")
     CHECK(HintsCache::make_key("/page#section", 13) == "/page#section");
   }
 
-  SECTION("path with both query and fragment") { CHECK(HintsCache::make_key("/page?q=1#frag", 14) == "/page"); }
+  SECTION("path with both query and fragment")
+  {
+    CHECK(HintsCache::make_key("/page?q=1#frag", 14) == "/page");
+  }
 
   SECTION("query at start")
   {
@@ -186,7 +195,10 @@ TEST_CASE("HintsCache: make_key", "[hints_cache]")
     CHECK(HintsCache::make_key("?q=1", 4) == "/");
   }
 
-  SECTION("just a slash") { CHECK(HintsCache::make_key("/", 1) == "/"); }
+  SECTION("just a slash")
+  {
+    CHECK(HintsCache::make_key("/", 1) == "/");
+  }
 }
 
 // ─── size ───────────────────────────────────────────────────────────────────
@@ -1656,5 +1668,44 @@ TEST_CASE("HintsCache: get_count returns request count without incrementing", "[
     CHECK(cache.peek("/page") != nullptr); // peek ignores threshold
     CHECK(cache.get_count("/page") == 1);  // count below threshold
     CHECK(cache.get_count("/page") < 2);   // 200 header MUST NOT be served
+  }
+}
+
+// ─── Approximation: peek() logic for H1 shortcircuit has_learned ────────────────
+// These tests verify the peek() semantics relied on by the H1 shortcircuit fix:
+// before the H1 goto in TSRemapDoRemap, a peek() call must correctly
+// identify whether an entry exists (has_learned), without side-effects
+// on request_count.
+
+TEST_CASE("HintsCache: peek() correctly identifies existing entries for H1 shortcircuit path", "[hints_cache][regression]")
+{
+  SECTION("entry exists: peek returns non-null — has_learned should be set true")
+  {
+    HintsCache cache;
+    std::vector<std::string> links = {"</app.js>; rel=preload; as=script"};
+    cache.put("/page", links);
+
+    bool has_learned = (cache.peek("/page") != nullptr);
+    // Fix in TSRemapDoRemap sets has_learned=true here so READ_RESPONSE_HDR
+    // can skip the scanner for already-learned URLs on H1/bot paths.
+    CHECK(has_learned);
+  }
+
+  SECTION("entry absent: peek returns null — has_learned stays false (scanner must run)")
+  {
+    HintsCache cache;
+    bool has_learned = (cache.peek("/unknown-page") != nullptr);
+    CHECK_FALSE(has_learned);
+  }
+
+  SECTION("peek does not increment request_count (safe to call before H1 goto)")
+  {
+    HintsCache cache;
+    std::vector<std::string> links = {"</app.js>; rel=preload; as=script"};
+    cache.put("/page", links);
+    cache.peek("/page");
+    cache.peek("/page");
+    // request_count must remain 0 — peek must not perturb the min_hit_count gate
+    CHECK(cache.get_count("/page") == 0);
   }
 }

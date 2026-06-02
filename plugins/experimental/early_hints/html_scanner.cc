@@ -128,20 +128,13 @@ HtmlScanner::is_safe_url(const std::string &url)
   // exotic scheme (file:, ftp:, feed:javascript:, jar:, view-source:, etc.)
   // bypasses the filter.  An allowlist is inherently safe against unknown schemes.
   //
-  // Strip leading whitespace first — browsers do this per WHATWG URL spec,
-  // so "  javascript:..." resolves to "javascript:...".
-  size_t scheme_start = url.find_first_not_of(" \t");
-  if (scheme_start == std::string::npos) {
-    return false; // all whitespace — useless URL
-  }
-
-  // Detect whether the URL has a scheme per RFC 3986 §3.1:
-  //   scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )
-  // A colon that appears before any '/', '?', '#', or '@' terminates the scheme.
-  // If found, only http: and https: are allowed.  Everything else (relative paths,
-  // protocol-relative //host, fragment-only #id) has no scheme and is safe.
-  const char *s    = url.c_str() + scheme_start;
-  size_t remaining = url.size() - scheme_start;
+  // Note: the control-char loop above already rejects space (0x20) and tab (0x09),
+  // so any URL reaching here starts with a non-whitespace character.
+  // Browsers strip leading whitespace per WHATWG URL spec, but we reject it
+  // instead: browsers pct-encode whitespace before sending href over HTTP,
+  // so raw whitespace here indicates malformed input.
+  const char *s    = url.c_str();
+  size_t remaining = url.size();
 
   // First char must be ALPHA to start a scheme (RFC 3986 §3.1)
   if (remaining > 0 && std::isalpha(static_cast<unsigned char>(s[0]))) {
@@ -195,7 +188,7 @@ HtmlScanner::is_crossorigin(const std::string &href)
   // Also detect backslash variants: browsers with "special" schemes (http/https)
   // treat '\' as '/' per WHATWG URL spec §4.2, so \\evil.com, \/evil.com, and
   // /\evil.com all resolve as cross-origin authority references.
-  if (href.size() > 2 && (href[0] == '/' || href[0] == '\\') && (href[1] == '/' || href[1] == '\\')) {
+  if (href.size() >= 2 && (href[0] == '/' || href[0] == '\\') && (href[1] == '/' || href[1] == '\\')) {
     return true;
   }
 
@@ -378,6 +371,9 @@ HtmlScanner::build_link_header(const std::string &tag)
 
       if (is_crossorigin(href_)) {
         std::string origin = extract_origin(href_);
+        if (origin.find("://") == std::string::npos) {
+          return; // degenerate cross-origin URL (e.g. bare "//") — no valid absolute origin
+        }
         size_t scheme_sep  = origin.find("://");
         std::string domain = (scheme_sep != std::string::npos) ? origin.substr(scheme_sep + 3) : origin;
         if (config_ && config_->is_whitelisted_domain(domain)) {
@@ -418,6 +414,9 @@ HtmlScanner::build_link_header(const std::string &tag)
       // <link rel="stylesheet" href="..."> → preload as style
       if (is_crossorigin(href_)) {
         std::string origin = extract_origin(href_);
+        if (origin.find("://") == std::string::npos) {
+          return; // degenerate cross-origin URL — no valid absolute origin
+        }
         size_t scheme_sep  = origin.find("://");
         std::string domain = (scheme_sep != std::string::npos) ? origin.substr(scheme_sep + 3) : origin;
         if (config_ && config_->is_whitelisted_domain(domain)) {
@@ -447,6 +446,9 @@ HtmlScanner::build_link_header(const std::string &tag)
       // is always implied. Apply the same whitelist logic as rel=preload.
       if (is_crossorigin(href_)) {
         std::string origin = extract_origin(href_);
+        if (origin.find("://") == std::string::npos) {
+          return; // degenerate cross-origin URL — no valid absolute origin
+        }
         size_t scheme_sep  = origin.find("://");
         std::string domain = (scheme_sep != std::string::npos) ? origin.substr(scheme_sep + 3) : origin;
         if (config_ && config_->is_whitelisted_domain(domain)) {
@@ -482,6 +484,9 @@ HtmlScanner::build_link_header(const std::string &tag)
       }
       if (is_crossorigin(href_)) {
         std::string origin = extract_origin(href_);
+        if (origin.find("://") == std::string::npos) {
+          return; // degenerate cross-origin URL — no valid absolute origin
+        }
         size_t scheme_sep  = origin.find("://");
         std::string domain = (scheme_sep != std::string::npos) ? origin.substr(scheme_sep + 3) : origin;
         if (config_ && config_->is_whitelisted_domain(domain)) {
@@ -508,6 +513,9 @@ HtmlScanner::build_link_header(const std::string &tag)
       }
       if (is_crossorigin(href_)) {
         std::string origin = extract_origin(href_);
+        if (origin.find("://") == std::string::npos) {
+          return; // degenerate cross-origin URL — no valid absolute origin
+        }
         size_t scheme_sep  = origin.find("://");
         std::string domain = (scheme_sep != std::string::npos) ? origin.substr(scheme_sep + 3) : origin;
         if (config_ && config_->is_whitelisted_domain(domain)) {

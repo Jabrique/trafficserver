@@ -208,3 +208,26 @@ TEST_CASE("LinkParser: rel boundary check in deduplication", "[link_parser][dedu
   auto result3                       = dedup_link_segments(segments3, 10);
   CHECK(result3.size() == 2);
 }
+
+// ─── Non-regression: O(n) backslash counting must not change output ───────────
+
+TEST_CASE("LinkParser: many consecutive backslashes before closing quote", "[link_parser][rfc8288]")
+{
+  SECTION("even backslash count: quote is real delimiter — two segments")
+  {
+    // 4 backslashes = 2 escaped backslashes → quote is real → split into 2 links
+    std::string input = R"(<a.css>; title="foo\\\\", </b.js>; rel=preload; as=script)";
+    auto result       = split_link_header_value(input, 10);
+    REQUIRE(result.size() == 2);
+    CHECK(result[1].find("b.js") != std::string::npos);
+  }
+
+  SECTION("odd backslash count: quote is escaped — one segment (no split)")
+  {
+    // 3 backslashes = 1 escaped backslash + 1 escape of quote → quote escaped → no split
+    std::string input = R"(<a.css>; title="foo\\\", </b.js>; rel=preload; as=script)";
+    auto result       = split_link_header_value(input, 10);
+    // The comma inside the quoted string must NOT split the value
+    REQUIRE(result.size() == 1);
+  }
+}

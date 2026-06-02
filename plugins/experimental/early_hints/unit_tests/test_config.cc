@@ -1990,8 +1990,14 @@ TEST_CASE("R9-12: parse_mode rejects trailing comma", "[config][r9][bug]")
     // "origin-forward," has a trailing comma — malformed input, should fail
     CHECK_FALSE(parse_config(config, {"--mode", "origin-forward,"}));
   }
-  SECTION("trailing comma after two modes") { CHECK_FALSE(parse_config(config, {"--mode", "auto-learn,origin-forward,"})); }
-  SECTION("valid comma-separated modes still work") { CHECK(parse_config(config, {"--mode", "auto-learn,origin-forward"})); }
+  SECTION("trailing comma after two modes")
+  {
+    CHECK_FALSE(parse_config(config, {"--mode", "auto-learn,origin-forward,"}));
+  }
+  SECTION("valid comma-separated modes still work")
+  {
+    CHECK(parse_config(config, {"--mode", "auto-learn,origin-forward"}));
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2217,7 +2223,10 @@ TEST_CASE("Config preload whitelist", "[config]")
 
 TEST_CASE("has_valid_as_for_preload validation", "[config][as-validation]")
 {
-  SECTION("rel=preload with valid as=script returns true") { CHECK(has_valid_as_for_preload("</app.js>; rel=preload; as=script")); }
+  SECTION("rel=preload with valid as=script returns true")
+  {
+    CHECK(has_valid_as_for_preload("</app.js>; rel=preload; as=script"));
+  }
 
   SECTION("rel=preload with valid as=style returns true")
   {
@@ -2229,9 +2238,15 @@ TEST_CASE("has_valid_as_for_preload validation", "[config][as-validation]")
     CHECK(has_valid_as_for_preload("</hero.webp>; rel=preload; as=image"));
   }
 
-  SECTION("rel=preload with valid as=font returns true") { CHECK(has_valid_as_for_preload("</font.woff2>; rel=preload; as=font")); }
+  SECTION("rel=preload with valid as=font returns true")
+  {
+    CHECK(has_valid_as_for_preload("</font.woff2>; rel=preload; as=font"));
+  }
 
-  SECTION("rel=preload with valid as=fetch returns true") { CHECK(has_valid_as_for_preload("</api/data>; rel=preload; as=fetch")); }
+  SECTION("rel=preload with valid as=fetch returns true")
+  {
+    CHECK(has_valid_as_for_preload("</api/data>; rel=preload; as=fetch"));
+  }
 
   SECTION("all valid as= values accepted for rel=preload")
   {
@@ -2245,7 +2260,10 @@ TEST_CASE("has_valid_as_for_preload validation", "[config][as-validation]")
     }
   }
 
-  SECTION("rel=preload WITHOUT as= returns false") { CHECK_FALSE(has_valid_as_for_preload("</app.js>; rel=preload")); }
+  SECTION("rel=preload WITHOUT as= returns false")
+  {
+    CHECK_FALSE(has_valid_as_for_preload("</app.js>; rel=preload"));
+  }
 
   SECTION("rel=preload with as= missing value returns false")
   {
@@ -2309,7 +2327,10 @@ TEST_CASE("has_valid_as_for_preload validation", "[config][as-validation]")
     CHECK(has_valid_as_for_preload("</app.js>; as=script; rel=preload"));
   }
 
-  SECTION("as= with extra whitespace still parsed") { CHECK(has_valid_as_for_preload("</app.js>; rel=preload; as=script ")); }
+  SECTION("as= with extra whitespace still parsed")
+  {
+    CHECK(has_valid_as_for_preload("</app.js>; rel=preload; as=script "));
+  }
 }
 
 TEST_CASE("Soft-warn: link accepted despite missing as=", "[config][as-validation][soft-warn]")
@@ -2639,9 +2660,15 @@ TEST_CASE("Config: space (0x20) in link URL rejected by is_valid_link_value", "[
     CHECK_FALSE(is_valid_link_value("</path with spaces>; rel=preload; as=style"));
   }
 
-  SECTION("space in URL at start is rejected") { CHECK_FALSE(is_valid_link_value("< /style.css>; rel=preload; as=style")); }
+  SECTION("space in URL at start is rejected")
+  {
+    CHECK_FALSE(is_valid_link_value("< /style.css>; rel=preload; as=style"));
+  }
 
-  SECTION("URL with no spaces still accepted (baseline)") { CHECK(is_valid_link_value("</style.css>; rel=preload; as=style")); }
+  SECTION("URL with no spaces still accepted (baseline)")
+  {
+    CHECK(is_valid_link_value("</style.css>; rel=preload; as=style"));
+  }
 
   SECTION("URL with tab (0x09) is still rejected (pre-existing behaviour)")
   {
@@ -2787,9 +2814,15 @@ TEST_CASE("normalize_link_for_hint: stylesheet conversion", "[config][normalize]
     CHECK(result == "</a.css>; rel=preload; as=style");
   }
 
-  SECTION("empty string returns empty") { CHECK(normalize_link_for_hint("").empty()); }
+  SECTION("empty string returns empty")
+  {
+    CHECK(normalize_link_for_hint("").empty());
+  }
 
-  SECTION("link with no rel returns empty") { CHECK(normalize_link_for_hint("</x.css>; foo=bar").empty()); }
+  SECTION("link with no rel returns empty")
+  {
+    CHECK(normalize_link_for_hint("</x.css>; foo=bar").empty());
+  }
 }
 
 TEST_CASE("normalize_link_for_hint: boundary-aware rel matching", "[config][normalize][boundary]")
@@ -2992,15 +3025,30 @@ TEST_CASE("Config: is_valid_header_name() validates RFC 7230 tchar", "[config][p
     CHECK(is_valid_header_name("x-custom-123"));
   }
 
-  SECTION("invalid: empty string") { CHECK_FALSE(is_valid_header_name("")); }
+  SECTION("invalid: empty string")
+  {
+    CHECK_FALSE(is_valid_header_name(""));
+  }
 
-  SECTION("invalid: contains space") { CHECK_FALSE(is_valid_header_name("X Purge")); }
+  SECTION("invalid: contains space")
+  {
+    CHECK_FALSE(is_valid_header_name("X Purge"));
+  }
 
-  SECTION("invalid: contains colon") { CHECK_FALSE(is_valid_header_name("X:Purge")); }
+  SECTION("invalid: contains colon")
+  {
+    CHECK_FALSE(is_valid_header_name("X:Purge"));
+  }
 
-  SECTION("invalid: contains control character") { CHECK_FALSE(is_valid_header_name("X-\x01Purge")); }
+  SECTION("invalid: contains control character")
+  {
+    CHECK_FALSE(is_valid_header_name("X-\x01Purge"));
+  }
 
-  SECTION("invalid: contains parenthesis") { CHECK_FALSE(is_valid_header_name("X-(Purge)")); }
+  SECTION("invalid: contains parenthesis")
+  {
+    CHECK_FALSE(is_valid_header_name("X-(Purge)"));
+  }
 }
 
 // Tests for is_valid_link_value() scheme authority separator enforcement
@@ -3178,11 +3226,20 @@ TEST_CASE("has_valid_as_for_preload: quoted as= variants accepted", "[config]")
     CHECK(has_valid_as_for_preload(R"(<app.js>; rel=preload; as="script")"));
   }
 
-  SECTION("as='script' single-quoted is valid") { CHECK(has_valid_as_for_preload(R"(<app.js>; rel=preload; as='script')")); }
+  SECTION("as='script' single-quoted is valid")
+  {
+    CHECK(has_valid_as_for_preload(R"(<app.js>; rel=preload; as='script')"));
+  }
 
-  SECTION("as=\"style\" double-quoted is valid") { CHECK(has_valid_as_for_preload(R"(<style.css>; rel=preload; as="style")")); }
+  SECTION("as=\"style\" double-quoted is valid")
+  {
+    CHECK(has_valid_as_for_preload(R"(<style.css>; rel=preload; as="style")"));
+  }
 
-  SECTION("as=\"font\" double-quoted is valid") { CHECK(has_valid_as_for_preload(R"(<font.woff2>; rel=preload; as="font")")); }
+  SECTION("as=\"font\" double-quoted is valid")
+  {
+    CHECK(has_valid_as_for_preload(R"(<font.woff2>; rel=preload; as="font")"));
+  }
 
   SECTION("unquoted as=script still works (regression guard)")
   {
@@ -3253,5 +3310,30 @@ TEST_CASE("Config whitelist: port in pattern stripped at parse time", "[config]"
     EarlyHintsConfig config;
     CHECK(parse_config(config, {"--crossorigin-whitelist", "*.example.com:8080"}));
     CHECK(config.is_whitelisted_domain("cdn.example.com"));
+  }
+}
+
+// ─── Non-regression: has_valid_as_for_preload rel= boundary ────────────────────
+
+TEST_CASE("has_valid_as_for_preload: strict rel= boundary matches check_rel in is_valid_link_value", "[config][regression]")
+{
+  SECTION("rel=preload at end of string is valid")
+  {
+    CHECK(has_valid_as_for_preload("</js>; rel=preload; as=script"));
+  }
+
+  SECTION("rel=preload followed by semicolon is valid")
+  {
+    CHECK(has_valid_as_for_preload("</js>; as=script; rel=preload"));
+  }
+
+  SECTION("rel=preload with no as= is invalid (preload requires as=)")
+  {
+    CHECK_FALSE(has_valid_as_for_preload("</js>; rel=preload"));
+  }
+
+  SECTION("rel=modulepreload without as= is valid (HTML spec: as= optional)")
+  {
+    CHECK(has_valid_as_for_preload("</app.mjs>; rel=modulepreload"));
   }
 }

@@ -1198,6 +1198,12 @@ TSRemapDoRemap(void *ih, TSHttpTxn rh, TSRemapRequestInfo * /* rri ATS_UNUSED */
 
   // Check protocol: H2 only
   if (TSHttpTxnClientProtocolStackContains(rh, "h2") == nullptr) {
+    // Set has_learned so READ_RESPONSE/CACHE_HDR can skip the HTML scanner
+    // when this URL has already been learned. Without this, the scanner
+    // attaches on every H1 response even for well-known pages, wasting CPU.
+    if (!cache_key.empty() && (config->mode() & (EarlyHintsConfig::MODE_AUTO_LEARN | EarlyHintsConfig::MODE_ORIGIN_FORWARD))) {
+      req_data->has_learned = (cache->peek(cache_key) != nullptr);
+    }
     increment_stat(stat_103_skipped_h1, 1);
     req_data->debug_status = "skipped-h1";
     TSDebug(PLUGIN_NAME, "skipping 103 for %s: client is not H2 (103 requires HTTP/2 or HTTP/3 informational response support)",
@@ -1207,6 +1213,9 @@ TSRemapDoRemap(void *ih, TSHttpTxn rh, TSRemapRequestInfo * /* rri ATS_UNUSED */
 
   // Check navigate mode
   if (config->navigate_only() && !is_navigate_request(req_bufp, req_hdr_loc)) {
+    if (!cache_key.empty() && (config->mode() & (EarlyHintsConfig::MODE_AUTO_LEARN | EarlyHintsConfig::MODE_ORIGIN_FORWARD))) {
+      req_data->has_learned = (cache->peek(cache_key) != nullptr);
+    }
     increment_stat(stat_103_skipped_non_nav, 1);
     req_data->debug_status = "skipped-non-navigate";
     TSDebug(PLUGIN_NAME, "skipping 103 for %s: non-navigate request (Sec-Fetch-Mode != navigate)", cache_key.c_str());
@@ -1215,6 +1224,9 @@ TSRemapDoRemap(void *ih, TSHttpTxn rh, TSRemapRequestInfo * /* rri ATS_UNUSED */
 
   // Check bot detection
   if (config->skip_bots() && is_bot_user_agent(req_bufp, req_hdr_loc)) {
+    if (!cache_key.empty() && (config->mode() & (EarlyHintsConfig::MODE_AUTO_LEARN | EarlyHintsConfig::MODE_ORIGIN_FORWARD))) {
+      req_data->has_learned = (cache->peek(cache_key) != nullptr);
+    }
     increment_stat(stat_103_skipped_bot, 1);
     req_data->debug_status = "skipped-bot";
     TSDebug(PLUGIN_NAME, "skipping 103 for %s: bot User-Agent detected", cache_key.c_str());

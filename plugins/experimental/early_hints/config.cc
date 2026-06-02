@@ -247,8 +247,11 @@ has_valid_as_for_preload(const std::string &link)
     while ((pos = params.find(rel_str, pos)) != std::string::npos) {
       bool before_ok = (pos == 0) || params[pos - 1] == ';' || params[pos - 1] == ' ' || params[pos - 1] == '\t';
       size_t end     = pos + rel_len;
-      bool after_ok  = end >= params.size() || params[end] == ';' || params[end] == ' ' || params[end] == '\t' ||
-                      params[end] == '"' || params[end] == '\'';
+      // Strict boundary: same rule as check_rel in is_valid_link_value() —
+      // only ';', space, tab, or end-of-string terminate the unquoted form.
+      // Quoted variants (rel="preload") are matched with explicit needles
+      // so '"' is not needed (and would permit rel=preload"garbage").
+      bool after_ok = end >= params.size() || params[end] == ';' || params[end] == ' ' || params[end] == '\t';
       if (before_ok && after_ok) {
         return true;
       }
@@ -510,7 +513,7 @@ EarlyHintsConfig::init(int argc, const char *argv[])
   // On glibc, optind=0 triggers a full internal state reset (__getopt_initialized).
   // On BSD/macOS, optreset=1 is required instead.  Match the pattern ATS uses in
   // RemapPluginInfo.cc so this function is safe even outside the remap-load path.
-#if defined(freebsd) || defined(darwin)
+#if defined(__FreeBSD__) || defined(__APPLE__)
   optreset = 1;
 #endif
 #if defined(__GLIBC__)
