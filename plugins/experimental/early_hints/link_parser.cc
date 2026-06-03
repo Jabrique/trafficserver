@@ -12,7 +12,7 @@ split_link_header_value(const std::string &header_value, int max_links)
   }
 
   // Defense against oversized Link headers from malicious origins.
-  if (static_cast<int>(header_value.size()) > MAX_LINK_FIELD_LEN) {
+  if (header_value.size() > static_cast<size_t>(MAX_LINK_FIELD_LEN)) {
     return result;
   }
 
@@ -42,6 +42,14 @@ split_link_header_value(const std::string &header_value, int max_links)
           in_quotes = !in_quotes;
         }
         consecutive_backslashes = 0;
+      } else if (!in_quotes && angle_depth > 0 && ch == ';') {
+        // RFC 8288 section 3: ';' separates link-params and only appears AFTER the closing '>'
+        // of the URI-Reference. A ';' with angle_depth > 0 means the origin omitted the
+        // closing '>' -- the URL angle bracket was never closed. Reset angle_depth so that
+        // subsequent commas are correctly recognized as segment boundaries rather than being
+        // swallowed inside an unbounded angle-bracket context.
+        angle_depth             = 0;
+        consecutive_backslashes = 0;
       } else if (ch == '\\') {
         consecutive_backslashes++;
       } else {
@@ -50,10 +58,10 @@ split_link_header_value(const std::string &header_value, int max_links)
     }
     if (pos == full_val.size() || (full_val[pos] == ',' && angle_depth == 0 && !in_quotes)) {
       size_t end = pos;
-      while (start < end && (full_val[start] == ' ' || full_val[start] == '\t')) {
+      while (start < end && (full_val[start] == ' ' || full_val[start] == '\t' || full_val[start] == '\r')) {
         start++;
       }
-      while (end > start && (full_val[end - 1] == ' ' || full_val[end - 1] == '\t')) {
+      while (end > start && (full_val[end - 1] == ' ' || full_val[end - 1] == '\t' || full_val[end - 1] == '\r')) {
         end--;
       }
       if (end > start) {
@@ -64,6 +72,8 @@ split_link_header_value(const std::string &header_value, int max_links)
       }
       start                   = pos + 1;
       consecutive_backslashes = 0;
+      angle_depth             = 0;
+      in_quotes               = false;
     }
     pos++;
   }
@@ -81,9 +91,9 @@ has_rel_type(const std::string &seg_lower, const std::string &rel_type)
   auto match_needle = [&](const std::string &needle) -> bool {
     size_t pos = 0;
     while ((pos = seg_lower.find(needle, pos)) != std::string::npos) {
-      bool before_ok = (pos == 0) || seg_lower[pos - 1] == ';' || seg_lower[pos - 1] == ' ' || seg_lower[pos - 1] == '\t';
+      bool before_ok = (pos == 0) || seg_lower[pos - 1] == ';' || seg_lower[pos - 1] == ' ' || seg_lower[pos - 1] == '\t' || seg_lower[pos - 1] == '\r';
       size_t after   = pos + needle.size();
-      bool after_ok = (after >= seg_lower.size()) || seg_lower[after] == ';' || seg_lower[after] == ' ' || seg_lower[after] == '\t';
+      bool after_ok = (after >= seg_lower.size()) || seg_lower[after] == ';' || seg_lower[after] == ' ' || seg_lower[after] == '\t' || seg_lower[after] == '\r';
       if (before_ok && after_ok) {
         return true;
       }
@@ -105,23 +115,28 @@ dedup_link_segments(std::vector<std::string> segments, int max_links)
     size_t url_end = seg.find('>');
     bool is_dup    = false;
     if (url_end != std::string::npos) {
-      std::string_view url_key = std::string_view(seg).substr(0, url_end + 1);
-
-      // Case-insensitive check by lowercasing the search string
+      // Case-insensitive check by lowercasing the full segment first.
+      // url_key is taken from seg_lower so the URL prefix comparison is also case-insensitive.
+      // DNS hostnames are case-insensitive (RFC 4343); two segments whose URL differs only
+      // in hostname case must be treated as the same resource.
       std::string seg_lower = seg;
       std::transform(seg_lower.begin(), seg_lower.end(), seg_lower.begin(), [](unsigned char c) { return std::tolower(c); });
-      bool is_preconnect = has_rel_type(seg_lower, "preconnect");
+      std::string_view url_key  = std::string_view(seg_lower).substr(0, url_end + 1);
+      bool             is_preconnect = has_rel_type(seg_lower, "preconnect");
 
       for (const auto &existing : result) {
-        if (existing.size() >= url_key.size() && existing.compare(0, url_key.size(), url_key.data(), url_key.size()) == 0) {
-          // Compare the existing entry's rel type against the incoming segment's rel type case-insensitively
-          std::string existing_lower = existing;
-          std::transform(existing_lower.begin(), existing_lower.end(), existing_lower.begin(),
-                         [](unsigned char c) { return std::tolower(c); });
-          bool existing_preconnect = has_rel_type(existing_lower, "preconnect");
-          if (existing_preconnect == is_preconnect) {
-            is_dup = true;
-            break;
+        std::string existing_lower = existing;
+        std::transform(existing_lower.begin(), existing_lower.end(), existing_lower.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        size_t ex_url_end = existing_lower.find('>');
+        if (ex_url_end != std::string::npos) {
+          std::string_view ex_url_key = std::string_view(existing_lower).substr(0, ex_url_end + 1);
+          if (ex_url_key == url_key) {
+            bool existing_preconnect = has_rel_type(existing_lower, "preconnect");
+            if (existing_preconnect == is_preconnect) {
+              is_dup = true;
+              break;
+            }
           }
         }
       }

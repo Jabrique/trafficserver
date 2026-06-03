@@ -37,6 +37,7 @@ TESTS=(
     early_hints_modulepreload        # modulepreload: as= optional, fetchpriority preserved, script type=module
     early_hints_persist_hardening    # oversized link skip (A-25), future ts clamp (A-09)
     early_hints_scanner_correctness   # </script> escaped close (B-06), \r separator (A-06), first-wins (A-28), crossorigin norm (A-29), preload-whitelist font (A-07)
+    early_hints_link_parser_fixes     # BUG-1 segment state reset, BUG-4a case-insensitive URL dedup, BUG-5a/5b CR boundary handling
 )
 
 PASSED=0

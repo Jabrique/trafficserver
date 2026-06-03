@@ -1213,3 +1213,76 @@ TEST_CASE("finish_attr: unrecognized crossorigin value normalizes to anonymous",
   CHECK(links[0].find("crossorigin=anonymous") != std::string::npos);
   CHECK(links[0].find("crossorigin=garbage") == std::string::npos);
 }
+
+// ===========================================================================================
+// build_link_header() in html_scanner now lowercases both sides of the URL prefix
+// comparison before checking for duplicates. DNS hostnames are case-insensitive (RFC 4343);
+// two preconnect hints for the same cross-origin host with different hostname case are
+// correctly deduplicated to a single hint instead of producing two entries.
+// ===========================================================================================
+
+TEST_CASE("HtmlScanner: build_link_header performs case-insensitive URL dedup",
+          "[html_scanner][dedup]")
+{
+  SECTION("same cross-origin host with different case produces only one preconnect hint")
+  {
+    // Both links point to the same CDN host, but the first uses uppercase hostname.
+    // The scanner converts both to preconnect (cross-origin, not whitelisted).
+    // The internal dedup in build_link_header must recognize them as the same host.
+    // Bug: url_key comparison is case-sensitive -> two preconnect hints for the same host.
+    // Expected after fix: one preconnect hint.
+    std::string html = "<html><head>"
+                       "<link rel=\"preload\" href=\"https://CDN.EXAMPLE.COM/a.js\" as=\"script\">"
+                       "<link rel=\"preload\" href=\"https://cdn.example.com/a.js\" as=\"script\">"
+                       "</head></html>";
+    auto links = scan_html(html);
+    // Both are cross-origin -> both become <https://cdn.example.com>; rel=preconnect
+    // (or <https://CDN.EXAMPLE.COM>; rel=preconnect depending on order).
+    // Regardless of which form is kept, only ONE preconnect should be produced.
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=preconnect") != std::string::npos);
+  }
+
+  SECTION("same cross-origin host in whitelisted preload deduped case-insensitively")
+  {
+    // Both links reference the same host but with different case.
+    // With a whitelist, cross-origin becomes full preload.
+    // The dedup must treat them as the same URL.
+    EarlyHintsConfig cfg;
+    std::vector<const char *> argv = {
+      "http://from.example.com", "http://to.example.com",
+      "--mode", "auto-learn",
+      "--crossorigin-whitelist", "cdn.example.com"
+    };
+    REQUIRE(cfg.init(static_cast<int>(argv.size()), argv.data()));
+
+    HtmlScanner scanner(cfg.scan_limit(), cfg.max_links(), &cfg);
+    std::string html = "<html><head>"
+                       "<link rel=\"preload\" href=\"https://CDN.EXAMPLE.COM/app.js\" as=\"script\">"
+                       "<link rel=\"preload\" href=\"https://cdn.example.com/app.js\" as=\"script\">"
+                       "</head></html>";
+    scanner.feed(html.c_str(), static_cast<int64_t>(html.size()));
+    const auto &links = scanner.get_links();
+    // Both reference the same resource; only one preload hint should be produced.
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=preload") != std::string::npos);
+  }
+
+  SECTION("two genuinely different cross-origin hosts both produce preconnect hints")
+  {
+    // Regression: distinct hosts must NOT be merged
+    std::string html = "<html><head>"
+                       "<link rel=\"preload\" href=\"https://cdn1.example.com/a.js\" as=\"script\">"
+                       "<link rel=\"preload\" href=\"https://cdn2.example.com/b.js\" as=\"script\">"
+                       "</head></html>";
+    auto links = scan_html(html);
+    REQUIRE(links.size() == 2);
+    bool has_cdn1 = false, has_cdn2 = false;
+    for (const auto &l : links) {
+      if (l.find("cdn1.example.com") != std::string::npos) has_cdn1 = true;
+      if (l.find("cdn2.example.com") != std::string::npos) has_cdn2 = true;
+    }
+    CHECK(has_cdn1);
+    CHECK(has_cdn2);
+  }
+}

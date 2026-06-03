@@ -231,3 +231,222 @@ TEST_CASE("LinkParser: many consecutive backslashes before closing quote", "[lin
     REQUIRE(result.size() == 1);
   }
 }
+
+// ===========================================================================================
+// split_link_header_value() uses a semicolon-inside-angle-bracket heuristic to recover from
+// malformed Link headers where '<' is never closed. When ';' is seen while angle_depth > 0,
+// the bracket was never closed; angle_depth is reset to zero so subsequent commas are
+// correctly recognized as segment boundaries and valid segments after the malformed one survive.
+// ===========================================================================================
+
+TEST_CASE("LinkParser: unclosed angle bracket in segment does not suppress subsequent segments",
+          "[link_parser][segment-state]")
+{
+  SECTION("unclosed angle bracket in first segment drops all subsequent segments")
+  {
+    // Segment 1: '<' with no closing '>' -- angle_depth stays 1 after the comma
+    // Segment 2: valid -- but the comma before it is ignored (angle_depth == 1)
+    // Expected: 2 segments; Bug produces: 1 giant segment
+    std::string input = "<unclosed-url; rel=preload, </valid.js>; rel=preload; as=script";
+    auto result       = split_link_header_value(input, 10);
+    REQUIRE(result.size() == 2);
+    CHECK(result[1] == "</valid.js>; rel=preload; as=script");
+  }
+
+  SECTION("three segments where only the first is malformed")
+  {
+    std::string input =
+      "<bad-unclosed; rel=preload, </good1.js>; rel=preload; as=script, </good2.css>; rel=preload; as=style";
+    auto result = split_link_header_value(input, 10);
+    REQUIRE(result.size() == 3);
+    CHECK(result[1] == "</good1.js>; rel=preload; as=script");
+    CHECK(result[2] == "</good2.css>; rel=preload; as=style");
+  }
+
+  SECTION("valid first segment followed by valid second segment is unaffected")
+  {
+    // Regression: properly closed segments must still split correctly after the fix
+    std::string input = "</a.css>; rel=preload; as=style, </b.js>; rel=preload; as=script";
+    auto result       = split_link_header_value(input, 10);
+    REQUIRE(result.size() == 2);
+    CHECK(result[0] == "</a.css>; rel=preload; as=style");
+    CHECK(result[1] == "</b.js>; rel=preload; as=script");
+  }
+}
+
+TEST_CASE("LinkParser: unclosed quoted string keeps comma inside its context",
+          "[link_parser][segment-state]")
+{
+  SECTION("unclosed double-quote keeps comma inside its quoted context -- no split")
+  {
+    // An origin sends a segment whose quoted value is never closed.
+    // Per RFC 7230 section 3.2.6, a comma inside a quoted-string is NOT a separator.
+    // The correct behavior is to produce 1 segment (the whole string) because the
+    // quote context is active. Splitting here would break valid headers that have
+    // commas inside properly balanced quoted values.
+    std::string input = "</a.css>; title=\"unclosed, </b.js>; rel=preload; as=script";
+    auto result       = split_link_header_value(input, 10);
+    // Correct: comma inside unclosed quote is not a separator -> 1 segment
+    REQUIRE(result.size() == 1);
+  }
+
+  SECTION("in_quotes state resets after a properly closed quoted segment")
+  {
+    // After a segment with a balanced quote that happened to end mid-context,
+    // the next segment starts with a fresh in_quotes = false state.
+    // Input: seg1 has a closed quoted title, seg2 is normal.
+    // Both must be parsed as separate segments.
+    std::string input = "</a.css>; title=\"val\", </b.js>; rel=preload; as=script";
+    auto result       = split_link_header_value(input, 10);
+    REQUIRE(result.size() == 2);
+    CHECK(result[0] == "</a.css>; title=\"val\"");
+    CHECK(result[1] == "</b.js>; rel=preload; as=script");
+  }
+}
+
+// ===========================================================================================
+// The MAX_LINK_FIELD_LEN guard compared via static_cast<int>(size()) which is
+// implementation-defined for values exceeding INT_MAX. The comparison is now
+// performed entirely in the unsigned domain to guarantee defined behavior.
+// ===========================================================================================
+
+TEST_CASE("LinkParser: header size guard uses unsigned comparison at boundary",
+          "[link_parser][size-guard]")
+{
+  SECTION("header exactly at limit is accepted")
+  {
+    // Build a valid-looking header padded to exactly MAX_LINK_FIELD_LEN (8192) bytes.
+    // The URL is valid; trailing spaces are harmless whitespace.
+    std::string input = "</a.css>; rel=preload; as=style";
+    input.resize(8192, ' ');
+    auto result = split_link_header_value(input, 10);
+    // One segment (the link, padded with spaces that are trimmed)
+    REQUIRE(result.size() == 1);
+    CHECK(result[0].find("/a.css") != std::string::npos);
+  }
+
+  SECTION("header one byte over limit is rejected")
+  {
+    std::string input = "</a.css>; rel=preload; as=style";
+    input.resize(8193, ' ');
+    auto result = split_link_header_value(input, 10);
+    CHECK(result.empty());
+  }
+}
+
+// ===========================================================================================
+// dedup_link_segments() now derives url_key from the lowercased copy of the segment
+// so that URL prefix comparison is case-insensitive. DNS hostnames are case-insensitive
+// per RFC 4343; two segments whose URL differs only in hostname case are the same resource.
+// ===========================================================================================
+
+TEST_CASE("LinkParser: dedup_link_segments performs case-insensitive URL comparison",
+          "[link_parser][dedup]")
+{
+  SECTION("uppercase scheme+host is duplicate of lowercase")
+  {
+    std::vector<std::string> segs = {
+      "<HTTPS://CDN.EXAMPLE.COM/a.js>; rel=preload; as=script",
+      "<https://cdn.example.com/a.js>; rel=preload; as=script"
+    };
+    auto result = dedup_link_segments(segs, 10);
+    // Bug: both survive (url_key comparison is case-sensitive) -> size == 2
+    // Expected after fix: size == 1
+    CHECK(result.size() == 1);
+  }
+
+  SECTION("mixed case host is deduplicated")
+  {
+    std::vector<std::string> segs = {
+      "<https://CDN.Example.Com/font.woff2>; rel=preload; as=font; crossorigin=anonymous",
+      "<https://cdn.example.com/font.woff2>; rel=preload; as=font; crossorigin=anonymous"
+    };
+    auto result = dedup_link_segments(segs, 10);
+    CHECK(result.size() == 1);
+  }
+
+  SECTION("preconnect with uppercase host is deduplicated")
+  {
+    std::vector<std::string> segs = {
+      "<https://FONTS.GSTATIC.COM>; rel=preconnect",
+      "<https://fonts.gstatic.com>; rel=preconnect"
+    };
+    auto result = dedup_link_segments(segs, 10);
+    CHECK(result.size() == 1);
+  }
+
+  SECTION("different URLs with same case prefix are not deduped")
+  {
+    // Regression: URLs that genuinely differ must NOT be merged
+    std::vector<std::string> segs = {
+      "<https://cdn.example.com/a.js>; rel=preload; as=script",
+      "<https://cdn.example.com/b.js>; rel=preload; as=script"
+    };
+    auto result = dedup_link_segments(segs, 10);
+    CHECK(result.size() == 2);
+  }
+}
+
+// ===========================================================================================
+// has_rel_type() now includes carriage return in its boundary character set.
+// A segment with rel= value followed by CR (HTTP line-folding artefact from some origin
+// middleware) is correctly recognized as the expected rel type so dedup works correctly.
+// ===========================================================================================
+
+TEST_CASE("LinkParser: has_rel_type accepts carriage return as boundary character",
+          "[link_parser][has-rel-type]")
+{
+  SECTION("rel=preconnect followed by CR is recognized as preconnect for dedup")
+  {
+    // seg[0]: rel=preconnect\r -- after_ok fails on '\r' -> not seen as preconnect
+    // seg[1]: rel=preconnect   -- recognized correctly
+    // Without fix: different types -> both survive -> size == 2
+    // With fix: same type -> deduped -> size == 1
+    std::vector<std::string> segs = {
+      "<https://cdn.example.com>; rel=preconnect\r",
+      "<https://cdn.example.com>; rel=preconnect"
+    };
+    auto result = dedup_link_segments(segs, 10);
+    CHECK(result.size() == 1);
+  }
+
+  SECTION("CR before rel= value is accepted as boundary")
+  {
+    std::vector<std::string> segs = {
+      "<https://fonts.gstatic.com>; \rrel=preconnect",
+      "<https://fonts.gstatic.com>; rel=preconnect"
+    };
+    auto result = dedup_link_segments(segs, 10);
+    CHECK(result.size() == 1);
+  }
+}
+
+// ===========================================================================================
+// split_link_header_value() trim loops now include carriage return so CR artefacts
+// from HTTP line-folding are removed from segment boundaries before storage.
+// This prevents the poisoned segment string from causing has_rel_type() mismatches.
+// ===========================================================================================
+
+TEST_CASE("LinkParser: carriage return is trimmed from segment leading and trailing boundary",
+          "[link_parser][trim]")
+{
+  SECTION("trailing CR is removed before segment is stored")
+  {
+    std::string input = "</a.css>; rel=preload; as=style\r, </b.js>; rel=preload; as=script";
+    auto result       = split_link_header_value(input, 10);
+    REQUIRE(result.size() == 2);
+    // First segment must NOT contain a trailing '\r'
+    CHECK(result[0].back() != '\r');
+    CHECK(result[0] == "</a.css>; rel=preload; as=style");
+  }
+
+  SECTION("leading CR is removed before segment is stored")
+  {
+    // After a comma the next segment starts with '\r' before the URL
+    std::string input = "</a.css>; rel=preload; as=style, \r</b.js>; rel=preload; as=script";
+    auto result       = split_link_header_value(input, 10);
+    REQUIRE(result.size() == 2);
+    CHECK(result[1].front() != '\r');
+    CHECK(result[1] == "</b.js>; rel=preload; as=script");
+  }
+}

@@ -129,6 +129,23 @@ static const char *bot_signatures[] = {"googlebot",
 
 // ─── Utility Functions ──────────────────────────────────────────────────────
 
+// Compare two byte sequences in constant time to prevent timing side-channel attacks.
+// Uses a volatile XOR accumulator so the compiler cannot short-circuit the loop.
+// Length mismatch is checked first; secret length is fixed at config load and
+// does not change per request, so leaking it via the fast path is acceptable.
+static bool
+constant_time_eq(const char *a, size_t a_len, const char *b, size_t b_len)
+{
+  if (a_len != b_len) {
+    return false;
+  }
+  volatile int diff = 0;
+  for (size_t i = 0; i < a_len; i++) {
+    diff |= (static_cast<unsigned char>(a[i]) ^ static_cast<unsigned char>(b[i]));
+  }
+  return diff == 0;
+}
+
 static bool
 is_bot_user_agent(TSMBuffer bufp, TSMLoc hdr_loc)
 {
@@ -1244,8 +1261,8 @@ TSRemapDoRemap(void *ih, TSHttpTxn rh, TSRemapRequestInfo * /* rri ATS_UNUSED */
       int val_len               = 0;
       const char *val           = TSMimeHdrFieldValueStringGet(req_bufp, req_hdr_loc, purge_field_loc, -1, &val_len);
       const std::string &secret = config->purge_secret();
-      // Note: not constant-time — acceptable for internal CDN use (per ATS remap_purge.c precedent)
-      bool token_ok = val && val_len == static_cast<int>(secret.size()) && memcmp(val, secret.c_str(), val_len) == 0;
+      bool token_ok = val && constant_time_eq(val, static_cast<size_t>(val_len),
+                                              secret.c_str(), secret.size());
       TSHandleMLocRelease(req_bufp, req_hdr_loc, purge_field_loc);
       if (token_ok) {
         cache->remove(cache_key);
