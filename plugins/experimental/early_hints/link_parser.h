@@ -8,11 +8,12 @@ static const int MAX_LINK_FIELD_LEN = 8192;
 
 std::vector<std::string> split_link_header_value(const std::string &header_value, int max_links);
 
-/// Deduplicate a list of validated link segments by <URL>+rel-type pair.
+/// Deduplicate a list of validated link segments by URL key (strongest-wins).
 ///
 /// Two segments are considered duplicates if they share the same <URL> prefix
-/// (up to and including the closing '>') AND the same rel type (preconnect vs
-/// non-preconnect).  Only the first occurrence is kept.
+/// (up to and including the closing '>'), case-insensitively.  When a
+/// preload/modulepreload and a preconnect share the same URL, the stronger
+/// type (preload) replaces the weaker (preconnect).
 ///
 /// Extracted from origin-forward dedup logic in early_hints.cc so it can be
 /// unit-tested independently of the ATS plugin API.

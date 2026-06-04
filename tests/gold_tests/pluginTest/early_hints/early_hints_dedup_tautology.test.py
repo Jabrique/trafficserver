@@ -18,38 +18,18 @@ Test 103 Early Hints plugin — origin-forward dedup tautological comparison
 #  limitations under the License.
 
 Test.Summary = '''
-Origin-forward dedup tautological comparison.
+Origin-forward dedup: URL-only strongest-wins.
 
-Bug in dedup_link_segments(): the inner check compares
-  (seg.find("rel=preconnect") != npos) == is_preconnect
-which is always true (tautological — both sides from same `seg`).
-The second entry for the same URL is ALWAYS dropped, regardless of rel type.
+Dedup unification: same URL = same resource, regardless of rel type.
+When origin sends both rel=preconnect and rel=preload for the same URL,
+the stronger type (preload/modulepreload) wins and the weaker (preconnect)
+is dropped. Only one entry per URL key is cached and served.
 
-Critical scenario:
-  Origin sends: rel=preconnect FIRST, then rel=preload; as=script.
-  Bug: dedup drops rel=preload (it comes second → false dup → dropped).
-  Result: only preconnect cached → 103 has only preconnect.
-  Fix: rel=preload survives dedup → both cached → merge_hint_links picks preload
-       (preload appears first in cached list after preconnect).
-
-Wait — merge_hint_links deduplicates by URL key only. So even with both cached,
-only the FIRST one (preconnect) would appear in 103 if they share the same URL.
-
-Actual user-visible impact of the dedup bug:
-  When origin sends ONLY rel=preconnect for an asset (no preload), that gets
-  cached and served correctly.
-  When origin sends BOTH rel=preconnect AND rel=preload for the SAME URL,
-  only the FIRST one is kept (second is false-deduped).
-  If preconnect comes first: preload is dropped → 103 only has preconnect (weaker hint).
-  If preload comes first: preconnect is dropped → 103 has preload (correct but loses preconnect).
-
-The measurable gold test: verify that a URL with ONLY preconnect from origin
-works correctly (regression guard), and that the dedup_link_segments fix
-does not break genuine dedup (same URL + same rel = dedup correctly).
-
-The unit tests in test_integration.cc directly prove the dedup bug
-via dedup_link_segments() calls. The gold test serves as an end-to-end
-regression guard for the origin-forward dedup path.
+Scenarios:
+  A: preconnect-only (single URL, no conflict) -- must be cached and served.
+  B: multi-asset (different URLs) -- both survive, no false dedup.
+  C: strongest-wins -- origin sends preconnect + preload for same URL,
+     only preload must survive in 103.
 '''
 
 Test.SkipUnless(
@@ -116,6 +96,34 @@ microserver.addResponse(
             "Link: </cdn/app.js>; rel=preload; as=script\r\n"
             "\r\n",
         "body": "<html><body>Multi-asset</body></html>\r\n"
+    })
+
+# Scenario C: origin sends preconnect THEN preload for SAME URL.
+# Strongest-wins: preload must replace preconnect, only preload cached.
+microserver.addResponse(
+    "sessionfile.log", {
+        "headers": "GET /strongest-wins.html HTTP/1.1\r\nHost: www.example.com\r\n\r\n",
+        "body": ""
+    }, {
+        "headers":
+            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/html\r\n"
+            "Link: </cdn/vendor.js>; rel=preconnect\r\n"
+            "Link: </cdn/vendor.js>; rel=preload; as=script\r\n"
+            "\r\n",
+        "body": "<html><body>Strongest wins</body></html>\r\n"
+    })
+
+microserver.addResponse(
+    "sessionfile.log", {
+        "headers": "GET /strongest-wins.html HTTP/1.1\r\nHost: www.example.com\r\n\r\n",
+        "body": ""
+    }, {
+        "headers":
+            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/html\r\n"
+            "Link: </cdn/vendor.js>; rel=preconnect\r\n"
+            "Link: </cdn/vendor.js>; rel=preload; as=script\r\n"
+            "\r\n",
+        "body": "<html><body>Strongest wins</body></html>\r\n"
     })
 
 # ----
@@ -207,3 +215,36 @@ tr3.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr3.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
     "rel=preload; as=script", "app.js rel=preload must be served")
 tr3.StillRunningAfter = microserver
+
+# ----
+# TC4: Learn -- strongest-wins page (preconnect then preload for same URL)
+# ----
+tr4 = Test.AddTestRun("Strongest-wins: Learn page with preconnect + preload for same URL")
+tr4.Processes.Default.Command = (
+    "curl -s -D - -o /dev/null"
+    " --http2 --insecure"
+    " 'https://127.0.0.1:{0}/strongest-wins.html'".format(ts.Variables.ssl_port))
+tr4.Processes.Default.ReturnCode = 0
+tr4.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression("200", "Should receive 200")
+tr4.StillRunningAfter = microserver
+
+# ----
+# TC5: Serve -- only preload must survive in 103 (preconnect dropped by strongest-wins)
+# Use awk to extract only the 103 section from curl output.
+# The 200 response naturally forwards origin Link headers (including preconnect),
+# so the ExcludesExpression must only check the 103 section.
+# ----
+tr5 = Test.AddTestRun("Strongest-wins: Only preload must survive in 103")
+tr5.Processes.Default.Command = (
+    "sleep 1 ; curl -s -D - -o /dev/null"
+    " --http2 --insecure"
+    " 'https://127.0.0.1:{0}/strongest-wins.html'"
+    " | awk '/^HTTP\\/2 103/{{found=1}} /^HTTP\\/2 [^1]/{{found=0}} found'".format(ts.Variables.ssl_port))
+tr5.Processes.Default.ReturnCode = 0
+tr5.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
+    "103", "103 section must be present")
+tr5.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
+    "rel=preload; as=script", "preload must survive strongest-wins dedup in 103")
+tr5.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
+    "rel=preconnect", "preconnect must not appear in 103 section (dropped by strongest-wins)")
+tr5.StillRunningAfter = microserver

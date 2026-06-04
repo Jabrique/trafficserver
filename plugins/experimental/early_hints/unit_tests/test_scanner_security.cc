@@ -230,7 +230,7 @@ TEST_CASE("HtmlScanner: CDATA bogus comment handling", "[html_scanner][security]
     // Everything until the first > is consumed. Links inside should NOT be extracted.
     std::string html = R"(<html><head><![CDATA[<link rel="preload" href="/evil.css" as="style">]]>)"
                        R"(<link rel="preload" href="/real.css" as="style"></head></html>)";
-    auto links       = scan_html(html);
+    auto links = scan_html(html);
     REQUIRE(links.size() == 1);
     CHECK(links[0].find("/real.css") != std::string::npos);
     CHECK(links[0].find("/evil.css") == std::string::npos);
@@ -249,7 +249,7 @@ TEST_CASE("HtmlScanner: script data escaped state", "[html_scanner][security][ed
     std::string html = R"(<html><head><script><!--</script>)"
                        R"(<link rel="preload" href="/evil.css" as="style">)"
                        R"(--></script><link rel="preload" href="/real.css" as="style"></head></html>)";
-    auto links       = scan_html(html);
+    auto links = scan_html(html);
     REQUIRE(links.size() == 2);
     bool has_evil = false, has_real = false;
     for (const auto &l : links) {
@@ -308,7 +308,7 @@ TEST_CASE("html_scanner script injection via digit after close tag name", "[html
   {
     std::string html = R"(<html><head><script>x="</script0><link rel=preload href=//evil.com/x as=font>";</script>)"
                        R"(<link rel="preload" href="/real.css" as="style"></head></html>)";
-    auto links       = scan_html(html);
+    auto links = scan_html(html);
     // Only the real link after </script> should be found, not the fake one inside the script
     REQUIRE(links.size() == 1);
     CHECK(links[0].find("/real.css") != std::string::npos);
@@ -319,7 +319,7 @@ TEST_CASE("html_scanner script injection via digit after close tag name", "[html
   {
     std::string html = R"(<html><head><script>x="</script.><link rel=preload href=//evil.com/x as=font>";</script>)"
                        R"(<link rel="preload" href="/real.js" as="script"></head></html>)";
-    auto links       = scan_html(html);
+    auto links = scan_html(html);
     REQUIRE(links.size() == 1);
     CHECK(links[0].find("/real.js") != std::string::npos);
     CHECK(links[0].find("evil.com") == std::string::npos);
@@ -1043,7 +1043,7 @@ TEST_CASE("R5: body tag implicitly closes head", "[html_scanner][r5]")
                        "<body>"
                        "<link rel=\"preload\" href=\"/after.css\" as=\"style\">"
                        "</body></html>";
-    auto links       = scan_html(html);
+    auto links = scan_html(html);
     REQUIRE(links.size() == 1);
     CHECK(links[0] == "</before.css>; rel=preload; as=style");
   }
@@ -1055,7 +1055,7 @@ TEST_CASE("R5: body tag implicitly closes head", "[html_scanner][r5]")
                        "<BODY>"
                        "<link rel=\"stylesheet\" href=\"/b.css\">"
                        "</BODY></html>";
-    auto links       = scan_html(html);
+    auto links = scan_html(html);
     REQUIRE(links.size() == 1);
   }
 
@@ -1064,7 +1064,7 @@ TEST_CASE("R5: body tag implicitly closes head", "[html_scanner][r5]")
     std::string html = "<html><head>"
                        "<link rel=\"preload\" href=\"/x.js\" as=\"script\">"
                        "<body><div>content</div></body></html>";
-    auto links       = scan_html(html);
+    auto links = scan_html(html);
     REQUIRE(links.size() == 1);
     CHECK(links[0] == "</x.js>; rel=preload; as=script");
   }
@@ -1144,7 +1144,7 @@ TEST_CASE("R5: script_comment_pos_ is bounded", "[html_scanner][r5]")
                        "<script><!-- var x = 1; --></script>"
                        "<link rel=\"stylesheet\" href=\"/b.css\">"
                        "</head></html>";
-    auto links       = scan_html(html);
+    auto links = scan_html(html);
     REQUIRE(links.size() == 1);
     CHECK(links[0] == "</b.css>; rel=preload; as=style");
   }
@@ -1222,7 +1222,7 @@ TEST_CASE("R6: body with attributes closes head", "[scanner][r6]")
                        "<body class='main'>"
                        "<link rel=\"stylesheet\" href=\"/should-not-be-found.css\">"
                        "</body></html>";
-    auto links       = scan_html(html);
+    auto links = scan_html(html);
     REQUIRE(links.size() == 1);
     CHECK(links[0].find("/a.js") != std::string::npos);
   }
@@ -1234,7 +1234,7 @@ TEST_CASE("R6: body with attributes closes head", "[scanner][r6]")
                        "<body id=main>"
                        "<link rel=\"stylesheet\" href=\"/not-found.css\">"
                        "</body></html>";
-    auto links       = scan_html(html);
+    auto links = scan_html(html);
     REQUIRE(links.size() == 1);
   }
 
@@ -1245,7 +1245,7 @@ TEST_CASE("R6: body with attributes closes head", "[scanner][r6]")
                        "<body data-x >"
                        "<link rel=\"stylesheet\" href=\"/not-found.css\">"
                        "</body></html>";
-    auto links       = scan_html(html);
+    auto links = scan_html(html);
     REQUIRE(links.size() == 1);
   }
 
@@ -1256,7 +1256,7 @@ TEST_CASE("R6: body with attributes closes head", "[scanner][r6]")
                        "<body onload=\"init()\">"
                        "<link rel=\"stylesheet\" href=\"/no.css\">"
                        "</body></html>";
-    auto links       = scan_html(html);
+    auto links = scan_html(html);
     REQUIRE(links.size() == 1);
   }
 }
@@ -1267,7 +1267,7 @@ TEST_CASE("R6: empty script body", "[scanner][r6]")
                      "<script></script>"
                      "<link rel=\"stylesheet\" href=\"/after-script.css\">"
                      "</head></html>";
-  auto links       = scan_html(html);
+  auto links = scan_html(html);
   REQUIRE(links.size() == 1);
   CHECK(links[0].find("/after-script.css") != std::string::npos);
 }
@@ -1278,7 +1278,7 @@ TEST_CASE("R6: </script> inside <style> does not close style", "[scanner][r6]")
                      "<style>/* </script> */</style>"
                      "<link rel=\"stylesheet\" href=\"/after-style.css\">"
                      "</head></html>";
-  auto links       = scan_html(html);
+  auto links = scan_html(html);
   REQUIRE(links.size() == 1);
   CHECK(links[0].find("/after-style.css") != std::string::npos);
 }
@@ -1290,7 +1290,7 @@ TEST_CASE("R6: </head> with attributes closes head", "[scanner][r6]")
                      "</head lang=\"en\">"
                      "<link rel=\"stylesheet\" href=\"/should-not.css\">"
                      "</html>";
-  auto links       = scan_html(html);
+  auto links = scan_html(html);
   REQUIRE(links.size() == 1);
   CHECK(links[0].find("/a.css") != std::string::npos);
 }
@@ -1301,7 +1301,7 @@ TEST_CASE("R6: </head> inside script body ignored", "[scanner][r6]")
                      "<script>var x = '</head><head>';</script>"
                      "<link rel=\"stylesheet\" href=\"/ok.css\">"
                      "</head></html>";
-  auto links       = scan_html(html);
+  auto links = scan_html(html);
   REQUIRE(links.size() == 1);
   CHECK(links[0].find("/ok.css") != std::string::npos);
 }
@@ -1313,7 +1313,7 @@ TEST_CASE("R6: multiple <head> tags", "[scanner][r6]")
                      "<head>"
                      "<link rel=\"stylesheet\" href=\"/b.css\">"
                      "</head></html>";
-  auto links       = scan_html(html);
+  auto links = scan_html(html);
   REQUIRE(links.size() == 2);
 }
 
@@ -1636,7 +1636,7 @@ TEST_CASE("HTML scanner skips link parsing inside RCDATA elements", "[security]"
     // not a resource hint. Extracting it as a hint is a misparse.
     std::string html = R"(<html><head><title><link rel="preload" href="/evil.js" as="script"></title>)"
                        R"(<link rel="preload" href="/real.css" as="style"></head></html>)";
-    auto links       = scan_html(html);
+    auto links = scan_html(html);
     // /evil.js inside <title> must NOT be extracted
     REQUIRE(links.size() == 1);
     CHECK(links[0].find("/real.css") != std::string::npos);
@@ -1648,7 +1648,7 @@ TEST_CASE("HTML scanner skips link parsing inside RCDATA elements", "[security]"
     std::string html = R"(<html><head></head><body>)"
                        R"(<textarea><link rel="preload" href="/evil.css" as="style"></textarea>)"
                        R"(<link rel="preload" href="/real.js" as="script"></body></html>)";
-    auto links       = scan_html(html);
+    auto links = scan_html(html);
     for (const auto &link : links) {
       CHECK(link.find("/evil.css") == std::string::npos);
     }
@@ -1661,7 +1661,7 @@ TEST_CASE("HTML scanner skips link parsing inside RCDATA elements", "[security]"
     std::string html = R"(<html><head></head><body>)"
                        R"(<xmp><link rel="preload" href="/evil.js" as="script"></xmp>)"
                        R"(<link rel="preload" href="/real.css" as="style"></body></html>)";
-    auto links       = scan_html(html);
+    auto links = scan_html(html);
     for (const auto &link : links) {
       CHECK(link.find("/evil.js") == std::string::npos);
     }
@@ -1672,7 +1672,7 @@ TEST_CASE("HTML scanner skips link parsing inside RCDATA elements", "[security]"
     std::string html = R"(<html><head><title>Page Title with /fake.js content</title>)"
                        R"(<link rel="preload" href="/real.css" as="style">)"
                        R"(<link rel="preload" href="/real.js" as="script"></head></html>)";
-    auto links       = scan_html(html);
+    auto links = scan_html(html);
     REQUIRE(links.size() == 2);
     bool has_css = false, has_js = false;
     for (const auto &l : links) {
@@ -1689,7 +1689,7 @@ TEST_CASE("HTML scanner skips link parsing inside RCDATA elements", "[security]"
   {
     std::string html = R"(<html><head><script>var x = '<link rel="preload" href="/evil.js" as="script">';</script>)"
                        R"(<link rel="preload" href="/real.css" as="style"></head></html>)";
-    auto links       = scan_html(html);
+    auto links = scan_html(html);
     REQUIRE(links.size() == 1);
     CHECK(links[0].find("/real.css") != std::string::npos);
   }

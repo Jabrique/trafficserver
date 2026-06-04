@@ -1021,24 +1021,16 @@ TEST_CASE("HtmlScanner: multiple cross-origin preloads to same domain produce si
 
 // ─── Deduplication: edge cases ───────────────────────────────────────────────────────────────
 
-TEST_CASE("HtmlScanner dedup: same URL, different rel types are NOT deduplicated", "[html_scanner][build][dedup]")
+TEST_CASE("HtmlScanner dedup: URL-only strongest-wins across link types", "[html_scanner][build][dedup]")
 {
-  // The scanner's dedup check includes a rel-type guard (is_preconnect == ex_preconnect)
-  // so that a preload and preconnect for the same URL key are both preserved.
-  // In practice with HTML link tags this requires a whitelisted preload to the
-  // bare origin URL AND a non-whitelisted cross-origin preload from a different
-  // resource on the SAME domain — the whitelist keeps one as preload (full origin URL),
-  // while a resource path preload on the non-whitelisted path would produce the
-  // same origin as preconnect.
-  //
-  // The simpler observable case: whitelisted preload (full-URL rel=preload) +
-  // non-whitelisted preload on a different domain (rel=preconnect) are both kept,
-  // confirming dedup operates per-URL key and does not cross domains.
+  // The scanner's dedup is URL-only: same URL key = same resource, regardless of rel type.
+  // When a preload and preconnect share the same URL, the stronger type (preload/modulepreload)
+  // wins. Different domains have different URL keys and are always both kept.
   const char *argv[] = {"from", "to", "--mode", "auto-learn", "--crossorigin-whitelist", "static.example.com"};
   EarlyHintsConfig config;
   config.init(6, argv);
 
-  SECTION("whitelisted preload (rel=preload) + non-whitelisted on different domain (rel=preconnect) — both preserved")
+  SECTION("whitelisted preload + non-whitelisted on different domain: both preserved (different URL keys)")
   {
     std::string html = "<html><head>"
                        "<link rel=\"preload\" href=\"https://static.example.com/app.js\" as=\"script\" crossorigin>"
@@ -1047,9 +1039,9 @@ TEST_CASE("HtmlScanner dedup: same URL, different rel types are NOT deduplicated
     HtmlScanner scanner(131072, 10, &config);
     scanner.feed(html.c_str(), static_cast<int64_t>(html.size()));
     auto links = scanner.get_links();
-    // static.example.com is whitelisted → preload with full URL (rel=preload)
-    // cdn.example.com is not whitelisted → preconnect to origin (rel=preconnect)
-    // Different URL keys AND different rel types → dedup must never fire → both kept
+    // static.example.com whitelisted: preload with full URL
+    // cdn.example.com not whitelisted: preconnect to origin
+    // Different URL keys: dedup does not fire, both kept
     REQUIRE(links.size() == 2);
     bool has_preload = false, has_preconnect = false;
     for (const auto &l : links) {

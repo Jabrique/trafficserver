@@ -36,8 +36,10 @@ TESTS=(
     early_hints_backslash_rcdata     # backslash URL bypass; RCDATA elements
     early_hints_modulepreload        # modulepreload: as= optional, fetchpriority preserved, script type=module
     early_hints_persist_hardening    # oversized link skip (A-25), future ts clamp (A-09)
-    early_hints_scanner_correctness   # </script> escaped close (B-06), \r separator (A-06), first-wins (A-28), crossorigin norm (A-29), preload-whitelist font (A-07)
-    early_hints_link_parser_fixes     # BUG-1 segment state reset, BUG-4a case-insensitive URL dedup, BUG-5a/5b CR boundary handling
+    early_hints_scanner_correctness   # </script> escaped close, \r separator, first-wins attrs, crossorigin norm, preload-whitelist font
+    early_hints_link_parser_fixes     # BUG-1 segment state reset, BUG-4a case-insensitive URL dedup, BUG-5a/5b CR boundary
+    early_hints_origin_forward_correctness  # origin-forward dedup and header correctness
+    early_hints_scanner_boundary      # scanner HTML boundary and streaming edge cases
 )
 
 PASSED=0

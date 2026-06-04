@@ -196,15 +196,17 @@ TEST_CASE("LinkParser: Case-insensitive rel deduplication", "[link_parser][dedup
 
 TEST_CASE("LinkParser: rel boundary check in deduplication", "[link_parser][dedup][boundary]")
 {
-  std::vector<std::string> segments1 = {"</app.js>; rel=preconnect", "</app.js>; xrel=preconnect"};
+  // With URL-only dedup, same URL always deduplicates regardless of rel type.
+  // To test rel-type boundary parsing, use different URLs per pair.
+  std::vector<std::string> segments1 = {"</a.js>; rel=preconnect", "</b.js>; xrel=preconnect"};
   auto result1                       = dedup_link_segments(segments1, 10);
   CHECK(result1.size() == 2);
 
-  std::vector<std::string> segments2 = {"</app.js>; rel=preconnect", "</app.js>; rel=preconnectx"};
+  std::vector<std::string> segments2 = {"</a.js>; rel=preconnect", "</b.js>; rel=preconnectx"};
   auto result2                       = dedup_link_segments(segments2, 10);
   CHECK(result2.size() == 2);
 
-  std::vector<std::string> segments3 = {"</app.js>; rel=preconnect", "</app.js>; rel=\"preconnect\"garbage"};
+  std::vector<std::string> segments3 = {"</a.js>; rel=preconnect", "</b.js>; rel=\"preconnect\"garbage"};
   auto result3                       = dedup_link_segments(segments3, 10);
   CHECK(result3.size() == 2);
 }
@@ -239,8 +241,7 @@ TEST_CASE("LinkParser: many consecutive backslashes before closing quote", "[lin
 // correctly recognized as segment boundaries and valid segments after the malformed one survive.
 // ===========================================================================================
 
-TEST_CASE("LinkParser: unclosed angle bracket in segment does not suppress subsequent segments",
-          "[link_parser][segment-state]")
+TEST_CASE("LinkParser: unclosed angle bracket in segment does not suppress subsequent segments", "[link_parser][segment-state]")
 {
   SECTION("unclosed angle bracket in first segment drops all subsequent segments")
   {
@@ -255,9 +256,8 @@ TEST_CASE("LinkParser: unclosed angle bracket in segment does not suppress subse
 
   SECTION("three segments where only the first is malformed")
   {
-    std::string input =
-      "<bad-unclosed; rel=preload, </good1.js>; rel=preload; as=script, </good2.css>; rel=preload; as=style";
-    auto result = split_link_header_value(input, 10);
+    std::string input = "<bad-unclosed; rel=preload, </good1.js>; rel=preload; as=script, </good2.css>; rel=preload; as=style";
+    auto result       = split_link_header_value(input, 10);
     REQUIRE(result.size() == 3);
     CHECK(result[1] == "</good1.js>; rel=preload; as=script");
     CHECK(result[2] == "</good2.css>; rel=preload; as=style");
@@ -274,8 +274,7 @@ TEST_CASE("LinkParser: unclosed angle bracket in segment does not suppress subse
   }
 }
 
-TEST_CASE("LinkParser: unclosed quoted string keeps comma inside its context",
-          "[link_parser][segment-state]")
+TEST_CASE("LinkParser: unclosed quoted string keeps comma inside its context", "[link_parser][segment-state]")
 {
   SECTION("unclosed double-quote keeps comma inside its quoted context -- no split")
   {
@@ -310,8 +309,7 @@ TEST_CASE("LinkParser: unclosed quoted string keeps comma inside its context",
 // performed entirely in the unsigned domain to guarantee defined behavior.
 // ===========================================================================================
 
-TEST_CASE("LinkParser: header size guard uses unsigned comparison at boundary",
-          "[link_parser][size-guard]")
+TEST_CASE("LinkParser: header size guard uses unsigned comparison at boundary", "[link_parser][size-guard]")
 {
   SECTION("header exactly at limit is accepted")
   {
@@ -340,16 +338,13 @@ TEST_CASE("LinkParser: header size guard uses unsigned comparison at boundary",
 // per RFC 4343; two segments whose URL differs only in hostname case are the same resource.
 // ===========================================================================================
 
-TEST_CASE("LinkParser: dedup_link_segments performs case-insensitive URL comparison",
-          "[link_parser][dedup]")
+TEST_CASE("LinkParser: dedup_link_segments performs case-insensitive URL comparison", "[link_parser][dedup]")
 {
   SECTION("uppercase scheme+host is duplicate of lowercase")
   {
-    std::vector<std::string> segs = {
-      "<HTTPS://CDN.EXAMPLE.COM/a.js>; rel=preload; as=script",
-      "<https://cdn.example.com/a.js>; rel=preload; as=script"
-    };
-    auto result = dedup_link_segments(segs, 10);
+    std::vector<std::string> segs = {"<HTTPS://CDN.EXAMPLE.COM/a.js>; rel=preload; as=script",
+                                     "<https://cdn.example.com/a.js>; rel=preload; as=script"};
+    auto result                   = dedup_link_segments(segs, 10);
     // Bug: both survive (url_key comparison is case-sensitive) -> size == 2
     // Expected after fix: size == 1
     CHECK(result.size() == 1);
@@ -357,32 +352,25 @@ TEST_CASE("LinkParser: dedup_link_segments performs case-insensitive URL compari
 
   SECTION("mixed case host is deduplicated")
   {
-    std::vector<std::string> segs = {
-      "<https://CDN.Example.Com/font.woff2>; rel=preload; as=font; crossorigin=anonymous",
-      "<https://cdn.example.com/font.woff2>; rel=preload; as=font; crossorigin=anonymous"
-    };
-    auto result = dedup_link_segments(segs, 10);
+    std::vector<std::string> segs = {"<https://CDN.Example.Com/font.woff2>; rel=preload; as=font; crossorigin=anonymous",
+                                     "<https://cdn.example.com/font.woff2>; rel=preload; as=font; crossorigin=anonymous"};
+    auto result                   = dedup_link_segments(segs, 10);
     CHECK(result.size() == 1);
   }
 
   SECTION("preconnect with uppercase host is deduplicated")
   {
-    std::vector<std::string> segs = {
-      "<https://FONTS.GSTATIC.COM>; rel=preconnect",
-      "<https://fonts.gstatic.com>; rel=preconnect"
-    };
-    auto result = dedup_link_segments(segs, 10);
+    std::vector<std::string> segs = {"<https://FONTS.GSTATIC.COM>; rel=preconnect", "<https://fonts.gstatic.com>; rel=preconnect"};
+    auto result                   = dedup_link_segments(segs, 10);
     CHECK(result.size() == 1);
   }
 
   SECTION("different URLs with same case prefix are not deduped")
   {
     // Regression: URLs that genuinely differ must NOT be merged
-    std::vector<std::string> segs = {
-      "<https://cdn.example.com/a.js>; rel=preload; as=script",
-      "<https://cdn.example.com/b.js>; rel=preload; as=script"
-    };
-    auto result = dedup_link_segments(segs, 10);
+    std::vector<std::string> segs = {"<https://cdn.example.com/a.js>; rel=preload; as=script",
+                                     "<https://cdn.example.com/b.js>; rel=preload; as=script"};
+    auto result                   = dedup_link_segments(segs, 10);
     CHECK(result.size() == 2);
   }
 }
@@ -393,8 +381,7 @@ TEST_CASE("LinkParser: dedup_link_segments performs case-insensitive URL compari
 // middleware) is correctly recognized as the expected rel type so dedup works correctly.
 // ===========================================================================================
 
-TEST_CASE("LinkParser: has_rel_type accepts carriage return as boundary character",
-          "[link_parser][has-rel-type]")
+TEST_CASE("LinkParser: has_rel_type accepts carriage return as boundary character", "[link_parser][has-rel-type]")
 {
   SECTION("rel=preconnect followed by CR is recognized as preconnect for dedup")
   {
@@ -402,21 +389,16 @@ TEST_CASE("LinkParser: has_rel_type accepts carriage return as boundary characte
     // seg[1]: rel=preconnect   -- recognized correctly
     // Without fix: different types -> both survive -> size == 2
     // With fix: same type -> deduped -> size == 1
-    std::vector<std::string> segs = {
-      "<https://cdn.example.com>; rel=preconnect\r",
-      "<https://cdn.example.com>; rel=preconnect"
-    };
-    auto result = dedup_link_segments(segs, 10);
+    std::vector<std::string> segs = {"<https://cdn.example.com>; rel=preconnect\r", "<https://cdn.example.com>; rel=preconnect"};
+    auto result                   = dedup_link_segments(segs, 10);
     CHECK(result.size() == 1);
   }
 
   SECTION("CR before rel= value is accepted as boundary")
   {
-    std::vector<std::string> segs = {
-      "<https://fonts.gstatic.com>; \rrel=preconnect",
-      "<https://fonts.gstatic.com>; rel=preconnect"
-    };
-    auto result = dedup_link_segments(segs, 10);
+    std::vector<std::string> segs = {"<https://fonts.gstatic.com>; \rrel=preconnect",
+                                     "<https://fonts.gstatic.com>; rel=preconnect"};
+    auto result                   = dedup_link_segments(segs, 10);
     CHECK(result.size() == 1);
   }
 }
@@ -427,8 +409,7 @@ TEST_CASE("LinkParser: has_rel_type accepts carriage return as boundary characte
 // This prevents the poisoned segment string from causing has_rel_type() mismatches.
 // ===========================================================================================
 
-TEST_CASE("LinkParser: carriage return is trimmed from segment leading and trailing boundary",
-          "[link_parser][trim]")
+TEST_CASE("LinkParser: carriage return is trimmed from segment leading and trailing boundary", "[link_parser][trim]")
 {
   SECTION("trailing CR is removed before segment is stored")
   {
@@ -448,5 +429,74 @@ TEST_CASE("LinkParser: carriage return is trimmed from segment leading and trail
     REQUIRE(result.size() == 2);
     CHECK(result[1].front() != '\r');
     CHECK(result[1] == "</b.js>; rel=preload; as=script");
+  }
+}
+
+// ===================================================================================
+// URL-only strongest-wins dedup: when the same URL appears as both preload and
+// preconnect, the stronger type (preload/modulepreload) must survive and the
+// weaker type (preconnect) must be dropped.  Only one entry per URL key.
+//
+// RED before fix: current dedup keeps both rel types for same URL (size==2).
+// GREEN after fix: URL-only dedup keeps only the strongest (size==1).
+// ===================================================================================
+
+TEST_CASE("dedup_link_segments: URL-only strongest-wins unification", "[link_parser][dedup][strongest-wins]")
+{
+  SECTION("preload then preconnect for same URL: preload survives")
+  {
+    std::vector<std::string> segs = {
+      "</cdn/app.js>; rel=preload; as=script",
+      "</cdn/app.js>; rel=preconnect",
+    };
+    auto result = dedup_link_segments(segs, 10);
+    // RED: current behavior keeps both (size==2)
+    // GREEN after fix: preload is stronger, preconnect dropped (size==1)
+    REQUIRE(result.size() == 1);
+    CHECK(result[0].find("rel=preload") != std::string::npos);
+  }
+
+  SECTION("preconnect then preload for same URL: preload replaces preconnect")
+  {
+    std::vector<std::string> segs = {
+      "</cdn/lib.css>; rel=preconnect",
+      "</cdn/lib.css>; rel=preload; as=style",
+    };
+    auto result = dedup_link_segments(segs, 10);
+    // RED: current behavior keeps both (size==2)
+    // GREEN after fix: preload replaces preconnect (size==1)
+    REQUIRE(result.size() == 1);
+    CHECK(result[0].find("rel=preload") != std::string::npos);
+  }
+
+  SECTION("modulepreload beats preconnect for same URL")
+  {
+    std::vector<std::string> segs = {
+      "</mod.js>; rel=preconnect",
+      "</mod.js>; rel=modulepreload",
+    };
+    auto result = dedup_link_segments(segs, 10);
+    REQUIRE(result.size() == 1);
+    CHECK(result[0].find("rel=modulepreload") != std::string::npos);
+  }
+
+  SECTION("two preconnect for same URL still dedup to one")
+  {
+    std::vector<std::string> segs = {
+      "</cdn/app.js>; rel=preconnect",
+      "</cdn/app.js>; rel=preconnect",
+    };
+    auto result = dedup_link_segments(segs, 10);
+    CHECK(result.size() == 1);
+  }
+
+  SECTION("different URLs are never deduped regardless of rel type")
+  {
+    std::vector<std::string> segs = {
+      "</cdn/app.js>; rel=preload; as=script",
+      "</cdn/lib.js>; rel=preconnect",
+    };
+    auto result = dedup_link_segments(segs, 10);
+    CHECK(result.size() == 2);
   }
 }

@@ -850,31 +850,15 @@ simulate_origin_forward(const std::vector<std::string> &raw_header_values, int m
     auto segments = split_link_header_value(full_val, remaining);
     for (auto &seg : segments) {
       if (is_valid_link_value(seg)) {
-        size_t url_end = seg.find('>');
-        bool is_dup    = false;
-        if (url_end != std::string::npos) {
-          std::string_view url_key = std::string_view(seg).substr(0, url_end + 1);
-          bool is_preconnect       = seg.find("rel=preconnect") != std::string::npos;
-          for (const auto &existing : origin_links) {
-            if (existing.size() > url_key.size() && existing.compare(0, url_key.size(), url_key.data(), url_key.size()) == 0 &&
-                (existing.find("rel=preconnect") != std::string::npos) == is_preconnect) {
-              is_dup = true;
-              break;
-            }
-          }
-        }
-        if (!is_dup) {
-          origin_links.push_back(std::move(seg));
-        }
-        if (static_cast<int>(origin_links.size()) >= max_links) {
-          break;
-        }
+        origin_links.push_back(std::move(seg));
       }
     }
     if (static_cast<int>(origin_links.size()) >= max_links) {
       break;
     }
   }
+  // Dedup using the same URL-only strongest-wins logic as production code.
+  origin_links = dedup_link_segments(std::move(origin_links), max_links);
   return origin_links;
 }
 
@@ -909,29 +893,30 @@ TEST_CASE("Origin-forward dedup: comma-separated duplicate values in one Link fi
   }
 }
 
-TEST_CASE("Origin-forward dedup: same URL, different rel types are NOT deduplicated", "[integration][origin_forward][dedup]")
+TEST_CASE("Origin-forward dedup: same URL strongest-wins", "[integration][origin_forward][dedup]")
 {
-  SECTION("preload and preconnect for same URL — both preserved")
+  SECTION("preload and preconnect for same URL: only preload survives")
   {
-    // Origin sends same URL once as preload and once as preconnect.
-    // rel types differ → dedup must NOT fire → both entries kept.
+    // Origin sends same URL as preload and preconnect.
+    // URL-only dedup: preload is stronger, preconnect dropped.
     std::vector<std::string> headers = {
       "</cdn/app.js>; rel=preload; as=script",
       "</cdn/app.js>; rel=preconnect",
     };
     auto result = simulate_origin_forward(headers);
-    REQUIRE(result.size() == 2);
-    bool has_preload = false, has_preconnect = false;
-    for (const auto &l : result) {
-      if (l.find("rel=preload") != std::string::npos) {
-        has_preload = true;
-      }
-      if (l.find("rel=preconnect") != std::string::npos) {
-        has_preconnect = true;
-      }
-    }
-    CHECK(has_preload);
-    CHECK(has_preconnect);
+    REQUIRE(result.size() == 1);
+    CHECK(result[0].find("rel=preload") != std::string::npos);
+  }
+
+  SECTION("preconnect then preload for same URL: preload replaces preconnect")
+  {
+    std::vector<std::string> headers = {
+      "</cdn/lib.css>; rel=preconnect",
+      "</cdn/lib.css>; rel=preload; as=style",
+    };
+    auto result = simulate_origin_forward(headers);
+    REQUIRE(result.size() == 1);
+    CHECK(result[0].find("rel=preload") != std::string::npos);
   }
 }
 
@@ -953,44 +938,42 @@ TEST_CASE("Origin-forward dedup: same URL, different rel types are NOT deduplica
 // link_parser.cc) — NOT a test helper. RED before fix, GREEN after fix.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-TEST_CASE("dedup_link_segments() tautological comparison drops different-rel entries", "[integration][dedup]")
+TEST_CASE("dedup_link_segments() URL-only strongest-wins", "[integration][dedup]")
 {
-  SECTION("BUG: preload then preconnect for same URL — preconnect incorrectly dropped")
+  SECTION("preload then preconnect for same URL: only preload kept")
   {
-    // origin sends: preload first, then preconnect for same URL.
-    // Correct dedup: different rel types → both preserved → size == 2.
-    // Buggy dedup:  tautological condition always true → preconnect dropped → size == 1.
     std::vector<std::string> segs = {
       "</cdn/app.js>; rel=preload; as=script",
       "</cdn/app.js>; rel=preconnect",
     };
     auto result = dedup_link_segments(segs, 10);
-    // RED before fix: dedup_link_segments has seg.find bug → result.size() == 1, CHECK fails
-    // GREEN after fix: existing.find used → result.size() == 2, CHECK passes
-    CHECK(result.size() == 2);
+    // URL-only dedup: preload is stronger, only one entry
+    REQUIRE(result.size() == 1);
+    CHECK(result[0].find("rel=preload") != std::string::npos);
   }
 
-  SECTION("BUG: preconnect then preload for same URL — preload incorrectly dropped")
+  SECTION("preconnect then preload for same URL: preload replaces preconnect")
   {
     std::vector<std::string> segs = {
       "</cdn/lib.css>; rel=preconnect",
       "</cdn/lib.css>; rel=preload; as=style",
     };
     auto result = dedup_link_segments(segs, 10);
-    CHECK(result.size() == 2); // RED before fix, GREEN after
+    REQUIRE(result.size() == 1);
+    CHECK(result[0].find("rel=preload") != std::string::npos);
   }
 
-  SECTION("CORRECT dedup: two identical preload entries — second must be dropped")
+  SECTION("two identical preload entries: second dropped")
   {
     std::vector<std::string> segs = {
       "</cdn/app.js>; rel=preload; as=script",
       "</cdn/app.js>; rel=preload; as=script",
     };
     auto result = dedup_link_segments(segs, 10);
-    CHECK(result.size() == 1); // always correct — same-type dedup works in both versions
+    CHECK(result.size() == 1);
   }
 
-  SECTION("CORRECT dedup: two identical preconnect entries — second must be dropped")
+  SECTION("two identical preconnect entries: second dropped")
   {
     std::vector<std::string> segs = {
       "</cdn/app.js>; rel=preconnect",

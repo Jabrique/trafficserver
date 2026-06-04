@@ -53,6 +53,7 @@ static int stat_103_skipped_h1       = -1;
 static int stat_103_skipped_bot      = -1;
 static int stat_103_skipped_no_hints = -1;
 static int stat_103_skipped_non_nav  = -1;
+static int stat_103_send_failed      = -1;
 static int stat_hints_learned        = -1;
 
 static inline void
@@ -265,6 +266,7 @@ send_103_response(TSHttpTxn txnp, const std::vector<std::string> &links, int max
     return true;
   } else {
     TSDebug(PLUGIN_NAME, "failed to send 103: TSHttpTxnSendEarlyHints returned TS_ERROR (client may not support H2)");
+    increment_stat(stat_103_send_failed, 1);
     return false;
   }
 }
@@ -542,8 +544,9 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
       break;
     }
 
-    // Origin-forward mode: extract Link headers from origin response
-    if (config->mode() & EarlyHintsConfig::MODE_ORIGIN_FORWARD) {
+    // Origin-forward mode: extract Link headers from origin response.
+    // Skip if hints are already learned and fresh (not TTL-expired).
+    if ((config->mode() & EarlyHintsConfig::MODE_ORIGIN_FORWARD) && !(req_data->has_learned && !req_data->needs_relearn)) {
       TSMLoc link_field = TSMimeHdrFieldFind(server_bufp, server_hdr_loc, "Link", 4);
       std::vector<std::string> origin_links;
 
@@ -560,10 +563,9 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
               origin_links.push_back(std::move(normalized));
             }
           }
-          // Deduplicate: origins occasionally emit the same Link header field
-          // more than once (e.g. middleware that appends headers idempotently).
-          // dedup_link_segments() stores only the first occurrence of each
-          // <URL> + rel type pair and caps the result at max_links.
+          // Deduplicate: URL-only strongest-wins.
+          // dedup_link_segments() keeps one entry per URL key, preferring
+          // preload/modulepreload over preconnect when both appear.
           origin_links = dedup_link_segments(std::move(origin_links), config->max_links());
         }
         TSMLoc next = TSMimeHdrFieldNextDup(server_bufp, server_hdr_loc, link_field);
@@ -838,6 +840,10 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
 
       if (!origin_links.empty()) {
         cache->put(req_data->cache_key, origin_links);
+        if (!req_data->stat_learned_emitted) {
+          increment_stat(stat_hints_learned, 1);
+          req_data->stat_learned_emitted = true;
+        }
         TSDebug(PLUGIN_NAME, "READ_CACHE_HDR: self-healed %zu origin-forward links for %s from ATS cache", origin_links.size(),
                 req_data->cache_key.c_str());
       }
@@ -1007,6 +1013,7 @@ TSRemapInit(TSRemapInterface *api_info, char *errbuf, int errbuf_size)
   stat_103_skipped_bot      = get_or_create_stat("plugin.early_hints.103_skipped_bot");
   stat_103_skipped_no_hints = get_or_create_stat("plugin.early_hints.103_skipped_no_hints");
   stat_103_skipped_non_nav  = get_or_create_stat("plugin.early_hints.103_skipped_non_nav");
+  stat_103_send_failed      = get_or_create_stat("plugin.early_hints.103_send_failed");
   stat_hints_learned        = get_or_create_stat("plugin.early_hints.hints_learned");
 
   TSDebug(PLUGIN_NAME, "plugin initialized, arg_idx=%d", arg_idx);
@@ -1261,8 +1268,7 @@ TSRemapDoRemap(void *ih, TSHttpTxn rh, TSRemapRequestInfo * /* rri ATS_UNUSED */
       int val_len               = 0;
       const char *val           = TSMimeHdrFieldValueStringGet(req_bufp, req_hdr_loc, purge_field_loc, -1, &val_len);
       const std::string &secret = config->purge_secret();
-      bool token_ok = val && constant_time_eq(val, static_cast<size_t>(val_len),
-                                              secret.c_str(), secret.size());
+      bool token_ok             = val && constant_time_eq(val, static_cast<size_t>(val_len), secret.c_str(), secret.size());
       TSHandleMLocRelease(req_bufp, req_hdr_loc, purge_field_loc);
       if (token_ok) {
         cache->remove(cache_key);

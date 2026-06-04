@@ -91,9 +91,11 @@ has_rel_type(const std::string &seg_lower, const std::string &rel_type)
   auto match_needle = [&](const std::string &needle) -> bool {
     size_t pos = 0;
     while ((pos = seg_lower.find(needle, pos)) != std::string::npos) {
-      bool before_ok = (pos == 0) || seg_lower[pos - 1] == ';' || seg_lower[pos - 1] == ' ' || seg_lower[pos - 1] == '\t' || seg_lower[pos - 1] == '\r';
-      size_t after   = pos + needle.size();
-      bool after_ok = (after >= seg_lower.size()) || seg_lower[after] == ';' || seg_lower[after] == ' ' || seg_lower[after] == '\t' || seg_lower[after] == '\r';
+      bool before_ok = (pos == 0) || seg_lower[pos - 1] == ';' || seg_lower[pos - 1] == ' ' || seg_lower[pos - 1] == '\t' ||
+                       seg_lower[pos - 1] == '\r';
+      size_t after  = pos + needle.size();
+      bool after_ok = (after >= seg_lower.size()) || seg_lower[after] == ';' || seg_lower[after] == ' ' ||
+                      seg_lower[after] == '\t' || seg_lower[after] == '\r';
       if (before_ok && after_ok) {
         return true;
       }
@@ -113,37 +115,47 @@ dedup_link_segments(std::vector<std::string> segments, int max_links)
 
   for (auto &seg : segments) {
     size_t url_end = seg.find('>');
-    bool is_dup    = false;
-    if (url_end != std::string::npos) {
-      // Case-insensitive check by lowercasing the full segment first.
-      // url_key is taken from seg_lower so the URL prefix comparison is also case-insensitive.
-      // DNS hostnames are case-insensitive (RFC 4343); two segments whose URL differs only
-      // in hostname case must be treated as the same resource.
-      std::string seg_lower = seg;
-      std::transform(seg_lower.begin(), seg_lower.end(), seg_lower.begin(), [](unsigned char c) { return std::tolower(c); });
-      std::string_view url_key  = std::string_view(seg_lower).substr(0, url_end + 1);
-      bool             is_preconnect = has_rel_type(seg_lower, "preconnect");
+    if (url_end == std::string::npos) {
+      result.push_back(std::move(seg));
+      if (static_cast<int>(result.size()) >= max_links) {
+        break;
+      }
+      continue;
+    }
 
-      for (const auto &existing : result) {
-        std::string existing_lower = existing;
-        std::transform(existing_lower.begin(), existing_lower.end(), existing_lower.begin(),
-                       [](unsigned char c) { return std::tolower(c); });
-        size_t ex_url_end = existing_lower.find('>');
-        if (ex_url_end != std::string::npos) {
-          std::string_view ex_url_key = std::string_view(existing_lower).substr(0, ex_url_end + 1);
-          if (ex_url_key == url_key) {
-            bool existing_preconnect = has_rel_type(existing_lower, "preconnect");
-            if (existing_preconnect == is_preconnect) {
-              is_dup = true;
-              break;
-            }
-          }
+    // Case-insensitive URL key for DNS hostname comparison (RFC 4343).
+    std::string seg_lower = seg;
+    std::transform(seg_lower.begin(), seg_lower.end(), seg_lower.begin(), [](unsigned char c) { return std::tolower(c); });
+    std::string_view url_key = std::string_view(seg_lower).substr(0, url_end + 1);
+
+    // Determine strength: preload/modulepreload are strong, preconnect is weak.
+    bool incoming_is_preload = !has_rel_type(seg_lower, "preconnect");
+
+    bool is_dup    = false;
+    size_t dup_idx = 0;
+    for (size_t i = 0; i < result.size(); ++i) {
+      std::string existing_lower = result[i];
+      std::transform(existing_lower.begin(), existing_lower.end(), existing_lower.begin(),
+                     [](unsigned char c) { return std::tolower(c); });
+      size_t ex_url_end = existing_lower.find('>');
+      if (ex_url_end != std::string::npos) {
+        std::string_view ex_url_key = std::string_view(existing_lower).substr(0, ex_url_end + 1);
+        if (ex_url_key == url_key) {
+          is_dup  = true;
+          dup_idx = i;
+          break;
         }
       }
     }
+
     if (!is_dup) {
       result.push_back(std::move(seg));
+    } else if (incoming_is_preload && has_rel_type(result[dup_idx], "preconnect")) {
+      // Incoming is stronger (preload/modulepreload) than existing (preconnect): replace.
+      result[dup_idx] = std::move(seg);
     }
+    // else: existing is same strength or stronger, skip incoming.
+
     if (static_cast<int>(result.size()) >= max_links) {
       break;
     }

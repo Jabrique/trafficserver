@@ -1221,8 +1221,7 @@ TEST_CASE("finish_attr: unrecognized crossorigin value normalizes to anonymous",
 // correctly deduplicated to a single hint instead of producing two entries.
 // ===========================================================================================
 
-TEST_CASE("HtmlScanner: build_link_header performs case-insensitive URL dedup",
-          "[html_scanner][dedup]")
+TEST_CASE("HtmlScanner: build_link_header performs case-insensitive URL dedup", "[html_scanner][dedup]")
 {
   SECTION("same cross-origin host with different case produces only one preconnect hint")
   {
@@ -1249,11 +1248,8 @@ TEST_CASE("HtmlScanner: build_link_header performs case-insensitive URL dedup",
     // With a whitelist, cross-origin becomes full preload.
     // The dedup must treat them as the same URL.
     EarlyHintsConfig cfg;
-    std::vector<const char *> argv = {
-      "http://from.example.com", "http://to.example.com",
-      "--mode", "auto-learn",
-      "--crossorigin-whitelist", "cdn.example.com"
-    };
+    std::vector<const char *> argv = {"http://from.example.com", "http://to.example.com", "--mode", "auto-learn",
+                                      "--crossorigin-whitelist", "cdn.example.com"};
     REQUIRE(cfg.init(static_cast<int>(argv.size()), argv.data()));
 
     HtmlScanner scanner(cfg.scan_limit(), cfg.max_links(), &cfg);
@@ -1279,8 +1275,10 @@ TEST_CASE("HtmlScanner: build_link_header performs case-insensitive URL dedup",
     REQUIRE(links.size() == 2);
     bool has_cdn1 = false, has_cdn2 = false;
     for (const auto &l : links) {
-      if (l.find("cdn1.example.com") != std::string::npos) has_cdn1 = true;
-      if (l.find("cdn2.example.com") != std::string::npos) has_cdn2 = true;
+      if (l.find("cdn1.example.com") != std::string::npos)
+        has_cdn1 = true;
+      if (l.find("cdn2.example.com") != std::string::npos)
+        has_cdn2 = true;
     }
     CHECK(has_cdn1);
     CHECK(has_cdn2);

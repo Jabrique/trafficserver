@@ -587,30 +587,33 @@ HtmlScanner::build_link_header(const std::string &tag)
   }
 
   // Deduplicate: non-whitelisted cross-origin preloads are downgraded to preconnects
-  // using only the scheme+host origin, so N preload tags on different paths of the
-  // same domain all produce the identical "<origin>; rel=preconnect" string.
-  // Skip any result whose <URL> + rel type combination is already in links_.
-  // DNS hostnames are case-insensitive (RFC 4343); lowercase both sides before comparing
-  // so that <HTTPS://CDN.EXAMPLE.COM> and <https://cdn.example.com> are treated as the
-  // same origin and correctly deduplicated.
+  // URL-only strongest-wins dedup: same URL key = same resource.
+  // If a preload/modulepreload and preconnect share the same URL, the stronger
+  // type wins (preload > preconnect). This prevents sending redundant hints
+  // when the same origin appears both as a whitelisted preload and as a
+  // preconnect derived from a non-whitelisted cross-origin resource.
+  // DNS hostnames are case-insensitive (RFC 4343); lowercase both sides.
   {
     size_t url_end = result.find('>');
     if (url_end != std::string::npos) {
       std::string result_lower = result.substr(0, url_end + 1);
       std::transform(result_lower.begin(), result_lower.end(), result_lower.begin(),
                      [](unsigned char c) { return std::tolower(c); });
-      bool is_preconnect = result.find("rel=preconnect") != std::string::npos;
-      for (const auto &existing : links_) {
-        size_t ex_url_end = existing.find('>');
+      bool incoming_is_preload = result.find("rel=preconnect") == std::string::npos;
+
+      for (size_t i = 0; i < links_.size(); ++i) {
+        size_t ex_url_end = links_[i].find('>');
         if (ex_url_end != std::string::npos) {
-          std::string existing_lower = existing.substr(0, ex_url_end + 1);
+          std::string existing_lower = links_[i].substr(0, ex_url_end + 1);
           std::transform(existing_lower.begin(), existing_lower.end(), existing_lower.begin(),
                          [](unsigned char c) { return std::tolower(c); });
           if (existing_lower == result_lower) {
-            bool ex_preconnect = existing.find("rel=preconnect") != std::string::npos;
-            if (is_preconnect == ex_preconnect) {
-              return; // same origin URL + same rel type already queued
+            if (incoming_is_preload && links_[i].find("rel=preconnect") != std::string::npos) {
+              // Incoming is stronger: replace existing preconnect with preload.
+              links_[i] = std::move(result);
             }
+            // Same URL already queued (same or stronger type): skip.
+            return;
           }
         }
       }

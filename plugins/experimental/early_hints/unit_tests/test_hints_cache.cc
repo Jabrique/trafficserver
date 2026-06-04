@@ -162,15 +162,9 @@ TEST_CASE("HintsCache: legacy get (vector overload)", "[hints_cache]")
 
 TEST_CASE("HintsCache: make_key", "[hints_cache]")
 {
-  SECTION("strips query string")
-  {
-    CHECK(HintsCache::make_key("/page?q=1", 9) == "/page");
-  }
+  SECTION("strips query string") { CHECK(HintsCache::make_key("/page?q=1", 9) == "/page"); }
 
-  SECTION("no query string — returns full path")
-  {
-    CHECK(HintsCache::make_key("/page/sub", 9) == "/page/sub");
-  }
+  SECTION("no query string — returns full path") { CHECK(HintsCache::make_key("/page/sub", 9) == "/page/sub"); }
 
   SECTION("empty path")
   {
@@ -184,10 +178,7 @@ TEST_CASE("HintsCache: make_key", "[hints_cache]")
     CHECK(HintsCache::make_key("/page#section", 13) == "/page#section");
   }
 
-  SECTION("path with both query and fragment")
-  {
-    CHECK(HintsCache::make_key("/page?q=1#frag", 14) == "/page");
-  }
+  SECTION("path with both query and fragment") { CHECK(HintsCache::make_key("/page?q=1#frag", 14) == "/page"); }
 
   SECTION("query at start")
   {
@@ -195,10 +186,7 @@ TEST_CASE("HintsCache: make_key", "[hints_cache]")
     CHECK(HintsCache::make_key("?q=1", 4) == "/");
   }
 
-  SECTION("just a slash")
-  {
-    CHECK(HintsCache::make_key("/", 1) == "/");
-  }
+  SECTION("just a slash") { CHECK(HintsCache::make_key("/", 1) == "/"); }
 }
 
 // ─── size ───────────────────────────────────────────────────────────────────
