@@ -25,7 +25,7 @@ Tests that:
 2. Hints are served after min-hit-count is reached.
 3. Cache survives request volume without corruption.
 
-These tests validate: key length cap, learn_count cap, atomic load swap, and persist mutex.
+These tests validate: key length cap, request_count gate, atomic load swap, and persist mutex.
 '''
 
 Test.SkipUnless(
@@ -103,9 +103,9 @@ tr0.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression("200",
 tr0.StillRunningAfter = microserver
 
 # ----
-# TC0b: Second learn request — bumps learn_count to 2 (cache warm-up, no 103 yet)
+# TC0b: Second learn request -- get() increments request_count to 1 (< 2, no 103 yet)
 # ----
-tr0b = Test.AddTestRun("Persistence: Second learn request (learn_count=2, cache warm-up)")
+tr0b = Test.AddTestRun("Persistence: Second learn request (request_count=1, below min-hit-count=2)")
 tr0b.Processes.Default.Command = (
     "sleep 1 ; curl -s -D - -o /dev/null"
     " --http2"
@@ -116,7 +116,7 @@ tr0b.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression("200"
 tr0b.StillRunningAfter = microserver
 
 # ----
-# TC1: Third request — hints must be served (learn_count=2 >= min-hit-count=2)
+# TC1: Third request — hints must be served (request_count=2 >= min-hit-count=2)
 # ----
 tr1 = Test.AddTestRun("Persistence: Third request — hints served (min-hit-count=2 reached)")
 tr1.Processes.Default.Command = (

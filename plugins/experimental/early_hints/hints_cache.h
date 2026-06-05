@@ -49,13 +49,16 @@ using LinkListPtr = std::shared_ptr<const LinkList>;
 struct HintEntry {
   LinkListPtr links;
   time_t last_updated       = 0;
-  int learn_count           = 0;
   mutable int request_count = 0; // Traffic gate: incremented by get(), NOT by put(). Not persisted.
   mutable std::list<std::string>::iterator lru_iterator{};
 };
 
-// File format magic: "EH" (Early Hints) + version 2 (adds per-entry last_updated)
-static constexpr uint32_t HINTS_CACHE_MAGIC    = 0x45480002;
+// File format magic: "EH" (Early Hints)
+// v1 (0x45480001): original format (key + learn_count + links)
+// v2 (0x45480002): adds per-entry last_updated after learn_count
+// v3 (0x45480003): removes learn_count (dead code); format is key + last_updated + links
+static constexpr uint32_t HINTS_CACHE_MAGIC    = 0x45480003;
+static constexpr uint32_t HINTS_CACHE_MAGIC_V2 = 0x45480002;
 static constexpr uint32_t HINTS_CACHE_MAGIC_V1 = 0x45480001;
 
 class HintsCache
@@ -73,8 +76,7 @@ public:
   /**
    * Thread-safe get: returns shared_ptr to immutable link list (no deep copy).
    * Returns non-null if entry exists and request_count >= min_hits.
-   * Increments request_count on every call (request_count is the traffic gate;
-   * learn_count is the scanner gate and is only incremented by put()).
+   * Increments request_count on every call (request_count is the only traffic gate).
    * Entries never expire — they live until evicted by capacity or process restart.
    */
   LinkListPtr get(const std::string &key, int min_hits) const;
@@ -108,7 +110,7 @@ public:
   time_t get_age(const std::string &key) const;
 
   /**
-   * Thread-safe touch: resets last_updated to now without changing links or learn_count.
+   * Thread-safe touch: resets last_updated to now without changing links.
    * Marks the entry dirty so the next persist flush writes the fresh timestamp.
    * No-op if the key does not exist.
    * Used by READ_CACHE_HDR when hints are stale but the HTML body is frozen in
@@ -146,13 +148,6 @@ public:
    * identical link content for an existing key must NOT increment this counter.
    */
   int64_t put_persist_count() const;
-
-  /** Maximum learn_count value — capped in put() and clamped on load. */
-  static constexpr int
-  max_learn_count()
-  {
-    return 1000000;
-  }
 
   /**
    * Normalize URL path to cache key.

@@ -181,9 +181,11 @@ ts.Disk.records_config.update({
 })
 
 # ----
-# TR1: scan-limit — early resource found, late resource NOT found
+# TR1: scan-limit -- H1 learn: plugin scans body up to 1024 bytes
+# Body transform runs after SEND_RESPONSE_HDR, so learned links cannot appear
+# in this same response. Only plugin engagement is verified here.
 # ----
-tr1 = Test.AddTestRun("scan-limit=1024: early.css found, late.js not found")
+tr1 = Test.AddTestRun("scan-limit=1024: H1 learn -- early.css learned, late.js beyond limit")
 tr1.Processes.Default.Command = (
     "curl -s -D - -o /dev/null"
     " --http1.1"
@@ -194,16 +196,20 @@ tr1.Processes.Default.StartBefore(microserver, ready=When.PortOpen(microserver.V
 tr1.Processes.Default.StartBefore(Test.Processes.ts)
 tr1.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "200 OK", "Should receive 200 OK")
+# Plugin engaged on H1 learn request
 tr1.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "Link: </early.css>", "Resource before scan-limit should be extracted")
+    "X-Early-Hints-Status: skipped-h1", "Plugin engaged (H1 skip)")
+# No Link header on first request (body scan runs after SEND_RESPONSE_HDR)
 tr1.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
-    "late.js", "Resource after scan-limit must NOT be extracted")
+    "Link:", "First (learn) request must not add Link headers: body scan runs after SEND_RESPONSE_HDR")
 tr1.StillRunningAfter = microserver
 
 # ----
-# TR2: cross-origin — local resource = preload, external = preconnect
+# TR2: cross-origin H1 learn -- local resource and external resource learned
+# Body transform runs after SEND_RESPONSE_HDR: no Link headers on learn request.
+# Verification of preload vs preconnect split is done in TR3 (H2 serve).
 # ----
-tr2 = Test.AddTestRun("cross-origin: local.js preload, cdn.external.com preconnect")
+tr2 = Test.AddTestRun("cross-origin: H1 learn -- local.js and cdn.external.com learned")
 tr2.Processes.Default.Command = (
     "curl -s -D - -o /dev/null"
     " --http1.1"
@@ -212,20 +218,18 @@ tr2.Processes.Default.Command = (
 tr2.Processes.Default.ReturnCode = 0
 tr2.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "200 OK", "Should receive 200 OK")
+# Plugin engaged on H1 learn request
 tr2.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "Link: </local.js>; rel=preload; as=script", "Same-origin resource should be preload")
-tr2.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "rel=preconnect", "Cross-origin resource should be converted to preconnect")
-tr2.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "cdn.external.com", "Preconnect should reference external origin")
+    "X-Early-Hints-Status: skipped-h1", "Plugin engaged (H1 skip)")
+# No Link header on first request (body scan runs after SEND_RESPONSE_HDR)
 tr2.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
-    "/style.css", "Full external path must NOT appear (only origin for preconnect)")
+    "Link:", "First (learn) request must not add Link headers")
 tr2.StillRunningAfter = microserver
 
 # ----
-# TR3: cross-origin H2 — verify 103 contains preconnect
+# TR3: cross-origin H2 -- verify 103 contains both preload and preconnect from cache
 # ----
-tr3 = Test.AddTestRun("cross-origin H2: 103 with preconnect link")
+tr3 = Test.AddTestRun("cross-origin H2: 103 with preload for local.js and preconnect for cdn.external.com")
 tr3.Processes.Default.Command = (
     "curl -s -D - -o /dev/null"
     " --http2"
@@ -235,13 +239,19 @@ tr3.Processes.Default.ReturnCode = 0
 tr3.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "x-early-hints-status: sent", "H2 should get 103 from learned cache")
 tr3.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
+    "local.js", "103 should contain local.js preload")
+tr3.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
     "rel=preconnect", "103 should contain preconnect for cross-origin")
+tr3.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
+    "cdn.external.com", "Preconnect should reference external origin")
 tr3.StillRunningAfter = microserver
 
 # ----
-# TR4: Content-Type charset — text/html; charset=utf-8 still scanned
+# TR4: Content-Type charset -- H1 learn: scanner runs on text/html; charset=utf-8
+# Body transform runs after SEND_RESPONSE_HDR: no Link headers on learn request.
+# Verification that charset-style.css was learned happens in TR4b (H2 serve).
 # ----
-tr4 = Test.AddTestRun("charset: text/html; charset=utf-8 still triggers scanning")
+tr4 = Test.AddTestRun("charset: H1 learn -- text/html; charset=utf-8 triggers scanning")
 tr4.Processes.Default.Command = (
     "curl -s -D - -o /dev/null"
     " --http1.1"
@@ -250,14 +260,35 @@ tr4.Processes.Default.Command = (
 tr4.Processes.Default.ReturnCode = 0
 tr4.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "200 OK", "Should receive 200 OK")
+# Plugin engaged on H1 learn request
 tr4.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "Link: </charset-style.css>", "Scanner should run despite charset parameter")
+    "X-Early-Hints-Status: skipped-h1", "Plugin engaged (H1 skip)")
+# No Link header on first request (body scan runs after SEND_RESPONSE_HDR)
+tr4.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
+    "Link:", "First (learn) request must not add Link headers")
 tr4.StillRunningAfter = microserver
 
 # ----
-# TR5: Content-Encoding identity — treated as uncompressed, scanner runs
+# TR4b: charset H2 -- verify 103 contains charset-style.css from cache
 # ----
-tr5 = Test.AddTestRun("identity encoding: Content-Encoding: identity still scanned")
+tr4b = Test.AddTestRun("charset H2: 103 with charset-style.css from cache")
+tr4b.Processes.Default.Command = (
+    "sleep 1 && curl -s -D - -o /dev/null"
+    " --http2"
+    " --insecure"
+    " 'https://127.0.0.1:{0}/charset.html'".format(ts.Variables.ssl_port))
+tr4b.Processes.Default.ReturnCode = 0
+tr4b.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
+    "x-early-hints-status: sent", "H2 should get 103 from charset-scanned cache")
+tr4b.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
+    "charset-style.css", "Scanner should have run despite charset parameter")
+tr4b.StillRunningAfter = microserver
+
+# ----
+# TR5: Content-Encoding identity -- H1 learn: scanner runs for identity encoding
+# Body transform runs after SEND_RESPONSE_HDR: no Link headers on learn request.
+# ----
+tr5 = Test.AddTestRun("identity encoding: H1 learn -- Content-Encoding: identity still scanned")
 tr5.Processes.Default.Command = (
     "curl -s -D - -o /dev/null"
     " --http1.1"
@@ -266,14 +297,37 @@ tr5.Processes.Default.Command = (
 tr5.Processes.Default.ReturnCode = 0
 tr5.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "200 OK", "Should receive 200 OK")
+# Plugin engaged on H1 learn request
 tr5.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "Link: </identity-style.css>", "Scanner should run for identity encoding")
+    "X-Early-Hints-Status: skipped-h1", "Plugin engaged (H1 skip)")
+# No Link header on first request (body scan runs after SEND_RESPONSE_HDR)
+tr5.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
+    "Link:", "First (learn) request must not add Link headers")
 tr5.StillRunningAfter = microserver
 
 # ----
-# TR6: URL safety — javascript: blocked, /safe.js kept
+# TR5b: identity encoding H2 -- verify 103 contains identity-style.css from cache
 # ----
-tr6 = Test.AddTestRun("URL safety: javascript: blocked, /safe.js kept")
+tr5b = Test.AddTestRun("identity encoding H2: 103 with identity-style.css from cache")
+tr5b.Processes.Default.Command = (
+    "sleep 1 && curl -s -D - -o /dev/null"
+    " --http2"
+    " --insecure"
+    " 'https://127.0.0.1:{0}/identity.html'".format(ts.Variables.ssl_port))
+tr5b.Processes.Default.ReturnCode = 0
+tr5b.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
+    "x-early-hints-status: sent", "H2 should get 103 from identity-scanned cache")
+tr5b.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
+    "identity-style.css", "Scanner should have run for identity encoding")
+tr5b.StillRunningAfter = microserver
+
+# ----
+# TR6: URL safety -- H1 learn: javascript: blocked, /safe.js kept
+# Body transform runs after SEND_RESPONSE_HDR: only plugin engagement verified here.
+# Exclusion of javascript: is tested here (it is never learned or served).
+# Verification of safe.js in cache happens in TR6b (H2 serve).
+# ----
+tr6 = Test.AddTestRun("URL safety: H1 learn -- javascript: blocked, /safe.js learned")
 tr6.Processes.Default.Command = (
     "curl -s -D - -o /dev/null"
     " --http1.1"
@@ -282,8 +336,28 @@ tr6.Processes.Default.Command = (
 tr6.Processes.Default.ReturnCode = 0
 tr6.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "200 OK", "Should receive 200 OK")
+# Plugin engaged on H1 learn request
 tr6.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "Link: </safe.js>", "Safe relative URL should be extracted")
+    "X-Early-Hints-Status: skipped-h1", "Plugin engaged (H1 skip)")
+# javascript: scheme must never appear regardless of phase
 tr6.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
     "javascript", "javascript: scheme must be blocked by URL safety check")
 tr6.StillRunningAfter = microserver
+
+# ----
+# TR6b: URL safety H2 -- verify 103 contains /safe.js but not javascript:
+# ----
+tr6b = Test.AddTestRun("URL safety H2: 103 with /safe.js, no javascript: scheme")
+tr6b.Processes.Default.Command = (
+    "sleep 1 && curl -s -D - -o /dev/null"
+    " --http2"
+    " --insecure"
+    " 'https://127.0.0.1:{0}/urlsafety.html'".format(ts.Variables.ssl_port))
+tr6b.Processes.Default.ReturnCode = 0
+tr6b.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
+    "x-early-hints-status: sent", "H2 should get 103 from cache")
+tr6b.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
+    "safe.js", "Safe relative URL should appear in 103")
+tr6b.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
+    "javascript", "javascript: scheme must not appear in 103")
+tr6b.StillRunningAfter = microserver

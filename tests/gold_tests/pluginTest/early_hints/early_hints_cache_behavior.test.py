@@ -20,7 +20,7 @@ Test 103 Early Hints plugin — cache behavior and min-hit-count threshold
 Test.Summary = '''
 Test HTTP 103 Early Hints plugin cache behavior.
 Verifies:
-- min-hit-count threshold: cache.get() returns null until learn_count >= min_hits
+- min-hit-count threshold: cache.get() returns null until request_count >= min_hits
 - 103 is only sent after sufficient learning rounds
 '''
 
@@ -57,8 +57,8 @@ ts.addDefaultSSLFiles()
 ts.Disk.ssl_multicert_config.AddLine('dest_ip=* ssl_cert_name=server.pem ssl_key_name=server.key')
 
 ts.Disk.remap_config.AddLines([
-    # min-hit-count=3: cache.get() returns null until learn_count >= 3
-    # Each request triggers scanner → cache.put() → learn_count++
+    # min-hit-count=3: cache.get() returns null until request_count >= 3
+    # Each request triggers scanner → cache.put(); request_count incremented by get()
     # After 3 learns, 103 is sent on H2 requests.
     'map /counted.html http://127.0.0.1:{0}/counted.html'.format(microserver.Variables.Port) +
     ' @plugin=early_hints.so'
@@ -78,9 +78,9 @@ ts.Disk.records_config.update({
 })
 
 # ----
-# TR1: First H1 request — learn_count becomes 1
+# TR1: First H1 request — request_count becomes 1
 # ----
-tr1 = Test.AddTestRun("min-hit-count: H1 request 1 — learn_count=1")
+tr1 = Test.AddTestRun("min-hit-count: H1 request 1 — request_count=1")
 tr1.Processes.Default.Command = (
     "curl -s -D - -o /dev/null"
     " --http1.1"
@@ -96,17 +96,17 @@ tr1.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr1.StillRunningAfter = microserver
 
 # ----
-# TR2: H2 request — learn_count=1 < 3 → "no-hints" (threshold not met)
-# Scanner runs on response → learn_count becomes 2
+# TR2: H2 request — request_count=1 < 3 → "no-hints" (threshold not met)
+# Scanner runs on response → request_count becomes 2
 # ----
-tr2 = Test.AddTestRun("min-hit-count: H2 request — learn_count=1 < 3 → no-hints")
+tr2 = Test.AddTestRun("min-hit-count: H2 request — request_count=1 < 3 → no-hints")
 tr2.Processes.Default.Command = (
     "sleep 1 && curl -s -D - -o /dev/null"
     " --http2"
     " --insecure"
     " 'https://127.0.0.1:{0}/counted.html'".format(ts.Variables.ssl_port))
 tr2.Processes.Default.ReturnCode = 0
-# learn_count=1 < min_hits=3 → cache.get() returns null → "no-hints"
+# request_count=1 < min_hits=3 → cache.get() returns null → "no-hints"
 tr2.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "x-early-hints-status: no-hints", "Below min-hit-count threshold — no 103 sent")
 tr2.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
@@ -114,9 +114,9 @@ tr2.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr2.StillRunningAfter = microserver
 
 # ----
-# TR3: H1 request 3 — learn_count becomes 3 (threshold reached)
+# TR3: H1 request 3 — request_count becomes 3 (threshold reached)
 # ----
-tr3 = Test.AddTestRun("min-hit-count: H1 request 3 — learn_count=3")
+tr3 = Test.AddTestRun("min-hit-count: H1 request 3 — request_count=3")
 tr3.Processes.Default.Command = (
     "sleep 1 && curl -s -D - -o /dev/null"
     " --http1.1"
@@ -130,16 +130,16 @@ tr3.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr3.StillRunningAfter = microserver
 
 # ----
-# TR4: H2 request — learn_count=3 >= 3 → "sent" (threshold met!)
+# TR4: H2 request — request_count=3 >= 3 → "sent" (threshold met!)
 # ----
-tr4 = Test.AddTestRun("min-hit-count: H2 request — learn_count=3 >= 3 → sent!")
+tr4 = Test.AddTestRun("min-hit-count: H2 request — request_count=3 >= 3 → sent!")
 tr4.Processes.Default.Command = (
     "sleep 1 && curl -s -D - -o /dev/null"
     " --http2"
     " --insecure"
     " 'https://127.0.0.1:{0}/counted.html'".format(ts.Variables.ssl_port))
 tr4.Processes.Default.ReturnCode = 0
-# learn_count=3 >= min_hits=3 → cache.get() returns links → 103 sent
+# request_count=3 >= min_hits=3 → cache.get() returns links → 103 sent
 tr4.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "x-early-hints-status: sent", "Threshold met — 103 should be sent")
 tr4.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(

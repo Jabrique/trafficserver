@@ -66,7 +66,7 @@ TEST_CASE("HintsCache: basic put and get", "[hints_cache]")
 
   SECTION("get with min_hits=2 succeeds after two get() calls")
   {
-    // min_hits threshold is met by request_count (traffic), not learn_count (scanner runs).
+    // min_hits threshold is met by request_count (traffic).
     // Scanner runs once; request_count increments on each get() call.
     std::vector<std::string> links = {"</a.js>; rel=preload; as=script"};
     cache.put("/page", links);
@@ -425,7 +425,7 @@ TEST_CASE("HintsCache audit: updating existing key when full is not a drop", "[h
 // cache-01: min_hits exact boundary
 TEST_CASE("HintsCache audit v2: min_hits exact boundary", "[hints_cache][audit-v2]")
 {
-  // min_hits threshold is now met by request_count (traffic), not learn_count (scanner runs).
+  // min_hits threshold is met by request_count (traffic).
   // A single put() creates the entry; get() calls accumulate request_count.
   std::vector<std::string> links = {"</a.js>; rel=preload; as=script"};
 
@@ -540,15 +540,12 @@ TEST_CASE("HintsCache audit v2: make_key special characters", "[hints_cache][aud
 //
 // Fix: before swapping the cached links shared_ptr, compare the new links
 // vector against the existing cached links. If equal, skip the swap.
-// The learn_count still increments on every put() (needed for min_hit_count
-// to survive restarts — learn_count must be persisted).
 //
 // Observability: shared_ptr identity. After a same-links put(), the shared_ptr
 // returned by get() must point to the SAME underlying object (no new allocation).
 // After a different-links put(), get() must return a new shared_ptr.
 //
-// put_persist_count() tracks actual persist_to_disk() calls (always fires when
-// persist_path is set, since learn_count always changes on each put()).
+// put_persist_count() tracks actual persist_to_disk() calls.
 // ═════════════════════════════════════════════════════════════════════════════
 
 TEST_CASE("put() equality-check — shared_ptr identity preserved for identical links", "[hints_cache][debounce]")
@@ -575,7 +572,7 @@ TEST_CASE("put() equality-check — shared_ptr identity preserved for identical 
 
     // Second put with same links — shared_ptr should remain the same object
     cache.put("/page", links);
-    auto ptr2 = cache.get("/page", 2); // min_hits=2, learn_count is now 2
+    auto ptr2 = cache.get("/page", 2);
 
     REQUIRE(ptr2 != nullptr);
     // Both pointers must point to the same underlying LinkList — no re-allocation
@@ -602,27 +599,6 @@ TEST_CASE("put() equality-check — shared_ptr identity preserved for identical 
     REQUIRE(ptr2->size() == 2);
   }
 
-  SECTION("learn_count still increments for identical-links puts (needed for persistence)")
-  {
-    // learn_count increments on every put() regardless of link equality.
-    // This keeps persist files accurate so disk-loaded entries have correct learn_count.
-    // min_hits serving threshold is now request_count-based (not learn_count-based).
-    HintsCache cache;
-    std::vector<std::string> links = {"</a.js>; rel=preload; as=script"};
-
-    cache.put("/page", links); // learn_count=1
-    cache.put("/page", links); // learn_count=2 (identical links, learn_count still increments)
-    cache.put("/page", links); // learn_count=3
-
-    // request_count starts at 0 regardless of how many puts occurred.
-    // min_hits=3 is satisfied by the 3rd get() call:
-    CHECK(cache.get("/page", 3) == nullptr); // rc=0→1 < 3
-    CHECK(cache.get("/page", 3) == nullptr); // rc=1→2 < 3
-    auto result = cache.get("/page", 3);     // rc=2→3 >= 3
-    REQUIRE(result != nullptr);
-    CHECK(result->size() == 1);
-  }
-
   SECTION("no persist_path set — put_persist_count stays 0")
   {
     HintsCache cache;
@@ -635,7 +611,7 @@ TEST_CASE("put() equality-check — shared_ptr identity preserved for identical 
     CHECK(cache.put_persist_count() == 0);
   }
 
-  SECTION("persist_path set — put_persist_count increments per put (learn_count persisted)")
+  SECTION("persist_path set -- put_persist_count increments on every put (last_updated always changes)")
   {
     std::string path = "/tmp/eh_put_persist_count_" + std::to_string(getpid()) + ".bin";
     std::remove(path.c_str());
@@ -645,11 +621,12 @@ TEST_CASE("put() equality-check — shared_ptr identity preserved for identical 
 
     cache.set_persist_path(path);
     cache.set_persist_throttle(0); // persist every put for this test
-    cache.put("/page", links);     // count=1
-    cache.put("/page", links);     // count=2 (learn_count changed, must persist)
+    cache.put("/page", links);     // count=1 (new entry)
+    cache.put("/page", links);     // count=2 (last_updated changes on every put)
     cache.put("/page", links);     // count=3
 
-    // Every put must persist because learn_count changes (min_hit_count restart safety)
+    // put() persists on every call when throttle=0: last_updated changes even for
+    // identical links. Debounce only skips shared_ptr reallocation, not persist.
     CHECK(cache.put_persist_count() == 3);
 
     std::remove(path.c_str());
@@ -664,17 +641,11 @@ TEST_CASE("put() equality-check — shared_ptr identity preserved for identical 
 // 1. KEY LENGTH CAP: put() with key > MAX_KEY_LEN (4096) must be silently dropped.
 //    Oversized keys cannot be valid URL paths and risk O(n) memory in persist file.
 //
-// 2. LEARN_COUNT CAP: learn_count must never exceed 1,000,000. Without a cap,
-//    sustained high traffic to a single URL would eventually overflow int.
-//
-// 3. LOAD_FROM_DISK ATOMIC SWAP: load_from_disk() must build a temp map and
+// 2. LOAD_FROM_DISK ATOMIC SWAP: load_from_disk() must build a temp map and
 //    swap it in atomically (hold mutex only for the swap, not for parsing).
 //    Without this: a parse failure mid-way leaves the cache permanently empty.
 //
-// 4. LEARN_COUNT CLAMP ON LOAD: learn_count > 1,000,000 read from disk must be
-//    clamped to prevent overflow if file was written without the cap.
-//
-// 5. PERSIST CONCURRENCY: persist_to_disk() must be protected by persist_mutex_
+// 3. PERSIST CONCURRENCY: persist_to_disk() must be protected by persist_mutex_
 //    to prevent two concurrent put() calls from both serializing the cache.
 // ═════════════════════════════════════════════════════════════════════════════
 
@@ -721,49 +692,6 @@ TEST_CASE("HintsCache: put() rejects key longer than MAX_KEY_LEN (4096)", "[hint
   }
 }
 
-// ─── learn_count cap ──────────────────────────────────────────────────────────
-
-TEST_CASE("HintsCache: learn_count caps at max_learn_count()", "[hints_cache][learn_count_cap]")
-{
-  HintsCache cache;
-  std::vector<std::string> links = {"</app.js>; rel=preload; as=script"};
-
-  SECTION("learn_count does not exceed 1000000 after many identical puts")
-  {
-    // Simulate just above cap: 1000001 puts
-    // This test relies on HintsCache exposing learn_count via get() behavior,
-    // since there's no direct accessor. We verify via min_hits.
-    //
-    // After 1000000 puts, get(key, 1000000) must succeed.
-    // After 1000001 puts (capped), get(key, 1000001) must FAIL (count is capped).
-    //
-    // We can't actually call put() 1000001 times in a test (too slow).
-    // Instead: use the public learn_count accessor (requires adding it to hints_cache.h).
-    // OR: test the clamp via load_from_disk with an oversized learn_count in the file.
-
-    // The load path is the canonical test for clamp behavior:
-    // A persisted file with learn_count = 2000000 must clamp to 1000000 after load.
-    // // (See learn_count clamp test below.)
-    //
-    // For the put() cap: we test via put_persist_count() staying within reasonable bounds,
-    // and verify through a test-only accessor if we add one. This section validates
-    // the API contract — after the fix, HintsCache must expose max_learn_count.
-    CHECK(HintsCache::max_learn_count() == 1000000);
-  }
-
-  SECTION("after exactly max_learn_count puts, get at max_learn_count succeeds")
-  {
-    // We use a much smaller MAX for this test — but HintsCache doesn't support
-    // injecting a custom max_learn_count. So we test via the file-load path:
-    // write a persist file with learn_count = max_learn_count, verify get works.
-    // // (This test is verified in the load_from_disk clamp test below.)
-    //
-    // This section documents the API expectation for the cap constant.
-    CHECK(HintsCache::max_learn_count() > 0);
-    CHECK(HintsCache::max_learn_count() <= 2000000);
-  }
-}
-
 // ─── load_from_disk atomic swap ───────────────────────────────────────────────
 
 TEST_CASE("HintsCache: load_from_disk uses atomic swap — existing cache preserved on failure", "[hints_cache][atomic_load]")
@@ -780,8 +708,6 @@ TEST_CASE("HintsCache: load_from_disk uses atomic swap — existing cache preser
     cache.put("/existing-page", existing_links);
     cache.put("/existing-page", existing_links);
     REQUIRE(cache.size() == 1);
-    // Use min_hits=1 — the intent here is to verify entry exists before corrupt load.
-    // (min_hits=2 checked learn_count in the old design; now request_count gates serving)
     REQUIRE(cache.get("/existing-page", 1) != nullptr);
 
     // Now "load" a corrupt file — this must NOT wipe the existing cache
@@ -821,7 +747,7 @@ TEST_CASE("HintsCache: load_from_disk uses atomic swap — existing cache preser
     HintsCache cache(1000);
     std::vector<std::string> original_links = {"</original.js>; rel=preload; as=script"};
     cache.put("/original", original_links);
-    cache.put("/original", original_links); // learn_count=2
+    cache.put("/original", original_links);
     REQUIRE(cache.size() == 1);
 
     // Build a valid-header file claiming 2 entries, but only write 1 complete entry
@@ -838,9 +764,7 @@ TEST_CASE("HintsCache: load_from_disk uses atomic swap — existing cache preser
       uint16_t key_len = 5;
       fwrite(&key_len, sizeof(key_len), 1, fp);
       fwrite("/page", 5, 1, fp);
-      uint32_t lc = 3;
-      fwrite(&lc, sizeof(lc), 1, fp);
-      uint64_t ts = 0; // last_updated (v2 field)
+      uint64_t ts = 0; // last_updated (v3 field)
       fwrite(&ts, sizeof(ts), 1, fp);
       uint16_t link_count = 1;
       fwrite(&link_count, sizeof(link_count), 1, fp);
@@ -866,57 +790,53 @@ TEST_CASE("HintsCache: load_from_disk uses atomic swap — existing cache preser
   }
 }
 
-// ─── learn_count clamp on load ──────────────────────────────────────────────
+// -- v3 format: no learn_count field, rejected v2 magic --
 
-TEST_CASE("HintsCache: load_from_disk clamps oversized learn_count to max_learn_count", "[hints_cache][learn_count_clamp]")
+TEST_CASE("HintsCache: v3 persist format round-trip (no learn_count)", "[hints_cache][persist_v3]")
 {
-  std::string path = "/tmp/eh_clamp_" + std::to_string(getpid()) + ".bin";
-
-  // Write persist file with learn_count = 2,000,000 (above 1,000,000 cap)
-  {
-    FILE *fp = fopen(path.c_str(), "wb");
-    REQUIRE(fp);
-    uint32_t magic = HINTS_CACHE_MAGIC;
-    uint32_t count = 1;
-    fwrite(&magic, sizeof(magic), 1, fp);
-    fwrite(&count, sizeof(count), 1, fp);
-
-    uint16_t key_len = 5;
-    fwrite(&key_len, sizeof(key_len), 1, fp);
-    fwrite("/page", 5, 1, fp);
-
-    uint32_t lc = 2000000; // way over cap
-    fwrite(&lc, sizeof(lc), 1, fp);
-
-    // v2 format: last_updated (uint64_t) follows learn_count.
-    // Omitting this caused load_from_disk to misparse and return false.
-    uint64_t ts = 0;
-    fwrite(&ts, sizeof(ts), 1, fp);
-
-    uint16_t link_count = 1;
-    fwrite(&link_count, sizeof(link_count), 1, fp);
-    const char *link  = "</app.js>; rel=preload; as=script";
-    uint16_t link_len = static_cast<uint16_t>(strlen(link));
-    fwrite(&link_len, sizeof(link_len), 1, fp);
-    fwrite(link, link_len, 1, fp);
-
-    fclose(fp);
-  }
-
-  HintsCache cache;
-  cache.set_persist_path(path);
-  REQUIRE(cache.load_from_disk());
+  std::string path = "/tmp/eh_v3_roundtrip_" + std::to_string(getpid()) + ".bin";
   std::remove(path.c_str());
 
-  // Entry must be loaded (learn_count was clamped from 2,000,000 to 1,000,000).
-  // learn_count clamp is a persistence-only concern; the serving gate is request_count.
-  // Verify entry exists and serves from first get() call (request_count 0→1 ≥ 1):
-  auto result = cache.get("/page", 1);
-  REQUIRE(result != nullptr);
-  CHECK((*result)[0] == "</app.js>; rel=preload; as=script");
+  SECTION("persist and reload produces valid v3 file")
+  {
+    {
+      HintsCache cache;
+      cache.set_persist_path(path);
+      cache.set_persist_throttle(0);
+      std::vector<std::string> links = {"</app.js>; rel=preload; as=script"};
+      cache.put("/page", links);
+    }
 
-  // Verify entry was actually loaded (peek — no request_count side-effect):
-  CHECK(cache.peek("/page") != nullptr);
+    HintsCache cache2;
+    cache2.set_persist_path(path);
+    REQUIRE(cache2.load_from_disk());
+    auto result = cache2.get("/page", 1);
+    REQUIRE(result != nullptr);
+    CHECK((*result)[0] == "</app.js>; rel=preload; as=script");
+
+    std::remove(path.c_str());
+    std::remove((path + ".tmp").c_str());
+  }
+
+  SECTION("v2 magic file is rejected (cold start)")
+  {
+    // Write a file with old v2 magic (0x45480002) -- must be rejected.
+    {
+      FILE *fp = fopen(path.c_str(), "wb");
+      REQUIRE(fp);
+      uint32_t magic = HINTS_CACHE_MAGIC_V2;
+      uint32_t count = 0;
+      fwrite(&magic, sizeof(magic), 1, fp);
+      fwrite(&count, sizeof(count), 1, fp);
+      fclose(fp);
+    }
+
+    HintsCache cache;
+    cache.set_persist_path(path);
+    CHECK_FALSE(cache.load_from_disk());
+
+    std::remove(path.c_str());
+  }
 }
 
 // ─── Concurrent persist safety ───────────────────────────────────────────────
@@ -1241,10 +1161,10 @@ TEST_CASE("HintsCache persist: subsequent persist after stale .tmp is cleaned by
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// Commit 11: request_count separates traffic gate from scanner trigger
+// request_count separates traffic gate from scanner trigger
 //
-// Before: get() returned null when learn_count < min_hits. Because cached_links
-// was the scanner trigger, the scanner ran min_hit_count times — once per put().
+// Before the request_count redesign, get() checked learn_count < min_hits.
+// Scanner ran min_hit_count times per URL (once per put).
 //
 // After: get() increments request_count per call and checks request_count >= min_hits.
 //        peek() returns links without incrementing request_count (for scanner skip
@@ -1259,7 +1179,7 @@ TEST_CASE("HintsCache: request_count separates traffic gate from scanner trigger
   SECTION("put() does not increment request_count")
   {
     HintsCache cache;
-    // 5 puts → learn_count=5, but request_count stays 0
+    // 5 puts -- content identical after first, debounced; request_count stays 0
     for (int i = 0; i < 5; i++) {
       cache.put("/page", links);
     }
@@ -1294,27 +1214,26 @@ TEST_CASE("HintsCache: request_count separates traffic gate from scanner trigger
   SECTION("min_hits=1: first get() returns non-null regardless of put() count")
   {
     HintsCache cache;
-    cache.put("/page", links);      // learn_count=1, rc=0
+    cache.put("/page", links);      // rc=0
     auto r = cache.get("/page", 1); // rc=0→1 >= 1
     REQUIRE(r != nullptr);
     CHECK((*r)[0] == "</a.js>; rel=preload; as=script");
   }
 
-  SECTION("learn_count still increments on put() independently of request_count")
+  SECTION("debounce skips shared_ptr realloc but does not skip persist (last_updated always changes)")
   {
-    // learn_count is persisted for disk reload. It must keep incrementing even
-    // though it no longer gates the serving threshold.
+    // put() always persists when throttle=0: last_updated changes every call.
+    // Debounce (equality check) only skips shared_ptr reallocation, not persist.
     HintsCache cache;
     std::string path = "/tmp/eh_lc_sep_" + std::to_string(getpid()) + ".bin";
     std::remove(path.c_str());
     cache.set_persist_path(path);
     cache.set_persist_throttle(0);
 
-    cache.put("/page", links); // learn_count=1 → persist
-    cache.put("/page", links); // learn_count=2 → persist
-    cache.put("/page", links); // learn_count=3 → persist
+    cache.put("/page", links); // new entry -- persists (count=1)
+    cache.put("/page", links); // last_updated changes -- persists (count=2)
+    cache.put("/page", links); // last_updated changes -- persists (count=3)
 
-    // Every put() persists because learn_count changes (even for identical links)
     CHECK(cache.put_persist_count() == 3);
 
     std::remove(path.c_str());
@@ -1482,7 +1401,7 @@ TEST_CASE("HintsCache: touch() resets age and marks dirty", "[hints_cache][ttl]"
     cache.set_persist_path(path);
     cache.set_persist_throttle(0); // persist on every change
 
-    cache.put("/page", links); // persist 1 (learn_count changed)
+    cache.put("/page", links); // persist 1 (new entry)
     int count_before = cache.put_persist_count();
 
     cache.touch("/page"); // should mark dirty and trigger persist

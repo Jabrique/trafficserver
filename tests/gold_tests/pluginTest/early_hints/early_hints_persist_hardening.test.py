@@ -48,7 +48,7 @@ Test.testName = "early_hints_persist_hardening"
 Test.ContinueOnFail = True
 
 # Binary format constants (must match hints_cache.cc)
-HINTS_CACHE_MAGIC = 0x45480002  # v2: includes per-entry last_updated
+HINTS_CACHE_MAGIC = 0x45480003  # v3: no learn_count; key + last_updated + links
 
 # FNV-1a 64-bit hash (mirrors fnv1a_hash() in early_hints.cc)
 def fnv1a_64(s):
@@ -130,8 +130,7 @@ a25_oversize   = b"x" * 9000  # link_len=9000 > 8192
 
 a25_bytes  = struct.pack('<II', HINTS_CACHE_MAGIC, 1)
 a25_bytes += struct.pack('<H', len(a25_key)) + a25_key
-a25_bytes += struct.pack('<I', 5)           # learn_count=5 > min_hit_count=1
-a25_bytes += struct.pack('<Q', 1700000000)  # last_updated (past, valid)
+a25_bytes += struct.pack('<Q', 1700000000)  # last_updated (v3 field, past ts)
 a25_bytes += struct.pack('<H', 2)           # 2 links
 a25_bytes += struct.pack('<H', 9000) + a25_oversize    # link 1: oversized
 a25_bytes += struct.pack('<H', len(a25_valid_link)) + a25_valid_link  # link 2: valid
@@ -150,8 +149,7 @@ future_ts = int(time.time()) + 1000000000  # ~31 years in the future
 
 a09_bytes  = struct.pack('<II', HINTS_CACHE_MAGIC, 1)
 a09_bytes += struct.pack('<H', len(a09_key)) + a09_key
-a09_bytes += struct.pack('<I', 5)            # learn_count=5
-a09_bytes += struct.pack('<Q', future_ts)    # far-future last_updated
+a09_bytes += struct.pack('<Q', future_ts)    # far-future last_updated (v3 field)
 a09_bytes += struct.pack('<H', 1)            # 1 link
 a09_bytes += struct.pack('<H', len(a09_link)) + a09_link
 

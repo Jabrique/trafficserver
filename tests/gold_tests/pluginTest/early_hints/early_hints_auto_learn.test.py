@@ -20,8 +20,8 @@ Test 103 Early Hints plugin — auto-learn mode
 Test.Summary = '''
 Test HTTP 103 Early Hints plugin in auto-learn mode.
 Verifies:
-- First request: no hints learned yet (debug header = no-hints)
-- Second request: learned hints appear as Link headers in 200
+- First request: plugin engages and scans body (debug header = skipped-h1), no Link header yet
+- Second request: learned hints appear as Link headers in 200 response
 - Non-HTML response: no hints learned
 '''
 
@@ -86,12 +86,11 @@ ts.Disk.records_config.update({
 })
 
 # ----
-# Test Case 0: First request — auto-learn transform scans HTML and learns hints.
-# Since the transform runs before SEND_RESPONSE_HDR, hints are learned AND added
-# to the 200 response within the same transaction. No 103 is sent (no prior hints
-# in cache at remap time), but Link headers appear in 200.
+# Test Case 0: First request -- auto-learn transform scans HTML and learns hints.
+# The body transform runs AFTER SEND_RESPONSE_HDR, so learned links cannot appear
+# in the first request's 200 response headers. Only plugin engagement is verified.
 # ----
-tr1 = Test.AddTestRun("First request - learn and add Link to 200")
+tr1 = Test.AddTestRun("First request - plugin learns, no Link header yet")
 tr1.Processes.Default.Command = (
     "curl -s -D - -o /dev/null"
     " --http1.1"
@@ -102,12 +101,13 @@ tr1.Processes.Default.StartBefore(microserver, ready=When.PortOpen(microserver.V
 tr1.Processes.Default.StartBefore(Test.Processes.ts)
 tr1.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "200 OK", "Should receive 200 OK")
-# Debug header shows skipped-h1 (H1 client can't receive 103) but Link is added to 200
+# Debug header confirms plugin engaged and skipped 103 for H1 client
 tr1.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "X-Early-Hints-Status: skipped-h1", "H1 client skipped for 103")
-# Verify the auto-learn transform added Link headers to the first 200 response
-tr1.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "Link: </assets/main.css>", "First request should learn and inject main.css as Link header")
+    "X-Early-Hints-Status: skipped-h1", "H1 client: plugin engaged but skipped 103")
+# No Link header on first request (body scan runs after SEND_RESPONSE_HDR)
+tr1.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
+    "Link: </assets/main.css>",
+    "First request must not add Link header: body scan runs after SEND_RESPONSE_HDR")
 tr1.StillRunningAfter = microserver
 
 # ----

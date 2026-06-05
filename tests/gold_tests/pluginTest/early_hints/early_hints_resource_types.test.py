@@ -54,9 +54,24 @@ microserver.addResponse(
             '<script defer src="/defer-init.js"></script>'
             '</head><body>Resource types test</body></html>\r\n'
     })
-
-# ----
-# Setup ATS
+# Add extra responses so TR1b re-request can hit origin (enable_cache=False means no ATS cache)
+for _ in range(3):
+    microserver.addResponse(
+        "sessionfile.log", {
+            "headers": "GET /resources.html HTTP/1.1\r\nHost: www.example.com\r\n\r\n",
+            "body": ""
+        }, {
+            "headers": "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/html\r\n\r\n",
+            "body":
+                '<html><head>'
+                '<link rel="stylesheet" href="/theme.css">'
+                '<link rel="preload" href="/font.woff2" as="font">'
+                '<link rel="preload" href="/hero.webp" as="image" fetchpriority="high">'
+                '<script src="/sync.js"></script>'
+                '<script async src="/async-analytics.js"></script>'
+                '<script defer src="/defer-init.js"></script>'
+                '</head><body>Resource types test</body></html>\r\n'
+        })
 # ----
 ts = Test.MakeATSProcess("ts", select_ports=True, enable_tls=True, enable_cache=False)
 
@@ -82,9 +97,11 @@ ts.Disk.records_config.update({
 })
 
 # ----
-# TR1: H1 learn — verify resource type conversion in 200 response Link headers
+# TR1: H1 learn -- plugin scans body and learns all resource types
+# Body transform runs after SEND_RESPONSE_HDR, so learned links cannot appear
+# in this same response. Only plugin engagement is verified here.
 # ----
-tr1 = Test.AddTestRun("Resource types: stylesheet, font, sync/async/defer scripts")
+tr1 = Test.AddTestRun("Resource types: H1 learn -- plugin engages and scans HTML body")
 tr1.Processes.Default.Command = (
     "curl -s -D - -o /dev/null"
     " --http1.1"
@@ -95,58 +112,53 @@ tr1.Processes.Default.StartBefore(microserver, ready=When.PortOpen(microserver.V
 tr1.Processes.Default.StartBefore(Test.Processes.ts)
 tr1.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "200 OK", "Should receive 200 OK")
-
-# Stylesheet → preload as=style
+# Plugin engaged on H1 learn request
 tr1.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "rel=preload; as=style", "Stylesheet should be converted to preload as=style")
-tr1.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "/theme.css", "Stylesheet href should be preserved")
-
-# Font gets auto crossorigin=anonymous (W3C CSS Fonts spec)
-tr1.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "as=font; crossorigin=anonymous", "Font must have crossorigin=anonymous per W3C spec")
-
-# fetchpriority passthrough
-tr1.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "fetchpriority=high", "fetchpriority=high should be passed through to Link header")
-
-# Sync script preloaded
-tr1.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "/sync.js", "Synchronous script should be preloaded")
-
-# Async script NOT preloaded (critical: wastes bandwidth if sent)
+    "X-Early-Hints-Status: skipped-h1", "Plugin engaged (H1 skip)")
+# No Link header on first request (body scan runs after SEND_RESPONSE_HDR)
+tr1.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
+    "Link:", "First (learn) request must not add Link headers: body scan runs after SEND_RESPONSE_HDR")
+# Async/defer script exclusion is permanent (never learned, never served)
 tr1.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
     "async-analytics", "Async script must NOT be preloaded (bandwidth waste)")
-
-# Defer script NOT preloaded
 tr1.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
     "defer-init", "Deferred script must NOT be preloaded (loads after DOM)")
 tr1.StillRunningAfter = microserver
 
 # ----
-# TR2: H2 request — verify 103 sent with correct resource types from cache
+# TR1b: H2 serve -- plugin sends 103 with correct resource types from cache
 # ----
-tr2 = Test.AddTestRun("H2: 103 sent with correct resource types")
-tr2.Processes.Default.Command = (
-    "curl -s -D - -o /dev/null"
+tr1b = Test.AddTestRun("Resource types: H2 serve -- 103 with correct resource types from cache")
+tr1b.Processes.Default.Command = (
+    "sleep 1 && curl -s -D - -o /dev/null"
     " --http2"
     " --insecure"
     " 'https://127.0.0.1:{0}/resources.html'".format(ts.Variables.ssl_port))
-tr2.Processes.Default.ReturnCode = 0
-tr2.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
-    "x-early-hints-status: sent", "H2 should receive 103 from cached hints")
+tr1b.Processes.Default.ReturnCode = 0
+tr1b.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
+    "x-early-hints-status: sent", "H2 should get 103 from cached hints")
 
-# Verify correct types in H2 response (lowercase headers)
-tr2.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "theme.css", "Stylesheet should appear in cached hints")
-tr2.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "font.woff2", "Font should appear in cached hints")
-tr2.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "sync.js", "Sync script should appear in cached hints")
+# Stylesheet converted to preload as=style
+tr1b.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
+    "rel=preload; as=style", "Stylesheet should be converted to preload as=style")
+tr1b.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
+    "theme.css", "Stylesheet href should be preserved in preload")
 
-# Async/defer still excluded from cache
-tr2.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
+# Font gets auto crossorigin=anonymous (W3C CSS Fonts spec)
+tr1b.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
+    "as=font; crossorigin=anonymous", "Font must have crossorigin=anonymous per W3C spec")
+
+# fetchpriority passthrough
+tr1b.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
+    "fetchpriority=high", "fetchpriority=high should be passed through to Link header")
+
+# Sync script preloaded
+tr1b.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
+    "sync.js", "Synchronous script should be preloaded")
+
+# Async/defer must never appear in cache or 103
+tr1b.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
     "async-analytics", "Async script must NOT appear in cached 103 hints")
-tr2.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
+tr1b.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
     "defer-init", "Deferred script must NOT appear in cached 103 hints")
-tr2.StillRunningAfter = microserver
+tr1b.StillRunningAfter = microserver

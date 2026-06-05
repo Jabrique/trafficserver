@@ -607,14 +607,11 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
 
       if (already_learned && !req_data->needs_relearn) {
         TSDebug(PLUGIN_NAME, "READ_RESPONSE_HDR: already learned hints for %s, skipping scanner", req_data->cache_key.c_str());
-        // For origin responses (ATS cache disabled or cache miss), READ_CACHE_HDR will not fire.
-        // Call get() here to increment request_count and set cached_links if threshold is met.
-        // (For ATS cache hits, READ_CACHE_HDR already called get(); cached_links may be non-null.)
-        if (req_data->cached_links == nullptr) {
-          req_data->cached_links = cache->get(req_data->cache_key, config->min_hit_count());
-          TSDebug(PLUGIN_NAME, "READ_RESPONSE_HDR: get() for %s → %s", req_data->cache_key.c_str(),
-                  req_data->cached_links ? "hints ready" : "below threshold");
-        }
+        // No get() here. For H2 clients, get() was already called in TSRemapDoRemap;
+        // a second get() would inflate request_count, causing the 200 Link header to appear
+        // one request earlier than the 103 (asymmetric for even min-hit-count values).
+        // For H1 cache hits, READ_CACHE_HDR calls get() (READ_RESPONSE_HDR does not fire).
+        // SEND_RESPONSE_HDR fallback peek() + get_count() handles Link injection on 200.
       } else {
         // Two cases: !already_learned (first learn) OR already_learned+needs_relearn (TTL expired).
         // Both paths need a scanner. Only the debug message differs.
@@ -728,6 +725,15 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
           TSDebug(PLUGIN_NAME, "READ_CACHE_HDR: TTL refresh (touch) for frozen %s", req_data->cache_key.c_str());
         } else {
           TSDebug(PLUGIN_NAME, "READ_CACHE_HDR: already learned hints for %s, skipping scanner", req_data->cache_key.c_str());
+          // H1 clients skip get() at remap (goto register_hooks). For ATS cache hits,
+          // READ_RESPONSE_HDR does not fire (no origin contact), so get() must be called here
+          // to increment request_count. Without this, H1 cache hits never reach min_hit_count
+          // and Link headers are never added to 200 responses.
+          if (req_data->cached_links == nullptr) {
+            req_data->cached_links = cache->get(req_data->cache_key, config->min_hit_count());
+            TSDebug(PLUGIN_NAME, "READ_CACHE_HDR: get() for %s (H1 cache hit) -> %s", req_data->cache_key.c_str(),
+                    req_data->cached_links ? "hints ready" : "below threshold");
+          }
         }
       } else {
         // Not learned yet — we lost memory state but ATS has the cached response!
@@ -877,11 +883,11 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
           TSDebug(PLUGIN_NAME, "SEND_RESPONSE_HDR: using cached links (from remap) for %s", req_data->cache_key.c_str());
           cached_ptr = req_data->cached_links.get();
         } else if (!req_data->cache_key.empty()) {
-          // Fallback: transform may have just populated the cache during this request.
-          // Use peek() (not get()) to avoid double-incrementing request_count.
-          // get() was already called in TSRemapDoRemap; calling it again here would
-          // count this request twice toward min_hit_count, making the threshold
-          // effectively lower than configured.
+          // Fallback: cached_links is null (first-learn path: remap miss; or already-learned path:
+          // remap get() was below threshold or client was H1 which skips get() at remap).
+          // Use peek() — non-incrementing — to check if links exist, then verify count >=
+          // min_hit_count via get_count() before serving. This avoids consuming an extra
+          // request_count increment solely to populate the 200 Link header.
           TSDebug(PLUGIN_NAME, "SEND_RESPONSE_HDR: fallback peek for %s (transform may have just learned)",
                   req_data->cache_key.c_str());
           req_data->cached_links = cache->peek(req_data->cache_key);

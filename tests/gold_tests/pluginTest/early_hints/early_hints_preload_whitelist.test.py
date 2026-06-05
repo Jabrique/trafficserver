@@ -153,10 +153,11 @@ ts.Disk.records_config.update({
 })
 
 # ====================================================================
-# TR1: Preload whitelist — H1 learn request: script, stylesheet, image
-#      all get rel=preload WITHOUT crossorigin
+# TR1: Preload whitelist -- H1 learn: plugin scans body and learns preload-whitelisted resources
+# Body transform runs after SEND_RESPONSE_HDR, so learned links cannot appear
+# in this same response. Only plugin engagement is verified here.
 # ====================================================================
-tr1 = Test.AddTestRun("Preload whitelist: H1 learn — script, style, image get preload without crossorigin")
+tr1 = Test.AddTestRun("Preload whitelist: H1 learn -- script, style, image learned without crossorigin")
 tr1.Processes.Default.Command = (
     "curl -s -D - -o /dev/null"
     " --http1.1"
@@ -167,28 +168,13 @@ tr1.Processes.Default.StartBefore(microserver, ready=When.PortOpen(microserver.V
 tr1.Processes.Default.StartBefore(Test.Processes.ts)
 tr1.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "200 OK", "Should receive 200 OK")
-
-# Script: full URL preload, no crossorigin
+# Plugin engaged on H1 learn request
 tr1.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "cdn.preload.com/app.js", "Script should have full URL in preload (not stripped to origin)")
-tr1.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "rel=preload; as=script", "Script should get rel=preload; as=script")
-
-# Stylesheet: converted to preload as=style, no crossorigin
-tr1.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "cdn.preload.com/style.css", "Stylesheet should have full URL in preload")
-tr1.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "rel=preload; as=style", "Stylesheet should get rel=preload; as=style")
-
-# Image: preload as=image, no crossorigin
-tr1.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "cdn.preload.com/hero.webp", "Image should have full URL in preload")
-
-# Local resource: normal preload (same-origin)
-tr1.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "Link: </local.css>; rel=preload; as=style", "Local same-origin resource should be preloaded")
-
-# CRITICAL: no crossorigin attribute on any preload-whitelisted link
+    "X-Early-Hints-Status: skipped-h1", "Plugin engaged (H1 skip)")
+# No Link header on first request (body scan runs after SEND_RESPONSE_HDR)
+tr1.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
+    "Link:", "First (learn) request must not add Link headers: body scan runs after SEND_RESPONSE_HDR")
+# crossorigin must never appear for preload-whitelisted resources (no-CORS preload)
 tr1.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
     "crossorigin", "Preload-whitelisted resources must NOT have crossorigin attribute")
 tr1.StillRunningAfter = microserver
@@ -212,9 +198,10 @@ tr2.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr2.StillRunningAfter = microserver
 
 # ====================================================================
-# TR3: Modulepreload on preload-whitelisted domain — emits modulepreload
+# TR3: Modulepreload -- H1 learn: preload-whitelist allows modulepreload emission
+# Body transform runs after SEND_RESPONSE_HDR: no Link headers on learn request.
 # ====================================================================
-tr3 = Test.AddTestRun("Modulepreload: preload-whitelist allows modulepreload emission")
+tr3 = Test.AddTestRun("Modulepreload: H1 learn -- preload-whitelist allows modulepreload")
 tr3.Processes.Default.Command = (
     "curl -s -D - -o /dev/null"
     " --http1.1"
@@ -223,14 +210,35 @@ tr3.Processes.Default.Command = (
 tr3.Processes.Default.ReturnCode = 0
 tr3.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "200 OK", "Should receive 200 OK")
+# Plugin engaged on H1 learn request
 tr3.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "rel=modulepreload", "Modulepreload on preload-whitelisted domain should emit rel=modulepreload")
+    "X-Early-Hints-Status: skipped-h1", "Plugin engaged (H1 skip)")
+# No Link header on first request
+tr3.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
+    "Link:", "First (learn) request must not add Link headers")
 tr3.StillRunningAfter = microserver
 
 # ====================================================================
-# TR4: Both whitelists — crossorigin-whitelist wins (has crossorigin)
+# TR3b: Modulepreload H2 -- 103 with rel=modulepreload from cache
 # ====================================================================
-tr4 = Test.AddTestRun("Both whitelists: crossorigin-whitelist wins → has crossorigin=anonymous")
+tr3b = Test.AddTestRun("Modulepreload H2: 103 with rel=modulepreload from cache")
+tr3b.Processes.Default.Command = (
+    "sleep 1 && curl -s -D - -o /dev/null"
+    " --http2"
+    " --insecure"
+    " 'https://127.0.0.1:{0}/module-wl.html'".format(ts.Variables.ssl_port))
+tr3b.Processes.Default.ReturnCode = 0
+tr3b.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
+    "x-early-hints-status: sent", "H2 should get 103 from cache")
+tr3b.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
+    "rel=modulepreload", "Modulepreload on preload-whitelisted domain should emit rel=modulepreload")
+tr3b.StillRunningAfter = microserver
+
+# ====================================================================
+# TR4: Both whitelists -- H1 learn: crossorigin-whitelist wins (has crossorigin)
+# Body transform runs after SEND_RESPONSE_HDR: no Link headers on learn request.
+# ====================================================================
+tr4 = Test.AddTestRun("Both whitelists: H1 learn -- crossorigin-whitelist wins")
 tr4.Processes.Default.Command = (
     "curl -s -D - -o /dev/null"
     " --http1.1"
@@ -239,16 +247,37 @@ tr4.Processes.Default.Command = (
 tr4.Processes.Default.ReturnCode = 0
 tr4.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "200 OK", "Should receive 200 OK")
+# Plugin engaged on H1 learn request
 tr4.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "cdn.both.com/app.js", "Should have full URL (preload, not preconnect)")
-tr4.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "crossorigin=anonymous", "crossorigin-whitelist should win → crossorigin=anonymous present")
+    "X-Early-Hints-Status: skipped-h1", "Plugin engaged (H1 skip)")
+# No Link header on first request
+tr4.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
+    "Link:", "First (learn) request must not add Link headers")
 tr4.StillRunningAfter = microserver
 
 # ====================================================================
-# TR5: No whitelist — unwhitelisted domain still gets preconnect (regression check)
+# TR4b: Both whitelists H2 -- crossorigin-whitelist wins, crossorigin=anonymous present
 # ====================================================================
-tr5 = Test.AddTestRun("No whitelist: unwhitelisted domain → preconnect (no regression)")
+tr4b = Test.AddTestRun("Both whitelists H2: crossorigin-whitelist wins, crossorigin=anonymous in 103")
+tr4b.Processes.Default.Command = (
+    "sleep 1 && curl -s -D - -o /dev/null"
+    " --http2"
+    " --insecure"
+    " 'https://127.0.0.1:{0}/both-wl.html'".format(ts.Variables.ssl_port))
+tr4b.Processes.Default.ReturnCode = 0
+tr4b.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
+    "x-early-hints-status: sent", "H2 should get 103 from cache")
+tr4b.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
+    "cdn.both.com/app.js", "Should have full URL (preload, not preconnect)")
+tr4b.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
+    "crossorigin=anonymous", "crossorigin-whitelist should win, crossorigin=anonymous present")
+tr4b.StillRunningAfter = microserver
+
+# ====================================================================
+# TR5: No whitelist -- H1 learn: unwhitelisted domain gets preconnect (regression check)
+# Body transform runs after SEND_RESPONSE_HDR: no Link headers on learn request.
+# ====================================================================
+tr5 = Test.AddTestRun("No whitelist: H1 learn -- unwhitelisted domain learned as preconnect")
 tr5.Processes.Default.Command = (
     "curl -s -D - -o /dev/null"
     " --http1.1"
@@ -257,8 +286,28 @@ tr5.Processes.Default.Command = (
 tr5.Processes.Default.ReturnCode = 0
 tr5.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "200 OK", "Should receive 200 OK")
+# Plugin engaged on H1 learn request
 tr5.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "unknown.example.com>; rel=preconnect", "Unwhitelisted domain should get preconnect")
+    "X-Early-Hints-Status: skipped-h1", "Plugin engaged (H1 skip)")
+# No Link header on first request
 tr5.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
-    "unknown.example.com/thing.js", "Unwhitelisted full path must NOT appear (only origin for preconnect)")
+    "Link:", "First (learn) request must not add Link headers")
 tr5.StillRunningAfter = microserver
+
+# ====================================================================
+# TR5b: No whitelist H2 -- preconnect in 103 (no regression)
+# ====================================================================
+tr5b = Test.AddTestRun("No whitelist H2: preconnect in 103 (no regression)")
+tr5b.Processes.Default.Command = (
+    "sleep 1 && curl -s -D - -o /dev/null"
+    " --http2"
+    " --insecure"
+    " 'https://127.0.0.1:{0}/no-wl.html'".format(ts.Variables.ssl_port))
+tr5b.Processes.Default.ReturnCode = 0
+tr5b.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
+    "x-early-hints-status: sent", "H2 should get 103 from cache")
+tr5b.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
+    "unknown.example.com>; rel=preconnect", "Unwhitelisted domain should get preconnect")
+tr5b.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
+    "unknown.example.com/thing.js", "Unwhitelisted full path must NOT appear (only origin for preconnect)")
+tr5b.StillRunningAfter = microserver

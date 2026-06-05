@@ -51,7 +51,7 @@ def fnv1a_64(s):
         h = (h * 1099511628211) & 0xFFFFFFFFFFFFFFFF
     return h
 
-HINTS_CACHE_MAGIC = 0x45480002  # v2 format (includes last_updated per entry)
+HINTS_CACHE_MAGIC = 0x45480003  # v3 format (no learn_count; key + last_updated + links)
 
 # ─── Setup origin ─────────────────────────────────────────────────────────────
 microserver = Test.MakeOriginServer("microserver")
@@ -108,8 +108,8 @@ ts.Disk.File(ts.Variables.LOGDIR + "/traffic.out", id="traffic_out").Content = \
         "ATS must log rejection of the invalid rel=prefetch link on load from disk")
 
 # ─── Build the persist binary in test setup ───────────────────────────────────
-# Craft a .bin file with learn_count=5 (> min_hit_count=1) so hints are served.
-# Contains: 1 valid link + 1 invalid (rel=prefetch) link.
+# Craft a .bin file (v3 format: no learn_count) with 1 valid + 1 invalid link.
+# min_hit_count=1 is satisfied by the first get() call (request_count gate).
 valid_link   = "</valid-asset.js>; rel=preload; as=script"
 invalid_link = "</bad-asset.js>; rel=prefetch"
 
@@ -119,8 +119,7 @@ kb = b"/load-valid.html"
 
 persist_bytes  = struct.pack('<II', HINTS_CACHE_MAGIC, 1)          # magic + 1 entry
 persist_bytes += struct.pack('<H', len(kb)) + kb                    # key
-persist_bytes += struct.pack('<I', 5)                               # learn_count=5
-persist_bytes += struct.pack('<Q', 1700000000)                      # last_updated (v2 field)
+persist_bytes += struct.pack('<Q', 1700000000)                      # last_updated (v3 field)
 persist_bytes += struct.pack('<H', 2)                               # 2 links
 persist_bytes += struct.pack('<H', len(vb)) + vb                   # link 1: valid
 persist_bytes += struct.pack('<H', len(ib)) + ib                   # link 2: invalid
@@ -149,8 +148,7 @@ tr1.Processes.Default.Command = (
     " 'https://127.0.0.1:{0}/load-valid.html'".format(ts.Variables.ssl_port))
 tr1.Processes.Default.ReturnCode = 0
 tr1.Processes.Default.StartBefore(Test.Processes.ts)
-# learn_count=5 > min_hit_count=1 → hints must be served.
-# The valid link must still make it through (invalid one dropped, not whole entry).
+# Note: min_hit_count=1 is satisfied by first get() (request_count gate).
 tr1.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "x-early-hints-status: sent",
     "103 must be served from pre-crafted persist cache (valid link present, invalid rejected)")

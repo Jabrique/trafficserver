@@ -106,12 +106,12 @@ TEST_CASE("Persistence: load restores entries correctly", "[persistence]")
   cleanup(path);
 }
 
-TEST_CASE("Persistence: round-trip preserves learn_count", "[persistence]")
+TEST_CASE("Persistence: round-trip preserves data across restart", "[persistence]")
 {
   std::string path = make_temp_path(".bin");
   cleanup(path);
 
-  // Put 3 times (learn_count=3 — persisted to disk for cold-start accuracy)
+  // Put once (identical content on repeats, debounced by equality check)
   {
     HintsCache cache;
     cache.set_persist_path(path);
@@ -128,9 +128,8 @@ TEST_CASE("Persistence: round-trip preserves learn_count", "[persistence]")
     cache2.set_persist_path(path);
     REQUIRE(cache2.load_from_disk());
 
-    // learn_count=3 is preserved in the file (used for min_hit_count gating after cold start).
-    // After reload, request_count resets to 0 — serving gate is request_count (traffic),
-    // not learn_count. First get() makes rc=1 >= 1 and serves the entry.
+    // After reload, request_count resets to 0 -- serving gate is request_count (traffic).
+    // First get() makes rc=1 >= 1 and serves the entry.
     auto result = cache2.get("/page", 1); // rc=0→1 >= 1
     REQUIRE(result != nullptr);
     CHECK(result->size() == 1);
@@ -518,7 +517,7 @@ TEST_CASE("Persistence audit v2: extreme link_count rejected", "[persistence][au
   std::string path = make_temp_path(".bin");
   cleanup(path);
 
-  // Write valid header + valid key + learn_count + link_count = 65535
+  // Write valid header + valid key + last_updated + link_count = 65535
   {
     std::ofstream f(path, std::ios::binary);
     uint32_t magic = HINTS_CACHE_MAGIC;
@@ -531,11 +530,7 @@ TEST_CASE("Persistence audit v2: extreme link_count rejected", "[persistence][au
     f.write(reinterpret_cast<char *>(&key_len), sizeof(key_len));
     f.write("/page", 5);
 
-    // learn_count
-    uint32_t learn_count = 1;
-    f.write(reinterpret_cast<char *>(&learn_count), sizeof(learn_count));
-
-    // last_updated (v2 field)
+    // last_updated (v3 field)
     uint64_t ts = 0;
     f.write(reinterpret_cast<char *>(&ts), sizeof(ts));
 
@@ -913,10 +908,7 @@ TEST_CASE("Persistence: invalid rel type from persist file is rejected on load",
     fwrite(&key_len, sizeof(key_len), 1, fp);
     fwrite(key, key_len, 1, fp);
 
-    uint32_t lc = 3;
-    fwrite(&lc, sizeof(lc), 1, fp);
-
-    // v2 format: last_updated (uint64_t) follows learn_count
+    // last_updated (v3 field)
     uint64_t ts = 0;
     fwrite(&ts, sizeof(ts), 1, fp);
 
@@ -970,10 +962,7 @@ TEST_CASE("Persistence: preload link missing as= is rejected on load", "[persist
     fwrite(&key_len, sizeof(key_len), 1, fp);
     fwrite(key, key_len, 1, fp);
 
-    uint32_t lc = 1;
-    fwrite(&lc, sizeof(lc), 1, fp);
-
-    // v2 format: last_updated (uint64_t) follows learn_count
+    // last_updated (v3 field)
     uint64_t ts = 0;
     fwrite(&ts, sizeof(ts), 1, fp);
 
@@ -1160,12 +1149,11 @@ write_bin_header(FILE *fp, uint32_t entry_count)
 
 // Helper: write a single binary entry
 static void
-write_bin_entry(FILE *fp, const char *key, uint32_t lc, uint64_t ts, const std::vector<std::pair<uint16_t, std::string>> &raw_links)
+write_bin_entry(FILE *fp, const char *key, uint64_t ts, const std::vector<std::pair<uint16_t, std::string>> &raw_links)
 {
   uint16_t key_len = static_cast<uint16_t>(strlen(key));
   fwrite(&key_len, sizeof(key_len), 1, fp);
   fwrite(key, key_len, 1, fp);
-  fwrite(&lc, sizeof(lc), 1, fp);
   fwrite(&ts, sizeof(ts), 1, fp);
   uint16_t link_count = static_cast<uint16_t>(raw_links.size());
   fwrite(&link_count, sizeof(link_count), 1, fp);
@@ -1195,7 +1183,7 @@ TEST_CASE("Persist hardening: oversized link is skipped, valid entries survive",
 
     // Entry 1: fully valid
     uint64_t ts1 = static_cast<uint64_t>(time(nullptr) - 60);
-    write_bin_entry(fp, "/page1", 2, ts1, {{38, "</app.js>; rel=preload; as=script"}});
+    write_bin_entry(fp, "/page1", ts1, {{38, "</app.js>; rel=preload; as=script"}});
 
     // Entry 2: oversized link (9000 bytes > 8192) then a valid link
     {
@@ -1203,9 +1191,7 @@ TEST_CASE("Persist hardening: oversized link is skipped, valid entries survive",
       uint16_t klen   = 6;
       fwrite(&klen, sizeof(klen), 1, fp);
       fwrite(key, klen, 1, fp);
-      uint32_t lc2 = 1;
       uint64_t ts2 = static_cast<uint64_t>(time(nullptr) - 30);
-      fwrite(&lc2, sizeof(lc2), 1, fp);
       fwrite(&ts2, sizeof(ts2), 1, fp);
       uint16_t link_count = 2;
       fwrite(&link_count, sizeof(link_count), 1, fp);
@@ -1244,7 +1230,7 @@ TEST_CASE("Persist hardening: file with only oversized link still returns true",
     write_bin_header(fp, 1);
     uint64_t ts = static_cast<uint64_t>(time(nullptr) - 60);
     std::string pad(9000, 'y');
-    write_bin_entry(fp, "/alone", 1, ts, {{9000, pad}});
+    write_bin_entry(fp, "/alone", ts, {{9000, pad}});
     fclose(fp);
   }
 
@@ -1299,7 +1285,7 @@ TEST_CASE("Persist hardening: future ts_on_disk is clamped to now on load", "[pe
     REQUIRE(fp);
     write_bin_header(fp, 1);
     uint64_t future_ts = static_cast<uint64_t>(now) + 1000000000ULL; // +~31 years
-    write_bin_entry(fp, "/page", 1, future_ts, {{38, "</app.js>; rel=preload; as=script"}});
+    write_bin_entry(fp, "/page", future_ts, {{38, "</app.js>; rel=preload; as=script"}});
     fclose(fp);
   }
 

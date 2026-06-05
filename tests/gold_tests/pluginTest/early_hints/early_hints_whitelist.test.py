@@ -125,9 +125,11 @@ ts.Disk.records_config.update({
 })
 
 # ----
-# TR1: Whitelist — H1 learn: trusted=preload, untrusted=preconnect, local=preload
+# TR1: Whitelist -- H1 learn: plugin scans body and learns trust-classified resources
+# Body transform runs after SEND_RESPONSE_HDR, so learned links cannot appear
+# in this same response. Only plugin engagement is verified here.
 # ----
-tr1 = Test.AddTestRun("Whitelist: trusted preload, untrusted preconnect")
+tr1 = Test.AddTestRun("Whitelist: H1 learn -- trusted and untrusted CDN resources learned")
 tr1.Processes.Default.Command = (
     "curl -s -D - -o /dev/null"
     " --http1.1"
@@ -138,22 +140,12 @@ tr1.Processes.Default.StartBefore(microserver, ready=When.PortOpen(microserver.V
 tr1.Processes.Default.StartBefore(Test.Processes.ts)
 tr1.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "200 OK", "Should receive 200 OK")
-
-# Trusted CDN: preload allowed (full URL preserved)
+# Plugin engaged on H1 learn request
 tr1.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "cdn.trusted.com/style.css", "Trusted CDN should have full URL (preload, not preconnect)")
-tr1.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "rel=preload; as=style", "Trusted CDN should get rel=preload")
-
-# Untrusted CDN: preconnect only (origin only, path stripped)
-tr1.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "cdn.untrusted.com>; rel=preconnect", "Untrusted CDN should get rel=preconnect (origin only)")
+    "X-Early-Hints-Status: skipped-h1", "Plugin engaged (H1 skip)")
+# No Link header on first request (body scan runs after SEND_RESPONSE_HDR)
 tr1.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
-    "cdn.untrusted.com/app.js", "Untrusted CDN full path must NOT appear (only origin for preconnect)")
-
-# Local resource: normal preload
-tr1.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "Link: </local.css>; rel=preload; as=style", "Local same-origin resource should be preloaded")
+    "Link:", "First (learn) request must not add Link headers: body scan runs after SEND_RESPONSE_HDR")
 tr1.StillRunningAfter = microserver
 
 # ----
@@ -175,9 +167,10 @@ tr2.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr2.StillRunningAfter = microserver
 
 # ----
-# TR3: Protocol-relative URL — //cdn.proto.com → preconnect
+# TR3: Protocol-relative URL -- H1 learn: //cdn.proto.com detected as cross-origin
+# Body transform runs after SEND_RESPONSE_HDR: no Link headers on learn request.
 # ----
-tr3 = Test.AddTestRun("Protocol-relative: //cdn.proto.com → preconnect")
+tr3 = Test.AddTestRun("Protocol-relative: H1 learn -- //cdn.proto.com detected as cross-origin")
 tr3.Processes.Default.Command = (
     "curl -s -D - -o /dev/null"
     " --http1.1"
@@ -186,18 +179,42 @@ tr3.Processes.Default.Command = (
 tr3.Processes.Default.ReturnCode = 0
 tr3.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "200 OK", "Should receive 200 OK")
-# Protocol-relative → cross-origin → preconnect (with https: prefix added)
+# Plugin engaged on H1 learn request
 tr3.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "cdn.proto.com>; rel=preconnect", "Protocol-relative URL should become preconnect")
-# Local resource still preload
-tr3.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "Link: </local-proto.js>; rel=preload; as=script", "Local resource should still be preloaded")
+    "X-Early-Hints-Status: skipped-h1", "Plugin engaged (H1 skip)")
+# No Link header on first request (body scan runs after SEND_RESPONSE_HDR)
+tr3.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
+    "Link:", "First (learn) request must not add Link headers")
 tr3.StillRunningAfter = microserver
 
 # ----
-# TR4: Origin invalid Link — H1 first request learns (valid only)
+# TR3b: Protocol-relative H2 -- verify 103 contains preconnect for //cdn.proto.com
 # ----
-tr4 = Test.AddTestRun("Origin invalid Link: first request caches only valid Link")
+tr3b = Test.AddTestRun("Protocol-relative H2: 103 with preconnect for cdn.proto.com")
+tr3b.Processes.Default.Command = (
+    "sleep 1 && curl -s -D - -o /dev/null"
+    " --http2"
+    " --insecure"
+    " 'https://127.0.0.1:{0}/proto-relative.html'".format(ts.Variables.ssl_port))
+tr3b.Processes.Default.ReturnCode = 0
+tr3b.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
+    "x-early-hints-status: sent", "H2 should get 103 from cache")
+# Protocol-relative becomes preconnect (with scheme prefix added)
+tr3b.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
+    "cdn.proto.com>; rel=preconnect", "Protocol-relative URL should become preconnect")
+# Local resource still preload
+tr3b.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
+    "local-proto.js", "Local resource should still be preloaded")
+tr3b.StillRunningAfter = microserver
+
+# ----
+# TR4: Origin invalid Link -- H1 first request: plugin learns only valid Link (origin-forward mode)
+# Body transform runs after SEND_RESPONSE_HDR: plugin adds learned links to this 200 response.
+# In origin-forward mode, the plugin reads Link headers from origin and caches valid ones.
+# The 200 response serves the origin Link headers directly (ATS passthrough), not plugin-added.
+# The plugin-learned valid link is served in 103 on subsequent H2 requests (TR5).
+# ----
+tr4 = Test.AddTestRun("Origin invalid Link: first request learns and caches only valid Link")
 tr4.Processes.Default.Command = (
     "curl -s -D - -o /dev/null"
     " --http1.1"
@@ -206,11 +223,9 @@ tr4.Processes.Default.Command = (
 tr4.Processes.Default.ReturnCode = 0
 tr4.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "200 OK", "Should receive 200 OK")
-# Valid Link should be forwarded to client (plugin-added from cache)
+# Plugin engaged (H1, origin-forward: no 103 but still processes)
 tr4.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "Link: </valid-origin.css>", "Valid origin Link should be cached and added by plugin")
-# Note: invalid Link from origin passes through ATS (origin header passthrough is expected).
-# The plugin correctly filters what it CACHES — verified by TR5 showing 103 with only valid link.
+    "X-Early-Hints-Status: skipped-h1", "Plugin engaged (H1 skip)")
 tr4.StillRunningAfter = microserver
 
 # ----

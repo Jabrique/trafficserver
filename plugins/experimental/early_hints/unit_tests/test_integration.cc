@@ -666,17 +666,17 @@ TEST_CASE("Integration: Cache min_hit_count from config gates serving", "[integr
   const auto &links = scanner.get_links();
   REQUIRE(links.size() == 1);
 
-  // First put: learn_count = 1
+  // First put: entry created; request_count=0
   cache.put(key, links);
-  CHECK(cache.get(key, config.min_hit_count()) == nullptr);
+  CHECK(cache.get(key, config.min_hit_count()) == nullptr); // rc=0->1 < 3
 
-  // Second put: learn_count = 2
+  // Second put: same content, debounced; request_count increments on get()
   cache.put(key, links);
-  CHECK(cache.get(key, config.min_hit_count()) == nullptr);
+  CHECK(cache.get(key, config.min_hit_count()) == nullptr); // rc=1->2 < 3
 
-  // Third put: learn_count = 3 — now meets threshold
+  // Third get: request_count=3 meets threshold
   cache.put(key, links);
-  LinkListPtr result = cache.get(key, config.min_hit_count());
+  LinkListPtr result = cache.get(key, config.min_hit_count()); // rc=2->3 >= 3
   REQUIRE(result != nullptr);
   REQUIRE(result->size() == 1);
   CHECK(is_valid_link_value((*result)[0]));
@@ -835,7 +835,7 @@ TEST_CASE("Integration: Cache update overwrites stale scanner results", "[integr
 //
 // The origin-forward dedup in early_hints.cc is inside an ATS-callback and
 // cannot be invoked without a running ATS process.  We simulate its logic here
-// using split_link_header_value + the same URL-key+rel-type check to verify
+// using split_link_header_value + the same URL-only strongest-wins check to verify
 // correctness for edge cases not covered by the integration test.
 
 #include "../link_parser.h"

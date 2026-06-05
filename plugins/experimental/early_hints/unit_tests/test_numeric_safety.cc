@@ -365,7 +365,6 @@ TEST_CASE("Numeric: HintsCache max_entries enforcement", "[numeric][cache]")
     CHECK(cache.size() == 2);
 
     // Verify update took effect: use min_hits=1 (request_count gate).
-    // learn_count for /a is now 2, but serving threshold is request_count (traffic).
     std::vector<std::string> result;
     CHECK(cache.get("/a", result, 1)); // rc=0→1 >= 1
     REQUIRE(result.size() == 1);
@@ -417,13 +416,12 @@ TEST_CASE("Numeric: Cache entries persist indefinitely", "[numeric][cache]")
     std::vector<std::string> links = {"</a.js>; rel=preload; as=script"};
     cache.put("/page", links);
 
-    // Multiple updates increment learn_count
+    // Multiple updates with identical content are debounced (equality check).
     for (int i = 0; i < 10; i++) {
       cache.put("/page", links);
     }
 
-    // Multiple updates increment learn_count (for persistence) independently of request_count.
-    // The serving threshold is request_count: first get() suffices after many puts.
+    // Serving threshold is request_count: first get() suffices after many puts.
     std::vector<std::string> result;
     CHECK(cache.get("/page", result, 1)); // rc=0→1 >= 1
     CHECK(result.size() == 1);
@@ -594,26 +592,26 @@ TEST_CASE("Numeric: HintsCache::make_key with edge-case path_len", "[numeric][ca
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Additional: learn_count overflow (int)
+// Additional: request_count gate with many puts
 // ═══════════════════════════════════════════════════════════════════════════════
 
-TEST_CASE("Numeric: HintsCache learn_count is bounded by practical use", "[numeric][cache]")
+TEST_CASE("Numeric: HintsCache request_count gates serving threshold independently of put() count", "[numeric][cache]")
 {
-  SECTION("many puts increment learn_count correctly")
+  SECTION("many puts do not satisfy request_count threshold")
   {
     HintsCache cache;
     std::vector<std::string> links = {"</a.js>; rel=preload; as=script"};
 
-    // Put 100 times — learn_count should reach 100
+    // Put 100 times (identical content, debounced after first).
     for (int i = 0; i < 100; i++) {
       cache.put("/page", links);
     }
 
-    // 100 puts increment learn_count to 100 (bounded, no overflow).
-    // Serving threshold is request_count. First get() makes rc=1 >= 1.
+    // Serving threshold is request_count, not put() count.
+    // First get() makes rc=1 >= 1 -> serves.
     std::vector<std::string> result;
-    CHECK(cache.get("/page", result, 1));         // rc=0→1 >= 1 → true
-    CHECK_FALSE(cache.get("/page", result, 200)); // rc=1→2 < 200 → false
+    CHECK(cache.get("/page", result, 1));         // rc=0->1 >= 1 -> true
+    CHECK_FALSE(cache.get("/page", result, 200)); // rc=1->2 < 200 -> false
   }
 }
 

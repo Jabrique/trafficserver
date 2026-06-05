@@ -1055,6 +1055,43 @@ TEST_CASE("HtmlScanner dedup: URL-only strongest-wins across link types", "[html
     CHECK(has_preload);
     CHECK(has_preconnect);
   }
+
+  SECTION("same non-whitelisted cross-origin domain: multiple paths collapse to one preconnect")
+  {
+    // All three tags resolve to the same URL key <https://cdn.example.com>; rel=preconnect.
+    // URL-only dedup must collapse them: only the first entry is kept.
+    // Note: at scanner level, mixed-type (preconnect+preload) same-URL-key scenarios cannot arise
+    // because whitelist classification is domain-based. All tags on a non-whitelisted domain
+    // always produce preconnect to the same origin URL. The strongest-wins path is exercised
+    // at the dedup_link_segments() level (see test_integration.cc).
+    std::string html = "<html><head>"
+                       "<link rel=\"preload\" href=\"https://cdn.example.com/app.js\" as=\"script\">"
+                       "<link rel=\"preload\" href=\"https://cdn.example.com/style.css\" as=\"style\">"
+                       "<link rel=\"preload\" href=\"https://cdn.example.com/font.woff2\" as=\"font\">"
+                       "</head></html>";
+    HtmlScanner scanner(131072, 10, &config);
+    scanner.feed(html.c_str(), static_cast<int64_t>(html.size()));
+    auto links = scanner.get_links();
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=preconnect") != std::string::npos);
+    CHECK(links[0].find("cdn.example.com") != std::string::npos);
+  }
+
+  SECTION("same whitelisted domain same exact href: duplicate preload dropped")
+  {
+    // Two identical hrefs on a whitelisted domain produce the same URL key.
+    // URL-only dedup: the second is dropped regardless of rel type.
+    std::string html = "<html><head>"
+                       "<link rel=\"preload\" href=\"https://static.example.com/app.js\" as=\"script\" crossorigin>"
+                       "<link rel=\"preload\" href=\"https://static.example.com/app.js\" as=\"script\" crossorigin>"
+                       "</head></html>";
+    HtmlScanner scanner(131072, 10, &config);
+    scanner.feed(html.c_str(), static_cast<int64_t>(html.size()));
+    auto links = scanner.get_links();
+    REQUIRE(links.size() == 1);
+    CHECK(links[0].find("rel=preload") != std::string::npos);
+    CHECK(links[0].find("static.example.com/app.js") != std::string::npos);
+  }
 }
 
 TEST_CASE("HtmlScanner dedup: max_links interacts correctly with deduplication", "[html_scanner][build][dedup]")

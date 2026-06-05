@@ -69,8 +69,6 @@ HintsCache::get(const std::string &key, int min_hits) const
 
   // Traffic gate: request_count controls when hints are served.
   // Increment first so the very first call counts as request #1.
-  // learn_count (incremented by put()) is no longer the serving gate —
-  // it only controls persistence. This decouples scanner runs from traffic threshold.
   if (++entry.request_count < min_hits) {
     return nullptr;
   }
@@ -140,12 +138,6 @@ HintsCache::put(const std::string &key, const std::vector<std::string> &links)
       }
       entry.last_updated = time(nullptr);
 
-      // learn_count cap — cap at max_learn_count() to prevent int overflow
-      // under sustained traffic. The count is persisted and used for min_hit_count.
-      if (entry.learn_count < max_learn_count()) {
-        entry.learn_count++;
-      }
-
       // Move key to front of LRU list since it was updated
       lru_list_.splice(lru_list_.begin(), lru_list_, entry.lru_iterator);
     } else {
@@ -163,7 +155,6 @@ HintsCache::put(const std::string &key, const std::vector<std::string> &links)
       HintEntry entry;
       entry.links        = std::make_shared<const LinkList>(links);
       entry.last_updated = time(nullptr);
-      entry.learn_count  = 1;
       entry.lru_iterator = lru_list_.begin();
       entries_[key]      = std::move(entry);
     }
@@ -345,7 +336,6 @@ HintsCache::persist_to_disk()
   struct SnapshotEntry {
     std::string key;
     LinkListPtr links;
-    int learn_count;
     time_t last_updated;
   };
   std::vector<SnapshotEntry> snapshot;
@@ -360,7 +350,7 @@ HintsCache::persist_to_disk()
     gen_snapshot = dirty_generation_.load(std::memory_order_acquire);
     snapshot.reserve(entries_.size());
     for (const auto &pair : entries_) {
-      snapshot.push_back({pair.first, pair.second.links, pair.second.learn_count, pair.second.last_updated});
+      snapshot.push_back({pair.first, pair.second.links, pair.second.last_updated});
     }
   } // mutex released — disk I/O happens without blocking readers
 
@@ -407,17 +397,7 @@ HintsCache::persist_to_disk()
       return false;
     }
 
-    // learn_count
-    uint32_t lc = static_cast<uint32_t>(entry.learn_count);
-    if (fwrite(&lc, sizeof(lc), 1, fp) != 1) {
-      fclose(fp);
-      if (std::remove(tmp_path.c_str()) != 0 && errno != ENOENT) {
-        TSDebug("early_hints", "persist: failed to remove temp file %s (%s)", tmp_path.c_str(), strerror(errno));
-      }
-      return false;
-    }
-
-    // last_updated (v2 field)
+    // last_updated
     uint64_t ts = static_cast<uint64_t>(entry.last_updated);
     if (fwrite(&ts, sizeof(ts), 1, fp) != 1) {
       fclose(fp);
@@ -549,8 +529,8 @@ HintsCache::load_from_disk()
     return false;
   }
 
-  if (magic == HINTS_CACHE_MAGIC_V1) {
-    TSDebug("early_hints", "load: v1 format (0x%08x) not supported, cold start", magic);
+  if (magic == HINTS_CACHE_MAGIC_V1 || magic == HINTS_CACHE_MAGIC_V2) {
+    TSDebug("early_hints", "load: old format (0x%08x) not supported, cold start", magic);
     fclose(fp);
     return false;
   }
@@ -586,19 +566,7 @@ HintsCache::load_from_disk()
       return false;
     }
 
-    // Read learn_count
-    uint32_t lc = 0;
-    if (fread(&lc, sizeof(lc), 1, fp) != 1) {
-      fclose(fp);
-      return false;
-    }
-    // Clamp learn_count from disk to max_learn_count().
-    // Prevents overflow if file was written by a buggy version without the cap.
-    if (static_cast<int>(lc) > max_learn_count()) {
-      lc = static_cast<uint32_t>(max_learn_count());
-    }
-
-    // Read last_updated (v2 field)
+    // Read last_updated
     uint64_t ts_on_disk = 0;
     if (fread(&ts_on_disk, sizeof(ts_on_disk), 1, fp) != 1) {
       fclose(fp);
@@ -673,7 +641,6 @@ HintsCache::load_from_disk()
       }
       entry.links        = std::make_shared<const LinkList>(std::move(links));
       entry.last_updated = ts_clamped;
-      entry.learn_count  = static_cast<int>(lc);
       new_entries[key]   = std::move(entry);
     }
   }

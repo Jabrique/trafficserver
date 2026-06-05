@@ -13,7 +13,7 @@ import struct
 import sys
 import os
 
-HINTS_CACHE_MAGIC = 0x45480001
+HINTS_CACHE_MAGIC = 0x45480003  # v3: no learn_count; key + last_updated + links
 INVALID_LINK      = b"</injected-bad.js>; rel=prefetch"
 
 
@@ -39,8 +39,9 @@ def inject(path):
     key = data[offset:offset + key_len]
     offset += key_len
 
-    learn_count, = struct.unpack_from("<I", data, offset)
-    offset += 4
+    # v3 format: last_updated (uint64) follows key directly (no learn_count)
+    last_updated, = struct.unpack_from("<Q", data, offset)
+    offset += 8
 
     link_count, = struct.unpack_from("<H", data, offset)
     offset += 2
@@ -57,10 +58,10 @@ def inject(path):
     links.append(INVALID_LINK)
     new_link_count = len(links)
 
-    # Re-serialize everything
+    # Re-serialize everything (v3 format: no learn_count)
     out = struct.pack("<II", HINTS_CACHE_MAGIC, entry_count)
     out += struct.pack("<H", key_len) + key
-    out += struct.pack("<I", learn_count)
+    out += struct.pack("<Q", last_updated)
     out += struct.pack("<H", new_link_count)
     for lnk in links:
         out += struct.pack("<H", len(lnk)) + lnk
