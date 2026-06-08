@@ -40,6 +40,9 @@ TESTS=(
     early_hints_link_parser_fixes     # BUG-1 segment state reset, BUG-4a case-insensitive URL dedup, BUG-5a/5b CR boundary
     early_hints_origin_forward_correctness  # origin-forward dedup and header correctness
     early_hints_scanner_boundary      # scanner HTML boundary and streaming edge cases
+    early_hints_path_case_dedup       # RFC 3986 path case sensitivity in URL dedup
+    early_hints_bare_crossorigin      # bare crossorigin attr normalized to anonymous
+    early_hints_manual_stylesheet     # --link rel=stylesheet normalized to rel=preload
 )
 
 PASSED=0

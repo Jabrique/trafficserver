@@ -18,6 +18,7 @@
  */
 
 #include "config.h"
+#include "link_parser.h"
 #include <ts/ts.h>
 #include <getopt.h>
 #include <cstring>
@@ -304,20 +305,15 @@ has_valid_as_for_preload(const std::string &link)
 }
 
 // Extracts URL key from a Link header value: everything up to and including '>'.
-// Used for deduplication — two links with the same <URL> are duplicates regardless of rel type,
-// because rel=preload subsumes rel=preconnect for the same resource.
+// Used for deduplication. Two links with the same <URL> are duplicates regardless of rel type.
+// Host comparison is case-insensitive per RFC 4343. Path comparison is case-sensitive
+// per RFC 3986 section 6.2.2.1, so only the scheme and host are lowercased.
 static std::string
 extract_dedup_key(const std::string &link)
 {
   size_t url_end  = link.find('>');
   std::string key = (url_end != std::string::npos) ? link.substr(0, url_end + 1) : link;
-  // DNS host names are case-insensitive (RFC 4343); lowercase the URL portion
-  // so <CDN.EXAMPLE.COM/app.js> and <cdn.example.com/app.js> are treated
-  // as the same resource and correctly deduplicated.
-  for (char &c : key) {
-    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-  }
-  return key;
+  return lowercase_url_host(key);
 }
 
 std::vector<std::string>
@@ -535,18 +531,30 @@ EarlyHintsConfig::init(int argc, const char *argv[])
         return false;
       }
       break;
-    case 'l':
-      if (!is_valid_link_value(std::string(optarg))) {
+    case 'l': {
+      std::string link_val(optarg);
+      if (!is_valid_link_value(link_val)) {
         TSError("[%s] invalid --link value: %s", PLUGIN_NAME, optarg);
         return false;
       }
-      if (!has_valid_as_for_preload(std::string(optarg))) {
+      // Normalize rel=stylesheet -> rel=preload; as=style at config-parse time.
+      // An operator may write rel=stylesheet (HTML <link> syntax) but browsers only
+      // accept rel=preload, rel=preconnect, and rel=modulepreload in 103 responses.
+      // normalize_link_for_hint returns the link unchanged for already-valid hint types
+      // (rel=preload, rel=preconnect, rel=modulepreload) and converts rel=stylesheet.
+      std::string normalized = normalize_link_for_hint(link_val);
+      if (!normalized.empty()) {
+        link_val = std::move(normalized);
+      }
+      if (!has_valid_as_for_preload(link_val)) {
         TSError("[%s] WARNING: --link has rel=preload without valid as= attribute, "
                 "browser will ignore preload (double-fetch risk): %s",
-                PLUGIN_NAME, optarg);
+                PLUGIN_NAME, link_val.c_str());
       }
-      manual_links_.emplace_back(optarg);
+      manual_links_.emplace_back(std::move(link_val));
       break;
+    }
+
     case 'x':
       if (!safe_parse_int(optarg, &max_links_)) {
         TSError("[%s] invalid --max-links value: %s", PLUGIN_NAME, optarg);
@@ -844,10 +852,42 @@ normalize_link_for_hint(const std::string &link)
     return {};
   };
 
+  // carry_crossorigin handles all three HTML spec forms of the crossorigin attribute:
+  //   crossorigin=anonymous       (valued, explicit)
+  //   crossorigin=use-credentials (valued, explicit)
+  //   crossorigin                 (bare boolean, equivalent to anonymous per spec section 2.5.3)
+  //   crossorigin=                (empty value, equivalent to anonymous per spec section 2.5.3)
+  // carry_param("crossorigin") covers the first two (searches for "crossorigin=").
+  // The bare and empty-value forms require a separate word-boundary check.
+  auto carry_crossorigin = [&]() -> std::string {
+    // Try valued form first: covers crossorigin=anonymous and crossorigin=use-credentials.
+    std::string valued = carry_param("crossorigin");
+    if (!valued.empty()) {
+      return valued;
+    }
+    // Search for bare 'crossorigin' (no '=' following) with word-boundary enforcement.
+    // Boundaries: start-of-string, ';', ' ', '\t' before; end-of-string, ';', ' ', '\t', '=' after.
+    // The '=' after check distinguishes bare from a valued form that carry_param already handles.
+    static const std::string kBare = "crossorigin";
+    size_t pos                     = 0;
+    while ((pos = params_lower.find(kBare, pos)) != std::string::npos) {
+      bool before_ok = (pos == 0) || params_lower[pos - 1] == ';' || params_lower[pos - 1] == ' ' || params_lower[pos - 1] == '\t';
+      size_t after   = pos + kBare.size();
+      // After the token: end-of-string, whitespace, semicolon, or '=' (empty value).
+      bool after_ok = (after >= params_lower.size()) || params_lower[after] == ';' || params_lower[after] == ' ' ||
+                      params_lower[after] == '\t' || params_lower[after] == '=';
+      if (before_ok && after_ok) {
+        return "; crossorigin=anonymous";
+      }
+      pos += kBare.size();
+    }
+    return {};
+  };
+
   // Check for stylesheet — convert to preload; as=style, preserving optional attrs.
   if (has_param_match(params_lower, "rel=stylesheet") || has_param_match(params_lower, "rel=\"stylesheet\"") ||
       has_param_match(params_lower, "rel='stylesheet'")) {
-    return url_part + "; rel=preload; as=style" + carry_param("crossorigin") + carry_param("fetchpriority");
+    return url_part + "; rel=preload; as=style" + carry_crossorigin() + carry_param("fetchpriority");
   }
 
   // rel=preload, rel=preconnect, rel=modulepreload — return unchanged

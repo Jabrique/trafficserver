@@ -20,9 +20,10 @@ Test 103 Early Hints plugin — auto-learn mode
 Test.Summary = '''
 Test HTTP 103 Early Hints plugin in auto-learn mode.
 Verifies:
-- First request: plugin engages and scans body (debug header = skipped-h1), no Link header yet
-- Second request: learned hints appear as Link headers in 200 response
-- Non-HTML response: no hints learned
+- First request (H1): plugin engages, scans body (no Link in first 200 -- transform
+  runs after SEND_RESPONSE_HDR so learned hints cannot appear in same response).
+- Second request (H2): plugin finds learned hints and sends 103 Early Hints.
+- Non-HTML response: no hints learned.
 '''
 
 Test.SkipUnless(
@@ -36,7 +37,22 @@ Test.ContinueOnFail = True
 # ----
 microserver = Test.MakeOriginServer("microserver")
 
-# HTML page with preloadable resources in <head>
+# HTML page with preloadable resources in <head>. Two copies needed: one for the
+# H1 learning pass (TR1), one for the H2 serving pass (TR2) where the origin may
+# be contacted again if ATS cache is disabled.
+microserver.addResponse(
+    "sessionfile.log", {
+        "headers": "GET /page.html HTTP/1.1\r\nHost: www.example.com\r\n\r\n",
+        "body": ""
+    }, {
+        "headers": "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/html\r\n\r\n",
+        "body":
+            "<html><head>"
+            "<link rel=\"preload\" href=\"/assets/main.css\" as=\"style\">"
+            "<script src=\"/assets/vendor.js\"></script>"
+            "</head><body><p>Auto-learn test</p></body></html>\r\n"
+    })
+
 microserver.addResponse(
     "sessionfile.log", {
         "headers": "GET /page.html HTTP/1.1\r\nHost: www.example.com\r\n\r\n",
@@ -111,23 +127,30 @@ tr1.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
 tr1.StillRunningAfter = microserver
 
 # ----
-# Test Case 1: Second request — learned hints with specific resources
-# Verify the exact resources that were learned from the HTML.
+# Test Case 1: Second request (H2) -- plugin finds cached hints from TR1 and sends 103.
+# H2 triggers get() which increments request_count. With min-hit-count=1, the first
+# H2 request (count=1 >= 1) sends 103 Early Hints with the resources learned by TR1.
+# The 103 must contain both learned resources.
 # ----
-tr2 = Test.AddTestRun("Second request - learned hints in 200")
+tr2 = Test.AddTestRun("H2 cache hit - 103 sent with learned hints")
 tr2.Processes.Default.Command = (
-    "sleep 1 && curl -s -D - -o /dev/null"
-    " --http1.1"
+    "sleep 1 && curl -s -D -"
+    " --http2"
     " --insecure"
+    " -o /dev/null"
     " 'https://127.0.0.1:{0}/page.html'".format(ts.Variables.ssl_port))
 tr2.Processes.Default.ReturnCode = 0
 tr2.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
-    "200 OK", "Should receive 200 OK")
-# Verify specific learned resources from the HTML <head>
+    "103", "Should receive 103 Early Hints from learned resources")
 tr2.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "Link: </assets/main.css>", "Should have learned stylesheet from HTML (in Link header)")
+    "200", "Should receive final 200 OK")
+# Both resources learned by the HTML scanner must appear in the 103.
 tr2.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "Link: </assets/vendor.js>", "Should have learned script from HTML (in Link header)")
+    "/assets/main.css", "Learned stylesheet must appear in 103 Link header")
+tr2.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
+    "/assets/vendor.js", "Learned script must appear in 103 Link header")
+tr2.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
+    "x-early-hints-status: sent", "Plugin must confirm 103 was sent")
 tr2.StillRunningAfter = microserver
 
 # ----

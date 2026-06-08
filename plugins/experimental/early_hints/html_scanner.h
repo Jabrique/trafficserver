@@ -21,6 +21,7 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 class EarlyHintsConfig;
@@ -118,6 +119,10 @@ private:
 
   // Results
   std::vector<std::string> links_;
+
+  // O(1) dedup index: url_key -> index in links_.
+  // Cleared in reset(). Allows inline dedup without scanning links_ linearly.
+  std::unordered_map<std::string, size_t> dedup_index_;
 
   void process_tag();
   void build_link_header(const std::string &tag);

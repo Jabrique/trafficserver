@@ -1,6 +1,7 @@
 #include "link_parser.h"
 #include <algorithm>
 #include <cctype>
+#include <unordered_map>
 
 std::vector<std::string>
 split_link_header_value(const std::string &header_value, int max_links)
@@ -107,11 +108,55 @@ has_rel_type(const std::string &seg_lower, const std::string &rel_type)
   return match_needle(needle1) || match_needle(needle2) || match_needle(needle3);
 }
 
+std::string
+lowercase_url_host(const std::string &url_key)
+{
+  // Find the start of the authority (host). The url_key is the <URL> portion
+  // of a Link segment, for example "<https://CDN.Example.COM/Path>".
+  // Only the scheme and host are case-insensitive per RFC 3986 section 6.2.2.1
+  // and RFC 4343. The path (everything after the first '/' following the host)
+  // is case-sensitive and must be preserved as-is.
+  std::string result = url_key;
+
+  size_t scheme_end = result.find("://");
+  size_t host_start;
+  if (scheme_end != std::string::npos) {
+    // Absolute URL: lowercase from '<' through the host (up to the first
+    // path character '/', query '?', fragment '#', or closing '>').
+    host_start = scheme_end + 3; // skip past '://'
+  } else if (result.size() >= 3 && result[0] == '<' && result[1] == '/' && result[2] == '/') {
+    // Protocol-relative URL "<//host/path>": lowercase just the host portion.
+    host_start = 3; // skip '<' and '//'
+  } else {
+    // Relative URL (e.g., "</path/File.js>"): no host present, no lowercasing.
+    return result;
+  }
+
+  // Lowercase from the beginning up to (but not including) the end of the host.
+  // The host ends at the first '/', '?', '#', or '>' after host_start.
+  size_t host_end = result.find_first_of("/?#>", host_start);
+  if (host_end == std::string::npos) {
+    host_end = result.size();
+  }
+
+  // Lowercase scheme and host together (safe: scheme chars are ASCII alpha).
+  for (size_t i = 0; i < host_end; ++i) {
+    result[i] = static_cast<char>(std::tolower(static_cast<unsigned char>(result[i])));
+  }
+
+  return result;
+}
+
 std::vector<std::string>
 dedup_link_segments(std::vector<std::string> segments, int max_links)
 {
   std::vector<std::string> result;
   result.reserve(segments.size());
+
+  // O(1) per-entry dedup: url_key -> index in result vector.
+  // Allows instant lookup and in-place strongest-wins replacement.
+  std::unordered_map<std::string, size_t> url_index;
+  url_index.reserve(segments.size());
 
   for (auto &seg : segments) {
     size_t url_end = seg.find('>');
@@ -123,38 +168,34 @@ dedup_link_segments(std::vector<std::string> segments, int max_links)
       continue;
     }
 
-    // Case-insensitive URL key for DNS hostname comparison (RFC 4343).
-    std::string seg_lower = seg;
-    std::transform(seg_lower.begin(), seg_lower.end(), seg_lower.begin(), [](unsigned char c) { return std::tolower(c); });
-    std::string_view url_key = std::string_view(seg_lower).substr(0, url_end + 1);
+    // Build a URL key that lowercases only the scheme and host portion.
+    // Path is case-sensitive per RFC 3986 section 6.2.2.1, so it is preserved.
+    std::string url_key = lowercase_url_host(seg.substr(0, url_end + 1));
 
+    // For has_rel_type() we need a lowercased copy of the params portion only
+    // (the rel= attribute appears after the '>' closing the URL).
+    std::string params_lower = seg.substr(url_end + 1);
+    std::transform(params_lower.begin(), params_lower.end(), params_lower.begin(), [](unsigned char c) { return std::tolower(c); });
     // Determine strength: preload/modulepreload are strong, preconnect is weak.
-    bool incoming_is_preload = !has_rel_type(seg_lower, "preconnect");
+    bool incoming_is_preload = !has_rel_type(params_lower, "preconnect");
 
-    bool is_dup    = false;
-    size_t dup_idx = 0;
-    for (size_t i = 0; i < result.size(); ++i) {
-      std::string existing_lower = result[i];
-      std::transform(existing_lower.begin(), existing_lower.end(), existing_lower.begin(),
-                     [](unsigned char c) { return std::tolower(c); });
-      size_t ex_url_end = existing_lower.find('>');
-      if (ex_url_end != std::string::npos) {
-        std::string_view ex_url_key = std::string_view(existing_lower).substr(0, ex_url_end + 1);
-        if (ex_url_key == url_key) {
-          is_dup  = true;
-          dup_idx = i;
-          break;
-        }
+    auto it = url_index.find(url_key);
+    if (it == url_index.end()) {
+      // New URL: add to result and record its index.
+      url_index.emplace(std::move(url_key), result.size());
+      result.push_back(std::move(seg));
+    } else if (incoming_is_preload) {
+      // Check if existing entry is a weaker preconnect. If so, replace with
+      // the stronger incoming link (preload/modulepreload beats preconnect).
+      size_t existing_idx   = it->second;
+      std::string ex_params = result[existing_idx].substr(result[existing_idx].find('>') + 1);
+      std::transform(ex_params.begin(), ex_params.end(), ex_params.begin(), [](unsigned char c) { return std::tolower(c); });
+      if (has_rel_type(ex_params, "preconnect")) {
+        result[existing_idx] = std::move(seg);
       }
     }
-
-    if (!is_dup) {
-      result.push_back(std::move(seg));
-    } else if (incoming_is_preload && has_rel_type(result[dup_idx], "preconnect")) {
-      // Incoming is stronger (preload/modulepreload) than existing (preconnect): replace.
-      result[dup_idx] = std::move(seg);
-    }
-    // else: existing is same strength or stronger, skip incoming.
+    // else: existing is same strength or stronger (preload beats preconnect),
+    // or incoming is weak (preconnect), so skip.
 
     if (static_cast<int>(result.size()) >= max_links) {
       break;

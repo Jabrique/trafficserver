@@ -64,6 +64,52 @@ increment_stat(int stat_id, int64_t amount)
   }
 }
 
+// Returns true when the response is uncompressed text/html that can be scanned.
+// Checks Content-Type (must be text/html) and Content-Encoding (must be absent or identity).
+// Releases all MLOC handles before returning.
+static bool
+is_html_response(TSMBuffer bufp, TSMLoc hdr_loc)
+{
+  TSMLoc ct_field = TSMimeHdrFieldFind(bufp, hdr_loc, TS_MIME_FIELD_CONTENT_TYPE, TS_MIME_LEN_CONTENT_TYPE);
+  if (ct_field == TS_NULL_MLOC) {
+    return false;
+  }
+  int ct_len         = 0;
+  const char *ct_str = TSMimeHdrFieldValueStringGet(bufp, hdr_loc, ct_field, -1, &ct_len);
+  bool is_html       = ct_str && ct_len >= 9 && strncasecmp(ct_str, "text/html", 9) == 0 &&
+                 (ct_len == 9 || ct_str[9] == ';' || ct_str[9] == ' ' || ct_str[9] == '\t');
+  TSHandleMLocRelease(bufp, hdr_loc, ct_field);
+  if (!is_html) {
+    return false;
+  }
+
+  // Verify body is not compressed. The scanner expects raw uncompressed HTML.
+  TSMLoc ce_field = TSMimeHdrFieldFind(bufp, hdr_loc, TS_MIME_FIELD_CONTENT_ENCODING, TS_MIME_LEN_CONTENT_ENCODING);
+  if (ce_field == TS_NULL_MLOC) {
+    return true; // No Content-Encoding header means identity (uncompressed).
+  }
+  int ce_len         = 0;
+  const char *ce_str = TSMimeHdrFieldValueStringGet(bufp, hdr_loc, ce_field, -1, &ce_len);
+  bool is_compressed = false;
+  if (ce_str && ce_len > 0) {
+    // Trim leading/trailing whitespace before comparing.
+    // Some origins add a trailing space: "identity " - exact length check
+    // without trim would incorrectly mark as compressed.
+    const char *ce_p = ce_str;
+    int ce_l         = ce_len;
+    while (ce_l > 0 && (*ce_p == ' ' || *ce_p == '\t')) {
+      ce_p++;
+      ce_l--;
+    }
+    while (ce_l > 0 && (ce_p[ce_l - 1] == ' ' || ce_p[ce_l - 1] == '\t')) {
+      ce_l--;
+    }
+    is_compressed = !(ce_l == 8 && strncasecmp(ce_p, "identity", 8) == 0);
+  }
+  TSHandleMLocRelease(bufp, hdr_loc, ce_field);
+  return !is_compressed;
+}
+
 // Per-request state stored via TSUserArgSet
 struct RequestData {
   PluginInstance *instance = nullptr; // NOT owned
@@ -619,52 +665,8 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
           TSDebug(PLUGIN_NAME, "READ_RESPONSE_HDR: TTL expired for %s, re-scanning origin response", req_data->cache_key.c_str());
           // Stale cached_links already set in TSRemapDoRemap (SWR: serve stale while re-learning).
         }
-        // Check Content-Type: text/html
-        TSMLoc ct_field = TSMimeHdrFieldFind(server_bufp, server_hdr_loc, TS_MIME_FIELD_CONTENT_TYPE, TS_MIME_LEN_CONTENT_TYPE);
-        bool is_html    = false;
-
-        if (ct_field != TS_NULL_MLOC) {
-          int ct_len         = 0;
-          const char *ct_str = TSMimeHdrFieldValueStringGet(server_bufp, server_hdr_loc, ct_field, -1, &ct_len);
-          if (ct_str && ct_len >= 9 && strncasecmp(ct_str, "text/html", 9) == 0 &&
-              (ct_len == 9 || ct_str[9] == ';' || ct_str[9] == ' ' || ct_str[9] == '\t')) {
-            is_html = true;
-          }
-          TSHandleMLocRelease(server_bufp, server_hdr_loc, ct_field);
-        }
-
-        // Skip scanning if response body is compressed — the scanner expects uncompressed HTML
-        bool is_compressed = false;
-        if (is_html) {
-          TSMLoc ce_field =
-            TSMimeHdrFieldFind(server_bufp, server_hdr_loc, TS_MIME_FIELD_CONTENT_ENCODING, TS_MIME_LEN_CONTENT_ENCODING);
-          if (ce_field != TS_NULL_MLOC) {
-            int ce_len         = 0;
-            const char *ce_str = TSMimeHdrFieldValueStringGet(server_bufp, server_hdr_loc, ce_field, -1, &ce_len);
-            if (ce_str && ce_len > 0) {
-              // Trim leading/trailing whitespace before comparing.
-              // Some origins add a trailing space: "identity " — exact
-              // length check without trim would incorrectly mark as compressed.
-              const char *ce_p = ce_str;
-              int ce_l         = ce_len;
-              while (ce_l > 0 && (*ce_p == ' ' || *ce_p == '\t')) {
-                ce_p++;
-                ce_l--;
-              }
-              while (ce_l > 0 && (ce_p[ce_l - 1] == ' ' || ce_p[ce_l - 1] == '\t')) {
-                ce_l--;
-              }
-              if (!(ce_l == 8 && strncasecmp(ce_p, "identity", 8) == 0)) {
-                is_compressed = true;
-                TSDebug(PLUGIN_NAME, "auto-learn: skipping for %s, response is compressed (Content-Encoding: %.*s)",
-                        req_data->cache_key.c_str(), ce_len, ce_str);
-              }
-            }
-            TSHandleMLocRelease(server_bufp, server_hdr_loc, ce_field);
-          }
-        }
-
-        if (is_html && !is_compressed) {
+        // Check Content-Type and Content-Encoding to decide whether to attach the scanner.
+        if (is_html_response(server_bufp, server_hdr_loc)) {
           // Create transform for HTML scanning
           TransformData *tdata = static_cast<TransformData *>(TSmalloc(sizeof(TransformData)));
           new (tdata) TransformData();
@@ -738,47 +740,8 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
       } else {
         // Not learned yet — we lost memory state but ATS has the cached response!
         // Re-learn it from ATS Cache without contacting the Origin server.
-        TSMLoc ct_field = TSMimeHdrFieldFind(cache_bufp, cache_hdr_loc, TS_MIME_FIELD_CONTENT_TYPE, TS_MIME_LEN_CONTENT_TYPE);
-        bool is_html    = false;
-
-        if (ct_field != TS_NULL_MLOC) {
-          int ct_len         = 0;
-          const char *ct_str = TSMimeHdrFieldValueStringGet(cache_bufp, cache_hdr_loc, ct_field, -1, &ct_len);
-          if (ct_str && ct_len >= 9 && strncasecmp(ct_str, "text/html", 9) == 0 &&
-              (ct_len == 9 || ct_str[9] == ';' || ct_str[9] == ' ' || ct_str[9] == '\t')) {
-            is_html = true;
-          }
-          TSHandleMLocRelease(cache_bufp, cache_hdr_loc, ct_field);
-        }
-
-        bool is_compressed = false;
-        if (is_html) {
-          TSMLoc ce_field =
-            TSMimeHdrFieldFind(cache_bufp, cache_hdr_loc, TS_MIME_FIELD_CONTENT_ENCODING, TS_MIME_LEN_CONTENT_ENCODING);
-          if (ce_field != TS_NULL_MLOC) {
-            int ce_len         = 0;
-            const char *ce_str = TSMimeHdrFieldValueStringGet(cache_bufp, cache_hdr_loc, ce_field, -1, &ce_len);
-            if (ce_str && ce_len > 0) {
-              // Trim leading/trailing whitespace (same rationale as READ_RESPONSE_HDR).
-              const char *ce_p = ce_str;
-              int ce_l         = ce_len;
-              while (ce_l > 0 && (*ce_p == ' ' || *ce_p == '\t')) {
-                ce_p++;
-                ce_l--;
-              }
-              while (ce_l > 0 && (ce_p[ce_l - 1] == ' ' || ce_p[ce_l - 1] == '\t')) {
-                ce_l--;
-              }
-              if (!(ce_l == 8 && strncasecmp(ce_p, "identity", 8) == 0)) {
-                is_compressed = true;
-                TSDebug(PLUGIN_NAME, "auto-learn (cache): skipping for %s, response is compressed", req_data->cache_key.c_str());
-              }
-            }
-            TSHandleMLocRelease(cache_bufp, cache_hdr_loc, ce_field);
-          }
-        }
-
-        if (is_html && !is_compressed) {
+        // Check Content-Type and Content-Encoding to decide whether to attach the scanner.
+        if (is_html_response(cache_bufp, cache_hdr_loc)) {
           TransformData *tdata = static_cast<TransformData *>(TSmalloc(sizeof(TransformData)));
           new (tdata) TransformData();
           tdata->scanner      = new HtmlScanner(config->scan_limit(), config->max_links(), config);

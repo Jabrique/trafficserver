@@ -500,3 +500,90 @@ TEST_CASE("dedup_link_segments: URL-only strongest-wins unification", "[link_par
     CHECK(result.size() == 2);
   }
 }
+
+// ===================================================================================
+// RFC 3986 path case sensitivity: dedup must lowercase only the host portion of the
+// URL, not the path. Two segments with the same host but different path casing are
+// different resources and must NOT be deduplicated.
+//
+// RFC 3986 section 6.2.2.1: scheme and host are case-insensitive.
+// RFC 4343: DNS names are case-insensitive.
+// Path, query, and fragment are case-sensitive per RFC 3986 section 3.3.
+//
+// RED before fix: dedup lowercases the entire URL including path, so
+// "</CSS/App.js>" and "</css/app.js>" are seen as the same key (size == 1).
+// GREEN after fix: path case preserved, both survive (size == 2).
+// ===================================================================================
+
+TEST_CASE("dedup preserves path case sensitivity per RFC 3986", "[link_parser][dedup][rfc3986]")
+{
+  SECTION("same host, different path case: both kept")
+  {
+    std::vector<std::string> segs = {
+      "</CSS/App.js>; rel=preload; as=script",
+      "</css/app.js>; rel=preload; as=script",
+    };
+    auto result = dedup_link_segments(segs, 10);
+    CHECK(result.size() == 2);
+  }
+
+  SECTION("absolute URL, same host case-insensitive, same path: deduplicated")
+  {
+    std::vector<std::string> segs = {
+      "<https://CDN.Example.COM/path/file.js>; rel=preload; as=script",
+      "<https://cdn.example.com/path/file.js>; rel=preload; as=script",
+    };
+    auto result = dedup_link_segments(segs, 10);
+    CHECK(result.size() == 1);
+  }
+
+  SECTION("absolute URL, same host, different path case: both kept")
+  {
+    std::vector<std::string> segs = {
+      "<https://cdn.example.com/Path/File.js>; rel=preload; as=script",
+      "<https://cdn.example.com/path/file.js>; rel=preload; as=script",
+    };
+    auto result = dedup_link_segments(segs, 10);
+    CHECK(result.size() == 2);
+  }
+
+  SECTION("protocol-relative URL, host lowercased, path preserved: deduplicated")
+  {
+    std::vector<std::string> segs = {
+      "<//CDN.Example.COM/same-path>; rel=preconnect",
+      "<//cdn.example.com/same-path>; rel=preconnect",
+    };
+    auto result = dedup_link_segments(segs, 10);
+    CHECK(result.size() == 1);
+  }
+
+  SECTION("relative URL, path case preserved, no lowercasing")
+  {
+    std::vector<std::string> segs = {
+      "</App.js>; rel=preload; as=script",
+      "</app.js>; rel=preload; as=script",
+    };
+    auto result = dedup_link_segments(segs, 10);
+    CHECK(result.size() == 2);
+  }
+
+  SECTION("regression: existing case-insensitive host dedup still works")
+  {
+    std::vector<std::string> segs = {
+      "<HTTPS://CDN.EXAMPLE.COM/a.js>; rel=preload; as=script",
+      "<https://cdn.example.com/a.js>; rel=preload; as=script",
+    };
+    auto result = dedup_link_segments(segs, 10);
+    CHECK(result.size() == 1);
+  }
+
+  SECTION("regression: different paths on same host are not deduped")
+  {
+    std::vector<std::string> segs = {
+      "<https://cdn.example.com/a.js>; rel=preload; as=script",
+      "<https://cdn.example.com/b.js>; rel=preload; as=script",
+    };
+    auto result = dedup_link_segments(segs, 10);
+    CHECK(result.size() == 2);
+  }
+}

@@ -3274,3 +3274,220 @@ TEST_CASE("has_valid_as_for_preload: strict rel= boundary matches check_rel in i
     CHECK(has_valid_as_for_preload("</app.mjs>; rel=modulepreload"));
   }
 }
+
+// ===================================================================================
+// RFC 3986 path case sensitivity in merge_hint_links.
+// extract_dedup_key() currently lowercases the entire URL including the path,
+// causing false deduplication of resources with the same host but different path casing.
+//
+// RED before fix: "</CSS/Main.css>" and "</css/main.css>" share the same lowercased
+// key "</css/main.css>" and the cached link is incorrectly dropped (size == 1).
+// GREEN after fix: path casing is preserved in the key, both links survive (size == 2).
+// ===================================================================================
+
+TEST_CASE("merge_hint_links: path case sensitivity per RFC 3986", "[config][merge][rfc3986]")
+{
+  SECTION("same host, different path case: both links kept")
+  {
+    std::vector<std::string> manual = {"</CSS/Main.css>; rel=preload; as=style"};
+    std::vector<std::string> cached = {"</css/main.css>; rel=preload; as=style"};
+    auto result                     = merge_hint_links(manual, &cached, 10);
+    // RED before fix: extract_dedup_key lowercases entire URL, size == 1
+    // GREEN after fix: path case preserved, size == 2
+    CHECK(result.size() == 2);
+  }
+
+  SECTION("absolute URL, same host in different case, same path: deduplicated")
+  {
+    std::vector<std::string> manual = {"<https://CDN.Example.COM/path/file.css>; rel=preload; as=style"};
+    std::vector<std::string> cached = {"<https://cdn.example.com/path/file.css>; rel=preload; as=style"};
+    auto result                     = merge_hint_links(manual, &cached, 10);
+    // Host is case-insensitive, path is identical: should dedup
+    CHECK(result.size() == 1);
+  }
+
+  SECTION("absolute URL, same host, different path case: both kept")
+  {
+    std::vector<std::string> manual = {"<https://cdn.example.com/Path/File.css>; rel=preload; as=style"};
+    std::vector<std::string> cached = {"<https://cdn.example.com/path/file.css>; rel=preload; as=style"};
+    auto result                     = merge_hint_links(manual, &cached, 10);
+    // RED before fix: entire URL lowercased, size == 1 (false dedup)
+    // GREEN after fix: path case differs, size == 2
+    CHECK(result.size() == 2);
+  }
+
+  SECTION("manual link wins when paths identical (regression: manual priority)")
+  {
+    std::vector<std::string> manual = {"</app.js>; rel=preload; as=script"};
+    std::vector<std::string> cached = {"</app.js>; rel=preload; as=script"};
+    auto result                     = merge_hint_links(manual, &cached, 10);
+    REQUIRE(result.size() == 1);
+    CHECK(result[0] == "</app.js>; rel=preload; as=script");
+  }
+}
+
+// ===================================================================================
+// normalize_link_for_hint: bare boolean 'crossorigin' attribute handling.
+//
+// HTML spec section 2.5.3 defines 'crossorigin' as an enumerated attribute.
+// The bare form (no '=' or value) is equivalent to crossorigin=anonymous.
+// The empty-value form (crossorigin=) is also equivalent to crossorigin=anonymous.
+//
+// Current carry_param("crossorigin") builds needle "crossorigin=" (with '=') and
+// uses params_lower.find(needle). A bare 'crossorigin' with no '=' is never found,
+// so the attribute is silently dropped from the converted rel=preload hint.
+//
+// RED before fix: normalize_link_for_hint("<url>; rel=stylesheet; crossorigin")
+//   returns "<url>; rel=preload; as=style" with NO crossorigin attribute.
+// GREEN after fix: returns "<url>; rel=preload; as=style; crossorigin=anonymous".
+// ===================================================================================
+
+TEST_CASE("normalize_link_for_hint: bare boolean crossorigin maps to anonymous", "[config][normalize][crossorigin][bare]")
+{
+  SECTION("bare crossorigin at end of params")
+  {
+    std::string result = normalize_link_for_hint("</style.css>; rel=stylesheet; crossorigin");
+    // RED before fix: crossorigin entirely absent from output
+    CHECK(result.find("crossorigin=anonymous") != std::string::npos);
+    CHECK(result.find("rel=preload") != std::string::npos);
+    CHECK(result.find("as=style") != std::string::npos);
+  }
+
+  SECTION("bare crossorigin followed by semicolon and another param")
+  {
+    std::string result = normalize_link_for_hint("</style.css>; rel=stylesheet; crossorigin; fetchpriority=high");
+    CHECK(result.find("crossorigin=anonymous") != std::string::npos);
+    // fetchpriority must also be preserved
+    CHECK(result.find("fetchpriority=high") != std::string::npos);
+  }
+
+  SECTION("bare crossorigin preceded by whitespace variants")
+  {
+    std::string result = normalize_link_for_hint("</s.css>; rel=stylesheet;  crossorigin");
+    CHECK(result.find("crossorigin=anonymous") != std::string::npos);
+  }
+
+  SECTION("crossorigin= with empty value maps to anonymous")
+  {
+    std::string result = normalize_link_for_hint("</style.css>; rel=stylesheet; crossorigin=");
+    CHECK(result.find("crossorigin=anonymous") != std::string::npos);
+  }
+
+  SECTION("crossorigin=anonymous preserved unchanged (regression)")
+  {
+    std::string result = normalize_link_for_hint("</style.css>; rel=stylesheet; crossorigin=anonymous");
+    CHECK(result.find("crossorigin=anonymous") != std::string::npos);
+  }
+
+  SECTION("crossorigin=use-credentials preserved unchanged (regression)")
+  {
+    std::string result = normalize_link_for_hint("</style.css>; rel=stylesheet; crossorigin=use-credentials");
+    CHECK(result.find("crossorigin=use-credentials") != std::string::npos);
+  }
+
+  SECTION("no crossorigin: attribute not added (regression: no spurious injection)")
+  {
+    std::string result = normalize_link_for_hint("</style.css>; rel=stylesheet");
+    CHECK(result.find("crossorigin") == std::string::npos);
+  }
+
+  SECTION("crossoriginFoo is not matched by word-boundary check")
+  {
+    // 'crossoriginFoo' must not be mistaken for bare 'crossorigin'
+    std::string result = normalize_link_for_hint("</style.css>; rel=stylesheet; crossoriginFoo");
+    CHECK(result.find("crossorigin=anonymous") == std::string::npos);
+  }
+
+  SECTION("Xcrossorigin is not matched (prefix guard)")
+  {
+    // 'Xcrossorigin' must not trigger the bare match
+    std::string result = normalize_link_for_hint("</style.css>; rel=stylesheet; Xcrossorigin");
+    CHECK(result.find("crossorigin=anonymous") == std::string::npos);
+  }
+} // ===================================================================================
+// FIX-2: --link pparam with rel=stylesheet must be normalized to rel=preload; as=style
+//
+// The --link pparam is designed for operators to manually inject Early Hints.
+// An operator might write @pparam=--link @pparam="</css/app.css>; rel=stylesheet"
+// because that's what the HTML <link> tag uses. The plugin must normalize
+// rel=stylesheet -> rel=preload; as=style before storing in manual_links_,
+// since browsers reject 103 Early Hints with rel=stylesheet (not a valid hint type).
+//
+// Current path: case 'l' in init() stores raw optarg in manual_links_ with no
+// normalization call. So manual_links_[0] is "</css/app.css>; rel=stylesheet".
+//
+// RED before fix: config.manual_links()[0] contains "rel=stylesheet" (not normalized).
+// GREEN after fix: config.manual_links()[0] contains "rel=preload; as=style".
+// ===================================================================================
+
+TEST_CASE("--link pparam rel=stylesheet is normalized to rel=preload at config parse time",
+          "[config][manual-link][stylesheet][normalize]")
+{
+  SECTION("unquoted rel=stylesheet normalized to rel=preload; as=style")
+  {
+    EarlyHintsConfig config;
+    bool ok = parse_config(config, {"--link", "</css/app.css>; rel=stylesheet"});
+    REQUIRE(ok);
+    REQUIRE(config.manual_links().size() == 1);
+    // RED before fix: still contains "rel=stylesheet"
+    CHECK(config.manual_links()[0].find("rel=preload") != std::string::npos);
+    CHECK(config.manual_links()[0].find("as=style") != std::string::npos);
+    CHECK(config.manual_links()[0].find("rel=stylesheet") == std::string::npos);
+  }
+
+  SECTION("rel=stylesheet with crossorigin=anonymous normalized and crossorigin preserved")
+  {
+    EarlyHintsConfig config;
+    bool ok = parse_config(config, {"--link", "</css/app.css>; rel=stylesheet; crossorigin=anonymous"});
+    REQUIRE(ok);
+    REQUIRE(config.manual_links().size() == 1);
+    CHECK(config.manual_links()[0].find("rel=preload") != std::string::npos);
+    CHECK(config.manual_links()[0].find("as=style") != std::string::npos);
+    CHECK(config.manual_links()[0].find("crossorigin=anonymous") != std::string::npos);
+  }
+
+  SECTION("rel=stylesheet with fetchpriority=high normalized and fetchpriority preserved")
+  {
+    EarlyHintsConfig config;
+    bool ok = parse_config(config, {"--link", "</css/app.css>; rel=stylesheet; fetchpriority=high"});
+    REQUIRE(ok);
+    REQUIRE(config.manual_links().size() == 1);
+    CHECK(config.manual_links()[0].find("rel=preload") != std::string::npos);
+    CHECK(config.manual_links()[0].find("as=style") != std::string::npos);
+    CHECK(config.manual_links()[0].find("fetchpriority=high") != std::string::npos);
+  }
+
+  SECTION("rel=preload stored unchanged (regression: valid hint not re-normalized)")
+  {
+    EarlyHintsConfig config;
+    bool ok = parse_config(config, {"--link", "</js/app.js>; rel=preload; as=script"});
+    REQUIRE(ok);
+    REQUIRE(config.manual_links().size() == 1);
+    // normalize_link_for_hint returns the link unchanged for already-valid hint types
+    CHECK(config.manual_links()[0].find("rel=preload") != std::string::npos);
+    CHECK(config.manual_links()[0].find("as=script") != std::string::npos);
+    CHECK(config.manual_links()[0].find("rel=stylesheet") == std::string::npos);
+  }
+
+  SECTION("rel=preconnect stored unchanged (regression)")
+  {
+    EarlyHintsConfig config;
+    bool ok = parse_config(config, {"--link", "<https://fonts.googleapis.com>; rel=preconnect"});
+    REQUIRE(ok);
+    REQUIRE(config.manual_links().size() == 1);
+    CHECK(config.manual_links()[0].find("rel=preconnect") != std::string::npos);
+  }
+
+  SECTION("multiple --link params: stylesheet normalized, preload unchanged")
+  {
+    EarlyHintsConfig config;
+    bool ok = parse_config(config, {"--link", "</css/app.css>; rel=stylesheet", "--link", "</js/app.js>; rel=preload; as=script"});
+    REQUIRE(ok);
+    REQUIRE(config.manual_links().size() == 2);
+    // First link: stylesheet → preload
+    CHECK(config.manual_links()[0].find("rel=preload") != std::string::npos);
+    CHECK(config.manual_links()[0].find("as=style") != std::string::npos);
+    // Second link: already preload, unchanged
+    CHECK(config.manual_links()[1].find("as=script") != std::string::npos);
+  }
+}

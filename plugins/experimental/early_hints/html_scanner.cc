@@ -32,6 +32,7 @@
 
 #include "html_scanner.h"
 #include "config.h"
+#include "link_parser.h"
 #include <algorithm>
 #include <cctype>
 #include <cstring>
@@ -57,6 +58,7 @@ HtmlScanner::reset()
   state_   = State::INIT;
   scanned_ = 0;
   links_.clear();
+  dedup_index_.clear();
   match_buf_.clear();
   reset_tag_state();
   raw_close_pos_ = 0;
@@ -586,36 +588,32 @@ HtmlScanner::build_link_header(const std::string &tag)
     result += "; fetchpriority=" + fetchpriority_;
   }
 
-  // Deduplicate: non-whitelisted cross-origin preloads are downgraded to preconnects
+  // Deduplicate: non-whitelisted cross-origin preloads are downgraded to preconnects.
   // URL-only strongest-wins dedup: same URL key = same resource.
   // If a preload/modulepreload and preconnect share the same URL, the stronger
   // type wins (preload > preconnect). This prevents sending redundant hints
   // when the same origin appears both as a whitelisted preload and as a
   // preconnect derived from a non-whitelisted cross-origin resource.
-  // DNS hostnames are case-insensitive (RFC 4343); lowercase both sides.
+  // Host comparison is case-insensitive (RFC 4343); path is case-sensitive (RFC 3986 section 6.2.2.1).
   {
     size_t url_end = result.find('>');
     if (url_end != std::string::npos) {
-      std::string result_lower = result.substr(0, url_end + 1);
-      std::transform(result_lower.begin(), result_lower.end(), result_lower.begin(),
-                     [](unsigned char c) { return std::tolower(c); });
+      std::string result_url_key = lowercase_url_host(result.substr(0, url_end + 1));
+      // Scanner constructs rel= values in lowercase, so a literal find is safe.
       bool incoming_is_preload = result.find("rel=preconnect") == std::string::npos;
 
-      for (size_t i = 0; i < links_.size(); ++i) {
-        size_t ex_url_end = links_[i].find('>');
-        if (ex_url_end != std::string::npos) {
-          std::string existing_lower = links_[i].substr(0, ex_url_end + 1);
-          std::transform(existing_lower.begin(), existing_lower.end(), existing_lower.begin(),
-                         [](unsigned char c) { return std::tolower(c); });
-          if (existing_lower == result_lower) {
-            if (incoming_is_preload && links_[i].find("rel=preconnect") != std::string::npos) {
-              // Incoming is stronger: replace existing preconnect with preload.
-              links_[i] = std::move(result);
-            }
-            // Same URL already queued (same or stronger type): skip.
-            return;
-          }
+      auto it = dedup_index_.find(result_url_key);
+      if (it == dedup_index_.end()) {
+        // New URL: record index and add to links_.
+        dedup_index_.emplace(std::move(result_url_key), links_.size());
+      } else {
+        size_t existing_idx = it->second;
+        if (incoming_is_preload && links_[existing_idx].find("rel=preconnect") != std::string::npos) {
+          // Incoming is stronger: replace existing preconnect with preload.
+          links_[existing_idx] = std::move(result);
         }
+        // Same URL already queued (same or stronger type): skip.
+        return;
       }
     }
   }
