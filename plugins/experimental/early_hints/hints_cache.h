@@ -77,15 +77,16 @@ public:
    * Thread-safe get: returns shared_ptr to immutable link list (no deep copy).
    * Returns non-null if entry exists and request_count >= min_hits.
    * Increments request_count on every call (request_count is the only traffic gate).
-   * Entries never expire — they live until evicted by capacity or process restart.
+   * If stale_evict_after > 0 and age(entry) > stale_evict_after, the entry is
+   * served once then removed from the cache (stale eviction). Default 0 = disabled.
    */
-  LinkListPtr get(const std::string &key, int min_hits) const;
+  LinkListPtr get(const std::string &key, int min_hits, int stale_evict_after = 0);
 
   /**
    * Thread-safe get (legacy): copies links into output vector.
    * Returns true if entry exists and request_count >= min_hits.
    */
-  bool get(const std::string &key, std::vector<std::string> &links, int min_hits) const;
+  bool get(const std::string &key, std::vector<std::string> &links, int min_hits, int stale_evict_after = 0);
 
   /**
    * Thread-safe peek: returns links if entry exists, regardless of request_count or min_hits.

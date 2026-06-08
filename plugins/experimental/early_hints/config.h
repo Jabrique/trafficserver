@@ -169,6 +169,12 @@ public:
     return hints_ttl_;
   }
 
+  int
+  stale_evict_after() const
+  {
+    return stale_evict_after_;
+  }
+
   const std::string &
   purge_header_name() const
   {
@@ -197,9 +203,10 @@ private:
   bool persist_enabled_ = false;
   int persist_throttle_ = 10;
   std::string persist_dir_;
-  int hints_ttl_ = 0;             // 0 = disabled; range [1, 86400] seconds when set
-  std::string purge_header_name_; // empty = purge disabled
-  std::string purge_secret_;      // required when purge_header_name_ is set
+  int hints_ttl_         = 604800; // 1 week default; 0 = disabled; range [0, 31536000]
+  int stale_evict_after_ = 0;      // 0 = disabled; range [0, 31536000] seconds
+  std::string purge_header_name_;  // empty = purge disabled
+  std::string purge_secret_;       // required when purge_header_name_ is set
 
   bool parse_mode(const char *mode_str);
   static bool match_domain_list(const std::string &domain, const std::vector<std::string> &list);

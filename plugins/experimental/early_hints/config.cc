@@ -487,6 +487,7 @@ EarlyHintsConfig::init(int argc, const char *argv[])
     {const_cast<char *>("max-cache-entries"),        required_argument, nullptr, 'c'},
     {const_cast<char *>("persist-throttle"),          required_argument, nullptr, 't'},
     {const_cast<char *>("hints-ttl"),                 required_argument, nullptr, 'T'},
+    {const_cast<char *>("stale-evict-after"),         required_argument, nullptr, 'E'},
     {const_cast<char *>("purge-header"),              required_argument, nullptr, 'H'},
     {const_cast<char *>("purge-secret"),              required_argument, nullptr, 'S'},
     {nullptr, 0, nullptr, 0},
@@ -719,8 +720,19 @@ EarlyHintsConfig::init(int argc, const char *argv[])
         TSError("[%s] invalid --hints-ttl value: %s", PLUGIN_NAME, optarg);
         return false;
       }
-      if (hints_ttl_ < 0 || hints_ttl_ > 86400) {
-        TSError("[%s] hints-ttl must be between 0 and 86400 seconds (0=disabled), got %d", PLUGIN_NAME, hints_ttl_);
+      if (hints_ttl_ < 0 || hints_ttl_ > 31536000) {
+        TSError("[%s] hints-ttl must be between 0 and 31536000 seconds (0=disabled), got %d", PLUGIN_NAME, hints_ttl_);
+        return false;
+      }
+      break;
+    case 'E':
+      if (!safe_parse_int(optarg, &stale_evict_after_)) {
+        TSError("[%s] invalid --stale-evict-after value: %s", PLUGIN_NAME, optarg);
+        return false;
+      }
+      if (stale_evict_after_ < 0 || stale_evict_after_ > 31536000) {
+        TSError("[%s] stale-evict-after must be between 0 and 31536000 seconds (0=disabled), got %d", PLUGIN_NAME,
+                stale_evict_after_);
         return false;
       }
       break;

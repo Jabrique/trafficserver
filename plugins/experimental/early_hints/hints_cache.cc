@@ -56,7 +56,7 @@ HintsCache::~HintsCache()
 }
 
 LinkListPtr
-HintsCache::get(const std::string &key, int min_hits) const
+HintsCache::get(const std::string &key, int min_hits, int stale_evict_after)
 {
   TSMutexGuard guard(mutex_);
 
@@ -65,7 +65,7 @@ HintsCache::get(const std::string &key, int min_hits) const
     return nullptr;
   }
 
-  const HintEntry &entry = it->second;
+  HintEntry &entry = it->second;
 
   // Traffic gate: request_count controls when hints are served.
   // Increment first so the very first call counts as request #1.
@@ -80,14 +80,27 @@ HintsCache::get(const std::string &key, int min_hits) const
     lru_list_.splice(lru_list_.begin(), lru_list_, entry.lru_iterator);
   }
 
-  // Return shared_ptr (ref-count bump, no deep copy)
-  return entry.links;
+  // Capture the link list before possible eviction.
+  LinkListPtr result = entry.links;
+
+  // Stale eviction: if stale_evict_after > 0 and the entry is older than the
+  // threshold, remove it from the cache after serving. The current request still
+  // gets the hints; the next request triggers re-learning via the scanner.
+  if (stale_evict_after > 0) {
+    time_t now = time(nullptr);
+    if (entry.last_updated > 0 && (now - entry.last_updated) > stale_evict_after) {
+      lru_list_.erase(entry.lru_iterator);
+      entries_.erase(it);
+    }
+  }
+
+  return result;
 }
 
 bool
-HintsCache::get(const std::string &key, std::vector<std::string> &links, int min_hits) const
+HintsCache::get(const std::string &key, std::vector<std::string> &links, int min_hits, int stale_evict_after)
 {
-  LinkListPtr ptr = get(key, min_hits);
+  LinkListPtr ptr = get(key, min_hits, stale_evict_after);
   if (!ptr) {
     return false;
   }

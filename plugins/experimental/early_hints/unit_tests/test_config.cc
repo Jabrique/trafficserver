@@ -68,7 +68,7 @@ TEST_CASE("Config default values", "[config]")
     CHECK(config.manual_links().empty());
     CHECK(config.crossorigin_whitelist().empty());
     CHECK(config.preload_whitelist().empty());
-    CHECK(config.hints_ttl() == 0); // TTL disabled by default
+    CHECK(config.hints_ttl() == 604800); // 1 week default
   }
 }
 
@@ -2853,11 +2853,11 @@ TEST_CASE("normalize_link_for_hint: boundary-aware rel matching", "[config][norm
 
 TEST_CASE("Config: --hints-ttl parsing and validation", "[config][hints-ttl]")
 {
-  SECTION("default is 0 (TTL disabled)")
+  SECTION("default is 604800 (1 week TTL)")
   {
     EarlyHintsConfig config;
     CHECK(parse_config(config, {}));
-    CHECK(config.hints_ttl() == 0);
+    CHECK(config.hints_ttl() == 604800);
   }
 
   SECTION("--hints-ttl 0 is valid (explicit disable)")
@@ -2874,17 +2874,18 @@ TEST_CASE("Config: --hints-ttl parsing and validation", "[config][hints-ttl]")
     CHECK(config.hints_ttl() == 3600);
   }
 
-  SECTION("--hints-ttl 86400 is valid (maximum: 24 hours)")
+  SECTION("--hints-ttl 86400 is valid (within new 1-year max)")
   {
     EarlyHintsConfig config;
     CHECK(parse_config(config, {"--hints-ttl", "86400"}));
     CHECK(config.hints_ttl() == 86400);
   }
 
-  SECTION("--hints-ttl 86401 is invalid (exceeds 24 hours)")
+  SECTION("--hints-ttl 86401 is now valid (max raised to 1 year)")
   {
     EarlyHintsConfig config;
-    CHECK_FALSE(parse_config(config, {"--hints-ttl", "86401"}));
+    CHECK(parse_config(config, {"--hints-ttl", "86401"}));
+    CHECK(config.hints_ttl() == 86401);
   }
 
   SECTION("--hints-ttl -1 is invalid (negative)")
@@ -3489,5 +3490,141 @@ TEST_CASE("--link pparam rel=stylesheet is normalized to rel=preload at config p
     CHECK(config.manual_links()[0].find("as=style") != std::string::npos);
     // Second link: already preload, unchanged
     CHECK(config.manual_links()[1].find("as=script") != std::string::npos);
+  }
+}
+// ===================================================================================
+// FIX-6: TTL defaults and max, plus --stale-evict-after option
+//
+// Background:
+//   hints_ttl controls the stale-while-revalidate window: serve existing hints
+//   while the background scanner re-learns from the next origin response.
+//   The previous default of 0 (disabled) caused unnecessary re-learning on every
+//   request after the hint entry aged past the operator-configured TTL.
+//
+// Changes:
+//   - Default hints_ttl changes from 0 (disabled) to 604800 (1 week).
+//   - Max TTL validation changes from 86400 (1 day) to 31536000 (1 year).
+//   - New option --stale-evict-after N (seconds): if > 0 and an entry's age
+//     exceeds N when get() is called, the entry is evicted after serving.
+//     Allows hints to be permanently removed once they become too old without
+//     manual purging. 0 = disabled (default).
+//
+// RED before fix: defaults and max are still old values; stale_evict_after() does not exist.
+// GREEN after fix: all assertions pass.
+// ===================================================================================
+
+TEST_CASE("Config: hints-ttl default changed to 1 week", "[config][hints-ttl][ttl-default]")
+{
+  SECTION("default hints-ttl is 604800 seconds (1 week)")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {}));
+    // RED before fix: default is still 0
+    CHECK(config.hints_ttl() == 604800);
+  }
+
+  SECTION("--hints-ttl 0 still disables TTL explicitly")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--hints-ttl", "0"}));
+    CHECK(config.hints_ttl() == 0);
+  }
+
+  SECTION("--hints-ttl 604800 is valid (1 week)")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--hints-ttl", "604800"}));
+    CHECK(config.hints_ttl() == 604800);
+  }
+
+  SECTION("--hints-ttl 31536000 is valid (1 year, new maximum)")
+  {
+    EarlyHintsConfig config;
+    // RED before fix: max is 86400 so this is rejected
+    CHECK(parse_config(config, {"--hints-ttl", "31536000"}));
+    CHECK(config.hints_ttl() == 31536000);
+  }
+
+  SECTION("--hints-ttl 31536001 is invalid (exceeds 1 year)")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(config, {"--hints-ttl", "31536001"}));
+  }
+
+  SECTION("--hints-ttl 86400 is still valid (within new max)")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--hints-ttl", "86400"}));
+    CHECK(config.hints_ttl() == 86400);
+  }
+
+  SECTION("--hints-ttl -1 is still invalid")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(config, {"--hints-ttl", "-1"}));
+  }
+}
+
+TEST_CASE("Config: --stale-evict-after option", "[config][stale-evict-after]")
+{
+  SECTION("default stale-evict-after is 0 (disabled)")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {}));
+    // RED before fix: stale_evict_after() does not exist
+    CHECK(config.stale_evict_after() == 0);
+  }
+
+  SECTION("--stale-evict-after 0 disables eviction explicitly")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--stale-evict-after", "0"}));
+    CHECK(config.stale_evict_after() == 0);
+  }
+
+  SECTION("--stale-evict-after 3600 is valid (1 hour)")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--stale-evict-after", "3600"}));
+    CHECK(config.stale_evict_after() == 3600);
+  }
+
+  SECTION("--stale-evict-after 31536000 is valid (1 year, same max as hints-ttl)")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--stale-evict-after", "31536000"}));
+    CHECK(config.stale_evict_after() == 31536000);
+  }
+
+  SECTION("--stale-evict-after 31536001 is invalid (exceeds max)")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(config, {"--stale-evict-after", "31536001"}));
+  }
+
+  SECTION("--stale-evict-after -1 is invalid (negative)")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(config, {"--stale-evict-after", "-1"}));
+  }
+
+  SECTION("--stale-evict-after can coexist with --hints-ttl")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--hints-ttl", "300", "--stale-evict-after", "900"}));
+    CHECK(config.hints_ttl() == 300);
+    CHECK(config.stale_evict_after() == 900);
+  }
+
+  SECTION("--stale-evict-after non-numeric is invalid")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(config, {"--stale-evict-after", "abc"}));
+  }
+
+  SECTION("--stale-evict-after missing value is invalid")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(config, {"--stale-evict-after"}));
   }
 }

@@ -732,7 +732,7 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
           // to increment request_count. Without this, H1 cache hits never reach min_hit_count
           // and Link headers are never added to 200 responses.
           if (req_data->cached_links == nullptr) {
-            req_data->cached_links = cache->get(req_data->cache_key, config->min_hit_count());
+            req_data->cached_links = cache->get(req_data->cache_key, config->min_hit_count(), config->stale_evict_after());
             TSDebug(PLUGIN_NAME, "READ_CACHE_HDR: get() for %s (H1 cache hit) -> %s", req_data->cache_key.c_str(),
                     req_data->cached_links ? "hints ready" : "below threshold");
           }
@@ -1256,7 +1256,7 @@ TSRemapDoRemap(void *ih, TSHttpTxn rh, TSRemapRequestInfo * /* rri ATS_UNUSED */
     if (config->mode() & (EarlyHintsConfig::MODE_AUTO_LEARN | EarlyHintsConfig::MODE_ORIGIN_FORWARD)) {
       TSDebug(PLUGIN_NAME, "mode decision for %s: auto-learn/origin-forward active, looking up cache (min_hit_count=%d)",
               cache_key.c_str(), config->min_hit_count());
-      req_data->cached_links = cache->get(cache_key, config->min_hit_count());
+      req_data->cached_links = cache->get(cache_key, config->min_hit_count(), config->stale_evict_after());
       if (req_data->cached_links) {
         // Serveable: entry exists and request_count >= min_hit_count
         req_data->has_learned = true;

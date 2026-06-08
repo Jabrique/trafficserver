@@ -43,6 +43,7 @@ TESTS=(
     early_hints_path_case_dedup       # RFC 3986 path case sensitivity in URL dedup
     early_hints_bare_crossorigin      # bare crossorigin attr normalized to anonymous
     early_hints_manual_stylesheet     # --link rel=stylesheet normalized to rel=preload
+    early_hints_stale_eviction        # --stale-evict-after: stale entries evicted after serving
 )
 
 PASSED=0

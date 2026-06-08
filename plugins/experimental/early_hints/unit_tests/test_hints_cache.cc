@@ -41,8 +41,7 @@ TEST_CASE("HintsCache: basic put and get", "[hints_cache]")
     std::vector<std::string> links = {"</app.js>; rel=preload; as=script", "</style.css>; rel=preload; as=style"};
     cache.put("/page", links);
 
-    const HintsCache &const_cache = cache;
-    auto result                   = const_cache.get("/page", 1);
+    auto result = cache.get("/page", 1);
     REQUIRE(result != nullptr);
     REQUIRE(result->size() == 2);
     CHECK((*result)[0] == "</app.js>; rel=preload; as=script");
@@ -1614,5 +1613,112 @@ TEST_CASE("HintsCache: peek() correctly identifies existing entries for H1 short
     cache.peek("/page");
     // request_count must remain 0 — peek must not perturb the min_hit_count gate
     CHECK(cache.get_count("/page") == 0);
+  }
+}
+
+// ===================================================================================
+// FIX-6: Stale eviction in get()
+//
+// When stale_evict_after > 0 and an entry's age (now - last_updated) exceeds it,
+// get() serves the hints normally but then removes the entry from the cache.
+// This prevents the cache from accumulating links that are far past their useful
+// life without requiring explicit purge calls.
+//
+// Behavior:
+//   - Entry age < stale_evict_after: served normally, NOT evicted.
+//   - Entry age >= stale_evict_after: served once (for the current request), then evicted.
+//   - stale_evict_after = 0: eviction disabled (existing behavior unchanged).
+//   - Eviction only happens in get(), not in peek() (peek is non-destructive).
+//
+// get() signature changes from:
+//   LinkListPtr get(const std::string &key, int min_hits) const;
+// to:
+//   LinkListPtr get(const std::string &key, int min_hits, int stale_evict_after = 0);
+// (non-const because eviction requires map mutation)
+//
+// RED before fix: get() does not accept stale_evict_after parameter.
+// GREEN after fix: all assertions pass.
+// ===================================================================================
+
+TEST_CASE("HintsCache: stale eviction in get()", "[hints_cache][stale-evict]")
+{
+  SECTION("fresh entry is not evicted when stale_evict_after > 0")
+  {
+    HintsCache cache(100);
+    cache.put("/page", {"/a.css", "/b.js"});
+    cache.get("/page", 1); // min_hits=1, count becomes 1
+
+    // stale_evict_after=3600: entry just written, age ~ 0 < 3600 so no eviction
+    // RED before fix: get() does not accept third argument
+    auto result = cache.get("/page", 1, 3600);
+    REQUIRE(result != nullptr);
+    CHECK(result->size() == 2);
+
+    // Entry must still exist (not evicted)
+    CHECK(cache.size() == 1);
+    CHECK(cache.peek("/page") != nullptr);
+  }
+
+  SECTION("stale_evict_after=0 disables eviction entirely")
+  {
+    HintsCache cache(100);
+    cache.put("/page", {"/a.css"});
+    cache.get("/page", 1);
+
+    auto result = cache.get("/page", 1, 0);
+    REQUIRE(result != nullptr);
+    CHECK(cache.size() == 1);
+    CHECK(cache.peek("/page") != nullptr);
+  }
+
+  SECTION("entry is served and evicted after stale_evict_after seconds")
+  {
+    HintsCache cache(100);
+    // Manually set last_updated to the past by calling put() then sleeping.
+    // sleep(2) + stale_evict_after=1 ensures entry is stale.
+    cache.put("/page", {"/a.css", "/b.js"});
+    cache.get("/page", 1); // warm up: count=1 >= min_hits=1
+
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+
+    // stale_evict_after=1: age > 1s so entry should be evicted after serving
+    auto result = cache.get("/page", 1, 1);
+    REQUIRE(result != nullptr); // served correctly before eviction
+    CHECK(result->size() == 2);
+
+    // Entry must now be gone
+    CHECK(cache.size() == 0);
+    CHECK(cache.peek("/page") == nullptr);
+  }
+
+  SECTION("peek is not affected by stale eviction")
+  {
+    HintsCache cache(100);
+    cache.put("/page", {"/x.js"});
+    cache.get("/page", 1);
+
+    // peek must never evict regardless of age
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    auto peeked = cache.peek("/page");
+    REQUIRE(peeked != nullptr);
+    CHECK(cache.size() == 1);
+  }
+
+  SECTION("evicting a stale entry does not affect other entries")
+  {
+    HintsCache cache(100);
+    cache.put("/page1", {"/a.css"});
+    cache.put("/page2", {"/b.css"});
+    cache.get("/page1", 1);
+    cache.get("/page2", 1);
+
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+
+    // Evict only page1
+    auto result1 = cache.get("/page1", 1, 1);
+    REQUIRE(result1 != nullptr);
+    CHECK(cache.size() == 1); // page1 evicted, page2 remains
+    CHECK(cache.peek("/page2") != nullptr);
+    CHECK(cache.peek("/page1") == nullptr);
   }
 }
