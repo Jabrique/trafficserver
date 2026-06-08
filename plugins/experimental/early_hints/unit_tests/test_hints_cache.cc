@@ -1722,3 +1722,93 @@ TEST_CASE("HintsCache: stale eviction in get()", "[hints_cache][stale-evict]")
     CHECK(cache.peek("/page1") == nullptr);
   }
 }
+
+// ===================================================================================
+// Stale eviction semantics change (combined hints_ttl + stale_evict_after threshold)
+//
+// New behavior: the caller (early_hints.cc) pre-computes evict_threshold =
+//   (hints_ttl > 0 && stale_evict_after > 0) ? hints_ttl + stale_evict_after : 0
+// and passes that directly to get() as the stale_evict_after parameter.
+//
+// This test verifies the NEW contract: the cache serves stale entries continuously
+// while age < evict_threshold, and only evicts on the first call where age >= threshold.
+// ===================================================================================
+
+TEST_CASE("HintsCache: stale eviction with combined hints_ttl + stale_evict_after threshold",
+          "[hints_cache][stale-evict][combined]")
+{
+  SECTION("entry served multiple times while within combined threshold (no eviction)")
+  {
+    HintsCache cache(100);
+    cache.put("/page", {"/app.css", "/app.js"});
+    cache.get("/page", 1); // warm up: count=1
+
+    // Combined threshold=15 (hints_ttl=10 + stale_evict_after=5), age~0 << 15
+    const int evict_threshold = 15;
+    auto r1                   = cache.get("/page", 1, evict_threshold);
+    REQUIRE(r1 != nullptr);
+    CHECK(cache.size() == 1);
+
+    auto r2 = cache.get("/page", 1, evict_threshold);
+    REQUIRE(r2 != nullptr);
+    CHECK(cache.size() == 1);
+
+    auto r3 = cache.get("/page", 1, evict_threshold);
+    REQUIRE(r3 != nullptr);
+    CHECK(cache.size() == 1);
+  }
+
+  SECTION("entry is served then evicted only when age >= combined threshold")
+  {
+    HintsCache cache(100);
+    cache.put("/page", {"/main.css"});
+    cache.get("/page", 1); // warm up
+
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+
+    // Pre-computed threshold=1 (hints_ttl(1) + stale_evict_after(0) -- but caller
+    // passes combined value). age=2 >= 1 -> served then evicted.
+    auto result = cache.get("/page", 1, 1);
+    REQUIRE(result != nullptr);
+    CHECK(result->size() == 1);
+    CHECK(cache.size() == 0);
+    CHECK(cache.peek("/page") == nullptr);
+  }
+
+  SECTION("stale entry continues to be served until combined threshold exceeded")
+  {
+    HintsCache cache(100);
+    cache.put("/page", {"/stale.css"});
+    cache.get("/page", 1); // warm up
+
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+
+    const int evict_threshold = 5; // hints_ttl(1) + stale_evict_after(4)
+    // age=2, threshold=5: stale but NOT evicted -> multiple serves
+    auto r1 = cache.get("/page", 1, evict_threshold);
+    REQUIRE(r1 != nullptr);
+    CHECK(cache.size() == 1);
+
+    auto r2 = cache.get("/page", 1, evict_threshold);
+    REQUIRE(r2 != nullptr);
+    CHECK(cache.size() == 1);
+
+    auto r3 = cache.get("/page", 1, evict_threshold);
+    REQUIRE(r3 != nullptr);
+    CHECK(cache.size() == 1);
+  }
+
+  SECTION("evict_threshold=0 disables combined eviction")
+  {
+    HintsCache cache(100);
+    cache.put("/page", {"/a.js"});
+    cache.get("/page", 1);
+
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+
+    // threshold=0 means both hints_ttl and/or stale_evict_after is 0 -> disabled
+    auto result = cache.get("/page", 1, 0);
+    REQUIRE(result != nullptr);
+    CHECK(cache.size() == 1);
+  }
+}

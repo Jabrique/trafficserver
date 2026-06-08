@@ -3628,3 +3628,193 @@ TEST_CASE("Config: --stale-evict-after option", "[config][stale-evict-after]")
     CHECK_FALSE(parse_config(config, {"--stale-evict-after"}));
   }
 }
+
+// ===================================================================================
+// FIX-5: Purge rate limiting -- --purge-limit and --purge-cooldown options
+//
+// Background:
+//   The purge mechanism lets operators invalidate cached hints with a secret header.
+//   Without rate limiting, a burst of requests with the purge header can hammer
+//   the cache invalidation path. Rate limiting is applied per remap rule using
+//   PurgeRateLimiter stored in PluginInstance. A fixed window of --purge-cooldown
+//   seconds allows at most --purge-limit successful purges before blocking.
+//   Blocked purges are logged with TSNote instead of TSDebug.
+//
+// Changes:
+//   - New config option --purge-limit N (default 3, range [1,100])
+//   - New config option --purge-cooldown N (default 10, range [1,300])
+//   - Both options only have effect when --purge-header is also set
+//
+// RED before fix: purge_limit() and purge_cooldown() do not exist.
+// GREEN after fix: all assertions pass.
+// ===================================================================================
+
+TEST_CASE("Config: --purge-limit option", "[config][purge-limit]")
+{
+  SECTION("default purge_limit is 3")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {}));
+    // RED before fix: purge_limit() does not exist
+    CHECK(config.purge_limit() == 3);
+  }
+
+  SECTION("--purge-limit 1 is valid (minimum)")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--purge-limit", "1"}));
+    CHECK(config.purge_limit() == 1);
+  }
+
+  SECTION("--purge-limit 10 is valid")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--purge-limit", "10"}));
+    CHECK(config.purge_limit() == 10);
+  }
+
+  SECTION("--purge-limit 100 is valid (maximum)")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--purge-limit", "100"}));
+    CHECK(config.purge_limit() == 100);
+  }
+
+  SECTION("--purge-limit 0 is invalid (below minimum)")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(config, {"--purge-limit", "0"}));
+  }
+
+  SECTION("--purge-limit 101 is now valid (within new max 500)")
+  {
+    EarlyHintsConfig config;
+    // RED before fix: 101 is rejected (old max 100)
+    CHECK(parse_config(config, {"--purge-limit", "101"}));
+    CHECK(config.purge_limit() == 101);
+  }
+
+  SECTION("--purge-limit 500 is valid (new maximum)")
+  {
+    EarlyHintsConfig config;
+    // RED before fix: 500 is rejected (old max 100)
+    CHECK(parse_config(config, {"--purge-limit", "500"}));
+    CHECK(config.purge_limit() == 500);
+  }
+
+  SECTION("--purge-limit 501 is invalid (exceeds new maximum 500)")
+  {
+    EarlyHintsConfig config;
+    // RED before fix: same failure, still invalid (just higher threshold)
+    CHECK_FALSE(parse_config(config, {"--purge-limit", "501"}));
+  }
+
+  SECTION("--purge-limit -1 is invalid (negative)")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(config, {"--purge-limit", "-1"}));
+  }
+
+  SECTION("--purge-limit non-numeric is invalid")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(config, {"--purge-limit", "abc"}));
+  }
+
+  SECTION("--purge-limit missing value is invalid")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(config, {"--purge-limit"}));
+  }
+
+  SECTION("--purge-limit can coexist with --purge-header and --purge-secret")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--purge-header", "X-Purge", "--purge-secret", "tok", "--purge-limit", "5"}));
+    CHECK(config.purge_limit() == 5);
+    CHECK(config.purge_header_name() == "X-Purge");
+  }
+}
+
+TEST_CASE("Config: --purge-cooldown option", "[config][purge-cooldown]")
+{
+  SECTION("default purge_cooldown is 10 seconds")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {}));
+    // RED before fix: purge_cooldown() does not exist
+    CHECK(config.purge_cooldown() == 10);
+  }
+
+  SECTION("--purge-cooldown 1 is valid (minimum)")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--purge-cooldown", "1"}));
+    CHECK(config.purge_cooldown() == 1);
+  }
+
+  SECTION("--purge-cooldown 60 is valid")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--purge-cooldown", "60"}));
+    CHECK(config.purge_cooldown() == 60);
+  }
+
+  SECTION("--purge-cooldown 300 is valid (maximum)")
+  {
+    EarlyHintsConfig config;
+    CHECK(parse_config(config, {"--purge-cooldown", "300"}));
+    CHECK(config.purge_cooldown() == 300);
+  }
+
+  SECTION("--purge-cooldown 0 is invalid (below minimum)")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(config, {"--purge-cooldown", "0"}));
+  }
+
+  SECTION("--purge-cooldown 301 is now valid (within new max 2592000)")
+  {
+    EarlyHintsConfig config;
+    // RED before fix: 301 rejected (old max 300)
+    CHECK(parse_config(config, {"--purge-cooldown", "301"}));
+    CHECK(config.purge_cooldown() == 301);
+  }
+
+  SECTION("--purge-cooldown 86400 (1 day) is valid")
+  {
+    EarlyHintsConfig config;
+    // RED before fix: 86400 rejected (old max 300)
+    CHECK(parse_config(config, {"--purge-cooldown", "86400"}));
+    CHECK(config.purge_cooldown() == 86400);
+  }
+
+  SECTION("--purge-cooldown 2592000 (1 month) is valid (new maximum)")
+  {
+    EarlyHintsConfig config;
+    // RED before fix: 2592000 rejected (old max 300)
+    CHECK(parse_config(config, {"--purge-cooldown", "2592000"}));
+    CHECK(config.purge_cooldown() == 2592000);
+  }
+
+  SECTION("--purge-cooldown 2592001 is invalid (exceeds new maximum)")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(config, {"--purge-cooldown", "2592001"}));
+  }
+
+  SECTION("--purge-cooldown -1 is invalid (negative)")
+  {
+    EarlyHintsConfig config;
+    CHECK_FALSE(parse_config(config, {"--purge-cooldown", "-1"}));
+  }
+
+  SECTION("--purge-limit and --purge-cooldown coexist with purge header options")
+  {
+    EarlyHintsConfig config;
+    CHECK(
+      parse_config(config, {"--purge-header", "X-Purge", "--purge-secret", "tok", "--purge-limit", "5", "--purge-cooldown", "30"}));
+    CHECK(config.purge_limit() == 5);
+    CHECK(config.purge_cooldown() == 30);
+  }
+}

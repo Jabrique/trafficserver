@@ -187,6 +187,18 @@ public:
     return purge_secret_;
   }
 
+  int
+  purge_limit() const
+  {
+    return purge_limit_;
+  }
+
+  int
+  purge_cooldown() const
+  {
+    return purge_cooldown_;
+  }
+
 private:
   uint8_t mode_          = MODE_ORIGIN_FORWARD;
   int max_links_         = 10;
@@ -207,6 +219,8 @@ private:
   int stale_evict_after_ = 0;      // 0 = disabled; range [0, 31536000] seconds
   std::string purge_header_name_;  // empty = purge disabled
   std::string purge_secret_;       // required when purge_header_name_ is set
+  int purge_limit_    = 3;         // max purges per window per remap; range [1, 500]
+  int purge_cooldown_ = 10;        // window duration in seconds; range [1, 2592000] (1 month)
 
   bool parse_mode(const char *mode_str);
   static bool match_domain_list(const std::string &domain, const std::vector<std::string> &list);

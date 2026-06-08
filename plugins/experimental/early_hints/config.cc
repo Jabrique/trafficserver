@@ -490,6 +490,8 @@ EarlyHintsConfig::init(int argc, const char *argv[])
     {const_cast<char *>("stale-evict-after"),         required_argument, nullptr, 'E'},
     {const_cast<char *>("purge-header"),              required_argument, nullptr, 'H'},
     {const_cast<char *>("purge-secret"),              required_argument, nullptr, 'S'},
+    {const_cast<char *>("purge-limit"),               required_argument, nullptr, 'L'},
+    {const_cast<char *>("purge-cooldown"),            required_argument, nullptr, 'C'},
     {nullptr, 0, nullptr, 0},
   };
   // clang-format on
@@ -753,6 +755,26 @@ EarlyHintsConfig::init(int argc, const char *argv[])
         return false;
       }
       purge_secret_ = optarg;
+      break;
+    case 'L':
+      if (!safe_parse_int(optarg, &purge_limit_)) {
+        TSError("[%s] invalid --purge-limit value: %s", PLUGIN_NAME, optarg);
+        return false;
+      }
+      if (purge_limit_ < 1 || purge_limit_ > 500) {
+        TSError("[%s] purge-limit must be between 1 and 500, got %d", PLUGIN_NAME, purge_limit_);
+        return false;
+      }
+      break;
+    case 'C':
+      if (!safe_parse_int(optarg, &purge_cooldown_)) {
+        TSError("[%s] invalid --purge-cooldown value: %s", PLUGIN_NAME, optarg);
+        return false;
+      }
+      if (purge_cooldown_ < 1 || purge_cooldown_ > 2592000) {
+        TSError("[%s] purge-cooldown must be between 1 and 2592000 seconds (1 month), got %d", PLUGIN_NAME, purge_cooldown_);
+        return false;
+      }
       break;
     default:
       TSError("[%s] unknown option", PLUGIN_NAME);

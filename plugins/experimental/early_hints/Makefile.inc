@@ -45,6 +45,7 @@ experimental_early_hints_test_early_hints_SOURCES = \
   experimental/early_hints/unit_tests/test_numeric_safety.cc \
   experimental/early_hints/unit_tests/test_link_parser.cc \
   experimental/early_hints/unit_tests/test_persistence.cc \
+  experimental/early_hints/unit_tests/test_purge_rate_limiter.cc \
   experimental/early_hints/link_parser.cc \
   experimental/early_hints/config.cc \
   experimental/early_hints/hints_cache.cc \

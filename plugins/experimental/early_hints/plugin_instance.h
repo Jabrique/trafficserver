@@ -21,16 +21,58 @@
 
 #include "config.h"
 #include "hints_cache.h"
+#include <atomic>
+#include <ctime>
+
+// PurgeRateLimiter: fixed-window per remap rule.
+// Allows at most `limit` calls to allow() within a `cooldown` second window.
+// Thread-safe: uses atomics for count and window_start (relaxed/seq_cst mix
+// is intentional -- window_start is the synchronization point).
+struct PurgeRateLimiter {
+  explicit PurgeRateLimiter(int limit, int cooldown_seconds)
+    : limit_(limit), cooldown_(cooldown_seconds), count_(0), window_start_(std::time(nullptr))
+  {
+  }
+
+  // Returns true if this purge is allowed, false if rate-limited.
+  bool
+  allow()
+  {
+    time_t now = std::time(nullptr);
+    time_t ws  = window_start_.load(std::memory_order_acquire);
+
+    if (now - ws >= cooldown_) {
+      // Window expired: reset count and start a new window.
+      count_.store(0, std::memory_order_relaxed);
+      window_start_.store(now, std::memory_order_release);
+    }
+
+    int prev = count_.fetch_add(1, std::memory_order_relaxed);
+    return prev < limit_;
+  }
+
+  // Non-copyable: each remap instance owns its own limiter state
+  PurgeRateLimiter(const PurgeRateLimiter &) = delete;
+  PurgeRateLimiter &operator=(const PurgeRateLimiter &) = delete;
+
+private:
+  int limit_;
+  int cooldown_;
+  std::atomic<int> count_;
+  std::atomic<time_t> window_start_;
+};
 
 // Plugin instance data stored in TSCont — owns config and cache.
 struct PluginInstance {
-  EarlyHintsConfig *config = nullptr;
-  HintsCache *cache        = nullptr;
+  EarlyHintsConfig *config  = nullptr;
+  HintsCache *cache         = nullptr;
+  PurgeRateLimiter *limiter = nullptr; // non-null when purge header is configured
 
   ~PluginInstance()
   {
     delete config;
     delete cache;
+    delete limiter;
   }
 
   // Noncopyable — prevent accidental double-free

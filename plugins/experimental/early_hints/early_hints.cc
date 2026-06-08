@@ -55,6 +55,7 @@ static int stat_103_skipped_no_hints = -1;
 static int stat_103_skipped_non_nav  = -1;
 static int stat_103_send_failed      = -1;
 static int stat_hints_learned        = -1;
+static int stat_purge_rate_limited   = -1;
 
 static inline void
 increment_stat(int stat_id, int64_t amount)
@@ -732,7 +733,14 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
           // to increment request_count. Without this, H1 cache hits never reach min_hit_count
           // and Link headers are never added to 200 responses.
           if (req_data->cached_links == nullptr) {
-            req_data->cached_links = cache->get(req_data->cache_key, config->min_hit_count(), config->stale_evict_after());
+            // Eviction threshold = hints_ttl + stale_evict_after. Zero disables eviction.
+            // Entries remain alive throughout the stale grace window; only deleted after
+            // age >= hints_ttl + stale_evict_after.
+            int evict_threshold = 0;
+            if (config->hints_ttl() > 0 && config->stale_evict_after() > 0) {
+              evict_threshold = config->hints_ttl() + config->stale_evict_after();
+            }
+            req_data->cached_links = cache->get(req_data->cache_key, config->min_hit_count(), evict_threshold);
             TSDebug(PLUGIN_NAME, "READ_CACHE_HDR: get() for %s (H1 cache hit) -> %s", req_data->cache_key.c_str(),
                     req_data->cached_links ? "hints ready" : "below threshold");
           }
@@ -984,6 +992,7 @@ TSRemapInit(TSRemapInterface *api_info, char *errbuf, int errbuf_size)
   stat_103_skipped_non_nav  = get_or_create_stat("plugin.early_hints.103_skipped_non_nav");
   stat_103_send_failed      = get_or_create_stat("plugin.early_hints.103_send_failed");
   stat_hints_learned        = get_or_create_stat("plugin.early_hints.hints_learned");
+  stat_purge_rate_limited   = get_or_create_stat("plugin.early_hints.purge_rate_limited");
 
   TSDebug(PLUGIN_NAME, "plugin initialized, arg_idx=%d", arg_idx);
   return TS_SUCCESS;
@@ -1058,6 +1067,11 @@ TSRemapNewInstance(int argc, char *argv[], void **ih, char *errbuf, int errbuf_s
   PluginInstance *inst = new PluginInstance();
   inst->config         = config;
   inst->cache          = cache;
+
+  // Create rate limiter only when purge is enabled (purge header set)
+  if (!config->purge_header_name().empty()) {
+    inst->limiter = new PurgeRateLimiter(config->purge_limit(), config->purge_cooldown());
+  }
 
   TSCont contp = TSContCreate(early_hints_handler, nullptr);
   if (!contp) {
@@ -1230,6 +1244,7 @@ TSRemapDoRemap(void *ih, TSHttpTxn rh, TSRemapRequestInfo * /* rri ATS_UNUSED */
   // secret, invalidate the cached hints entry for this URL so it can be re-learned.
   // The purging request itself continues through normal processing: get() will find no entry,
   // no 103 is sent, and the scanner attaches on READ_RESPONSE_HDR to re-learn the page.
+  // If --purge-limit is set, at most purge_limit purges are allowed per purge_cooldown window.
   if (!config->purge_header_name().empty()) {
     TSMLoc purge_field_loc = TSMimeHdrFieldFind(req_bufp, req_hdr_loc, config->purge_header_name().c_str(),
                                                 static_cast<int>(config->purge_header_name().size()));
@@ -1240,8 +1255,15 @@ TSRemapDoRemap(void *ih, TSHttpTxn rh, TSRemapRequestInfo * /* rri ATS_UNUSED */
       bool token_ok             = val && constant_time_eq(val, static_cast<size_t>(val_len), secret.c_str(), secret.size());
       TSHandleMLocRelease(req_bufp, req_hdr_loc, purge_field_loc);
       if (token_ok) {
-        cache->remove(cache_key);
-        TSDebug(PLUGIN_NAME, "purge: removed hints entry for %s", cache_key.c_str());
+        if (inst->limiter && !inst->limiter->allow()) {
+          // Rate limit exceeded: log with TSNote so it appears in diags.log
+          // without requiring debug mode. Cache is NOT invalidated.
+          TSNote("[%s] purge rate limit exceeded for %s - ignoring purge request", PLUGIN_NAME, cache_key.c_str());
+          increment_stat(stat_purge_rate_limited, 1);
+        } else {
+          cache->remove(cache_key);
+          TSDebug(PLUGIN_NAME, "purge: removed hints entry for %s", cache_key.c_str());
+        }
       } else {
         TSDebug(PLUGIN_NAME, "purge: bad or missing token for %s, ignoring", cache_key.c_str());
       }
@@ -1256,7 +1278,14 @@ TSRemapDoRemap(void *ih, TSHttpTxn rh, TSRemapRequestInfo * /* rri ATS_UNUSED */
     if (config->mode() & (EarlyHintsConfig::MODE_AUTO_LEARN | EarlyHintsConfig::MODE_ORIGIN_FORWARD)) {
       TSDebug(PLUGIN_NAME, "mode decision for %s: auto-learn/origin-forward active, looking up cache (min_hit_count=%d)",
               cache_key.c_str(), config->min_hit_count());
-      req_data->cached_links = cache->get(cache_key, config->min_hit_count(), config->stale_evict_after());
+      // Eviction threshold = hints_ttl + stale_evict_after. Zero disables eviction.
+      // Entries remain alive throughout the stale grace window; only deleted after
+      // age >= hints_ttl + stale_evict_after.
+      int evict_threshold = 0;
+      if (config->hints_ttl() > 0 && config->stale_evict_after() > 0) {
+        evict_threshold = config->hints_ttl() + config->stale_evict_after();
+      }
+      req_data->cached_links = cache->get(cache_key, config->min_hit_count(), evict_threshold);
       if (req_data->cached_links) {
         // Serveable: entry exists and request_count >= min_hit_count
         req_data->has_learned = true;
