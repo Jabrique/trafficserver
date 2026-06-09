@@ -26,8 +26,15 @@
 
 // PurgeRateLimiter: fixed-window per remap rule.
 // Allows at most `limit` calls to allow() within a `cooldown` second window.
-// Thread-safe: uses atomics for count and window_start (relaxed/seq_cst mix
-// is intentional -- window_start is the synchronization point).
+//
+// Thread-safe: window reset uses compare_exchange_strong so only one thread
+// wins the reset. Concurrent threads that also see window_start as expired
+// find that the CAS fails (window_start was already updated by the winner)
+// and fall through to a normal fetch_add on the already-reset counter.
+//
+// Without CAS: all N threads that see (now - ws >= cooldown) each store
+// count_=0 and then each fetch_add from 0, allowing up to N*limit purges
+// in a single window (TOCTOU race).
 struct PurgeRateLimiter {
   explicit PurgeRateLimiter(int limit, int cooldown_seconds)
     : limit_(limit), cooldown_(cooldown_seconds), count_(0), window_start_(std::time(nullptr))
@@ -42,9 +49,17 @@ struct PurgeRateLimiter {
     time_t ws  = window_start_.load(std::memory_order_acquire);
 
     if (now - ws >= cooldown_) {
-      // Window expired: reset count and start a new window.
-      count_.store(0, std::memory_order_relaxed);
-      window_start_.store(now, std::memory_order_release);
+      // Window expired: use CAS to ensure only one thread wins the reset.
+      // The winner atomically updates window_start_ from ws to now.
+      // Losers see the CAS fail (ws was already changed) and fall through.
+      if (window_start_.compare_exchange_strong(ws, now, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+        // This thread won the window reset: set count to 1 (our own request)
+        // and report allowed if 1 <= limit.
+        count_.store(1, std::memory_order_release);
+        return 1 <= limit_;
+      }
+      // CAS failed: another thread already reset the window. Fall through
+      // to the normal fetch_add below on the already-reset counter.
     }
 
     int prev = count_.fetch_add(1, std::memory_order_relaxed);

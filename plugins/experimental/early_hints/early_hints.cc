@@ -179,17 +179,25 @@ static const char *bot_signatures[] = {"googlebot",
 
 // Compare two byte sequences in constant time to prevent timing side-channel attacks.
 // Uses a volatile XOR accumulator so the compiler cannot short-circuit the loop.
-// Length mismatch is checked first; secret length is fixed at config load and
-// does not change per request, so leaking it via the fast path is acceptable.
+//
+// Length handling: instead of an early return on length mismatch (which leaks the
+// secret length via timing), XOR the lengths into diff and compare up to
+// max(a_len, b_len) bytes, padding the shorter sequence with zero bytes.
+// A length mismatch sets diff to non-zero without any branch on secret length.
 static bool
 constant_time_eq(const char *a, size_t a_len, const char *b, size_t b_len)
 {
-  if (a_len != b_len) {
-    return false;
-  }
+  size_t max_len    = (a_len > b_len) ? a_len : b_len;
   volatile int diff = 0;
-  for (size_t i = 0; i < a_len; i++) {
-    diff |= (static_cast<unsigned char>(a[i]) ^ static_cast<unsigned char>(b[i]));
+
+  // XOR lengths into diff: if lengths differ, diff is non-zero immediately.
+  // This removes the early-return branch that previously leaked secret length.
+  diff |= (static_cast<int>(a_len) ^ static_cast<int>(b_len));
+
+  for (size_t i = 0; i < max_len; i++) {
+    unsigned char ca = (i < a_len) ? static_cast<unsigned char>(a[i]) : 0;
+    unsigned char cb = (i < b_len) ? static_cast<unsigned char>(b[i]) : 0;
+    diff |= (ca ^ cb);
   }
   return diff == 0;
 }
@@ -610,10 +618,6 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
               origin_links.push_back(std::move(normalized));
             }
           }
-          // Deduplicate: URL-only strongest-wins.
-          // dedup_link_segments() keeps one entry per URL key, preferring
-          // preload/modulepreload over preconnect when both appear.
-          origin_links = dedup_link_segments(std::move(origin_links), config->max_links());
         }
         TSMLoc next = TSMimeHdrFieldNextDup(server_bufp, server_hdr_loc, link_field);
         TSHandleMLocRelease(server_bufp, server_hdr_loc, link_field);
@@ -629,6 +633,13 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
           break;
         }
       }
+
+      // Deduplicate once after collecting all Link header fields.
+      // Calling dedup inside the loop was O(n^2): each iteration rebuilt
+      // the dedup map from scratch over the growing origin_links vector.
+      // A single call here is O(n) and correctly applies strongest-wins
+      // across all fields (preload beats preconnect for the same URL).
+      origin_links = dedup_link_segments(std::move(origin_links), config->max_links());
 
       if (!origin_links.empty()) {
         cache->put(req_data->cache_key, origin_links);
@@ -799,7 +810,6 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
               origin_links.push_back(std::move(normalized));
             }
           }
-          origin_links = dedup_link_segments(std::move(origin_links), config->max_links());
         }
         TSMLoc next = TSMimeHdrFieldNextDup(cache_bufp, cache_hdr_loc, link_field);
         TSHandleMLocRelease(cache_bufp, cache_hdr_loc, link_field);
@@ -814,6 +824,12 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
           break;
         }
       }
+
+      // Deduplicate once after collecting all Link header fields.
+      // Mirrors the same fix applied to READ_RESPONSE_HDR: calling dedup inside
+      // the loop was O(n^2) and broke strongest-wins for same-URL entries that
+      // span multiple fields (e.g. preconnect in field 1, preload in field 2).
+      origin_links = dedup_link_segments(std::move(origin_links), config->max_links());
 
       if (!origin_links.empty()) {
         cache->put(req_data->cache_key, origin_links);

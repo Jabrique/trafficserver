@@ -45,6 +45,8 @@ TESTS=(
     early_hints_manual_stylesheet     # --link rel=stylesheet normalized to rel=preload
     early_hints_stale_eviction        # --stale-evict-after: stale entries evicted after serving
     early_hints_purge_rate_limit      # --purge-limit/--purge-cooldown: rate limit cache invalidation
+    early_hints_purge_rate_limit_window  # C1 fix: CAS-based window reset, no count overshoot
+    early_hints_origin_forward_multi_link_dedup  # H3 fix: dedup after full field collection
 )
 
 PASSED=0
