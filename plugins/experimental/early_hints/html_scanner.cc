@@ -373,11 +373,11 @@ HtmlScanner::build_link_header(const std::string &tag)
 
       if (is_crossorigin(href_)) {
         std::string origin = extract_origin(href_);
-        if (origin.find("://") == std::string::npos) {
-          return; // degenerate cross-origin URL (e.g. bare "//") — no valid absolute origin
-        }
         size_t scheme_sep  = origin.find("://");
-        std::string domain = (scheme_sep != std::string::npos) ? origin.substr(scheme_sep + 3) : origin;
+        if (scheme_sep == std::string::npos) {
+          return; // degenerate cross-origin URL (e.g. bare "//") -- no valid absolute origin
+        }
+        std::string domain = origin.substr(scheme_sep + 3);
         if (config_ && config_->is_whitelisted_domain(domain)) {
           // crossorigin-whitelist: allow preload with crossorigin
           result = "<" + href_ + ">; rel=preload; as=" + as_;
@@ -416,11 +416,11 @@ HtmlScanner::build_link_header(const std::string &tag)
       // <link rel="stylesheet" href="..."> → preload as style
       if (is_crossorigin(href_)) {
         std::string origin = extract_origin(href_);
-        if (origin.find("://") == std::string::npos) {
-          return; // degenerate cross-origin URL — no valid absolute origin
-        }
         size_t scheme_sep  = origin.find("://");
-        std::string domain = (scheme_sep != std::string::npos) ? origin.substr(scheme_sep + 3) : origin;
+        if (scheme_sep == std::string::npos) {
+          return; // degenerate cross-origin URL -- no valid absolute origin
+        }
+        std::string domain = origin.substr(scheme_sep + 3);
         if (config_ && config_->is_whitelisted_domain(domain)) {
           // crossorigin-whitelist: preload with crossorigin
           result = "<" + href_ + ">; rel=preload; as=style";
@@ -448,11 +448,11 @@ HtmlScanner::build_link_header(const std::string &tag)
       // is always implied. Apply the same whitelist logic as rel=preload.
       if (is_crossorigin(href_)) {
         std::string origin = extract_origin(href_);
-        if (origin.find("://") == std::string::npos) {
-          return; // degenerate cross-origin URL — no valid absolute origin
-        }
         size_t scheme_sep  = origin.find("://");
-        std::string domain = (scheme_sep != std::string::npos) ? origin.substr(scheme_sep + 3) : origin;
+        if (scheme_sep == std::string::npos) {
+          return; // degenerate cross-origin URL -- no valid absolute origin
+        }
+        std::string domain = origin.substr(scheme_sep + 3);
         if (config_ && config_->is_whitelisted_domain(domain)) {
           // crossorigin-whitelist: allow preload with crossorigin for module
           result = "<" + href_ + ">; rel=modulepreload";
@@ -486,11 +486,11 @@ HtmlScanner::build_link_header(const std::string &tag)
       }
       if (is_crossorigin(href_)) {
         std::string origin = extract_origin(href_);
-        if (origin.find("://") == std::string::npos) {
-          return; // degenerate cross-origin URL — no valid absolute origin
-        }
         size_t scheme_sep  = origin.find("://");
-        std::string domain = (scheme_sep != std::string::npos) ? origin.substr(scheme_sep + 3) : origin;
+        if (scheme_sep == std::string::npos) {
+          return; // degenerate cross-origin URL -- no valid absolute origin
+        }
+        std::string domain = origin.substr(scheme_sep + 3);
         if (config_ && config_->is_whitelisted_domain(domain)) {
           result = "<" + href_ + ">; rel=modulepreload";
           if (crossorigin_value_.empty()) {
@@ -515,11 +515,11 @@ HtmlScanner::build_link_header(const std::string &tag)
       }
       if (is_crossorigin(href_)) {
         std::string origin = extract_origin(href_);
-        if (origin.find("://") == std::string::npos) {
-          return; // degenerate cross-origin URL — no valid absolute origin
-        }
         size_t scheme_sep  = origin.find("://");
-        std::string domain = (scheme_sep != std::string::npos) ? origin.substr(scheme_sep + 3) : origin;
+        if (scheme_sep == std::string::npos) {
+          return; // degenerate cross-origin URL -- no valid absolute origin
+        }
+        std::string domain = origin.substr(scheme_sep + 3);
         if (config_ && config_->is_whitelisted_domain(domain)) {
           result = "<" + href_ + ">; rel=preload; as=script";
           as_    = "script";

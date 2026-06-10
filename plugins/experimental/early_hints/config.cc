@@ -110,19 +110,11 @@ is_valid_link_value(const std::string &link)
   // (file:, ftp:, chrome-extension:, feed:javascript:, jar:, ws:, wss:, etc.) bypasses it.
   // An allowlist is inherently safe against unknown schemes.
   //
-  // Strip leading whitespace — browsers do this per WHATWG URL spec,
-  // so "  javascript:..." resolves to "javascript:...".
-  size_t scheme_start = url_part.find_first_not_of(" \t");
-  if (scheme_start == std::string::npos) {
-    return false; // all whitespace — useless URL
+  const char *s    = url_part.c_str();
+  size_t remaining = url_part.size();
+  if (remaining == 0) {
+    return false; // empty URL — useless
   }
-
-  // Detect whether url_part has a scheme per RFC 3986 §3.1:
-  //   scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )
-  // If the first character is ALPHA and we find ':', only http: and https: are allowed.
-  // Everything else (relative path, protocol-relative //host, fragment-only) has no scheme.
-  const char *s    = url_part.c_str() + scheme_start;
-  size_t remaining = url_part.size() - scheme_start;
   if (remaining > 0 && std::isalpha(static_cast<unsigned char>(s[0]))) {
     for (size_t i = 1; i < remaining; i++) {
       char c = s[i];
@@ -169,6 +161,17 @@ is_valid_link_value(const std::string &link)
   std::string params_lower;
   if (url_end + 1 < link.size()) {
     std::string params_part = link.substr(url_end + 1);
+
+    // Reject < or > anywhere in the params portion (after the closing >).
+    // A fetchpriority or other attribute value containing an angle-bracket URL
+    // would be parsed by RFC 8288 compliant browsers as a second link-value,
+    // allowing a malicious origin to inject arbitrary preload hints.
+    for (char c : params_part) {
+      if (c == '<' || c == '>') {
+        return false;
+      }
+    }
+
     params_lower.reserve(params_part.size());
     for (char c : params_part) {
       params_lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -180,13 +183,15 @@ is_valid_link_value(const std::string &link)
     size_t pos     = 0;
     while ((pos = params_lower.find(rel_str, pos)) != std::string::npos) {
       // Verify word boundary before match
-      bool before_ok = (pos == 0) || params_lower[pos - 1] == ';' || params_lower[pos - 1] == ' ' || params_lower[pos - 1] == '\t';
-      size_t end     = pos + rel_len;
-      // After-boundary: only ';', space, tab, or end-of-string for the unquoted form.
+      bool before_ok = (pos == 0) || params_lower[pos - 1] == ';' || params_lower[pos - 1] == ' ' ||
+                       params_lower[pos - 1] == '\t' || params_lower[pos - 1] == '\r';
+      size_t end = pos + rel_len;
+      // After-boundary: only ';', space, tab, \r, or end-of-string for the unquoted form.
       // '"' and '\'' are NOT valid unquoted boundaries — rel=preload"garbage" must be rejected.
       // Quoted forms (rel="preload") are handled separately by check_rel_quoted.
-      bool after_ok =
-        end >= params_lower.size() || params_lower[end] == ';' || params_lower[end] == ' ' || params_lower[end] == '\t';
+      // \r is included to match the boundary set used by has_rel_type() in link_parser.cc.
+      bool after_ok = end >= params_lower.size() || params_lower[end] == ';' || params_lower[end] == ' ' ||
+                      params_lower[end] == '\t' || params_lower[end] == '\r';
       if (before_ok && after_ok) {
         return true;
       }
@@ -921,7 +926,17 @@ normalize_link_for_hint(const std::string &link)
   // Check for stylesheet — convert to preload; as=style, preserving optional attrs.
   if (has_param_match(params_lower, "rel=stylesheet") || has_param_match(params_lower, "rel=\"stylesheet\"") ||
       has_param_match(params_lower, "rel='stylesheet'")) {
-    return url_part + "; rel=preload; as=style" + carry_crossorigin() + carry_param("fetchpriority");
+    // Allowlist fetchpriority to known-safe tokens: high, low, auto.
+    // carry_param extracts the value up to the next ';' or end-of-string.
+    // A malicious origin could inject a second link-value by appending
+    // <url> without a preceding ';' (e.g. fetchpriority=high<evil.com>).
+    // The params < > check in is_valid_link_value() is the primary defense;
+    // this allowlist is a secondary layer that drops unknown tokens.
+    std::string fp = carry_param("fetchpriority");
+    if (fp != "; fetchpriority=high" && fp != "; fetchpriority=low" && fp != "; fetchpriority=auto") {
+      fp.clear();
+    }
+    return url_part + "; rel=preload; as=style" + carry_crossorigin() + fp;
   }
 
   // rel=preload, rel=preconnect, rel=modulepreload — return unchanged

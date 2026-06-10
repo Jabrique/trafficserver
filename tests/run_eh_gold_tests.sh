@@ -47,6 +47,7 @@ TESTS=(
     early_hints_purge_rate_limit      # --purge-limit/--purge-cooldown: rate limit cache invalidation
     early_hints_purge_rate_limit_window  # C1 fix: CAS-based window reset, no count overshoot
     early_hints_origin_forward_multi_link_dedup  # H3 fix: dedup after full field collection
+    early_hints_fetchpriority                    # fetchpriority allowlist and angle-bracket injection guard
 )
 
 PASSED=0

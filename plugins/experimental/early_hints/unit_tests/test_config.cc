@@ -1179,11 +1179,14 @@ TEST_CASE("Config audit: link validation URL edge cases", "[config][audit]")
     CHECK_FALSE(parse_config(config, {"--mode", "manual", "--link", "< >; rel=preload; as=script"}));
   }
 
-  SECTION("extra '>' in params portion does not break rel= parsing")
+  SECTION("extra '>' in params portion is REJECTED by is_valid_link_value")
   {
-    // First '>' closes URL. Subsequent '>' in params is harmless.
+    // is_valid_link_value now rejects any < or > in the params portion
+    // (after the closing > of the URL). A > in a title= or other attribute can be
+    // mis-parsed by RFC 8288 browsers as a link-value separator, which is the
+    // same parser path exploited by the fetchpriority injection vector.
     EarlyHintsConfig config;
-    CHECK(parse_config(config, {"--mode", "manual", "--link", "</a.js>; rel=preload; title=a>b"}));
+    CHECK_FALSE(parse_config(config, {"--mode", "manual", "--link", "</a.js>; rel=preload; title=a>b"}));
   }
 
   SECTION("http:// and https:// schemes accepted (not blocked)")
