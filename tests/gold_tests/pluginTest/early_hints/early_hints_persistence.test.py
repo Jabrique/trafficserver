@@ -1,5 +1,5 @@
 '''
-Test 103 Early Hints plugin — hints cache disk persistence
+Test 103 Early Hints plugin  -- hints cache disk persistence
 '''
 #  Licensed to the Apache Software Foundation (ASF) under one
 #  or more contributor license agreements.  See the NOTICE file
@@ -126,7 +126,7 @@ ts.Disk.records_config.update({
 })
 
 # ----
-# TR1: Learn hints (H1 request — learn phase)
+# TR1: Learn hints (H1 request  -- learn phase)
 # ----
 tr1 = Test.AddTestRun("Persist: H1 learn request triggers auto-learn")
 tr1.Processes.Default.Command = (
@@ -144,7 +144,7 @@ tr1.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr1.StillRunningAfter = microserver
 
 # ----
-# TR2: Verify hints were learned (H2 request — should get 103)
+# TR2: Verify hints were learned (H2 request  -- should get 103)
 # ----
 tr2 = Test.AddTestRun("Persist: H2 request gets 103 from learned hints")
 tr2.Processes.Default.Command = (
@@ -185,14 +185,14 @@ tr4.StillRunningAfter = microserver
 
 # ----
 # TR5: Verify --no-persist did NOT create a second .bin file
-#      (only 1 .bin should exist — from the persist remap, not the no-persist one)
+#      (only 1 .bin should exist  -- from the persist remap, not the no-persist one)
 # ----
 tr5 = Test.AddTestRun("NoPersist: verify only 1 .bin file exists (no-persist has none)")
 tr5.Processes.Default.Command = (
     "sleep 1 && ls " + ts.Variables.RUNTIMEDIR + "/early_hints_*.bin 2>/dev/null | wc -l")
 tr5.Processes.Default.ReturnCode = 0
 tr5.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
-    "1", "Only 1 persist file should exist — --no-persist remap has none (and default is OFF)")
+    "1", "Only 1 persist file should exist  -- --no-persist remap has none (and default is OFF)")
 tr5.StillRunningAfter = microserver
 
 # ----
@@ -231,5 +231,185 @@ tr8.Processes.Default.Command = (
     "ls " + ts.Variables.RUNTIMEDIR + "/early_hints_*.bin 2>/dev/null | wc -l")
 tr8.Processes.Default.ReturnCode = 0
 tr8.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
-    "1", "Runtime dir should still have only 1 .bin — custom dir file is elsewhere")
+    "1", "Runtime dir should still have only 1 .bin  -- custom dir file is elsewhere")
 tr8.StillRunningAfter = microserver
+
+import os as _os
+
+# -------------------------------------------------------------------------------
+# Cache persistence debounce
+# Bug: HintsCache::put() calls persist_to_disk() on every put() call,
+# even when the new links are identical. Fix: equality-check debounce.
+# -------------------------------------------------------------------------------
+
+persist_dir_debounce = _os.path.join(Test.RunDirectory, "eh_persist_debounce")
+
+ms_debounce = Test.MakeOriginServer("ms_debounce")
+for _ in range(6):
+    ms_debounce.addResponse(
+        "sessionfile.log", {
+            "headers": "GET /page.html HTTP/1.1\r\nHost: www.example.com\r\n\r\n",
+            "body": ""
+        }, {
+            "headers":
+                "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/html\r\n"
+                "Link: </cdn/app.js>; rel=preload; as=script\r\n"
+                "\r\n",
+            "body": "<html><body>Test page</body></html>\r\n"
+        })
+
+ts_debounce = Test.MakeATSProcess("ts_debounce", select_ports=True, enable_tls=True, enable_cache=False)
+ts_debounce.addDefaultSSLFiles()
+ts_debounce.Disk.ssl_multicert_config.AddLine('dest_ip=* ssl_cert_name=server.pem ssl_key_name=server.key')
+ts_debounce.Disk.remap_config.AddLine((
+    'map / http://127.0.0.1:{port}/'
+    ' @plugin=early_hints.so'
+    ' @pparam=--mode @pparam=origin-forward'
+    ' @pparam=--min-hit-count @pparam=1'
+    ' @pparam=--max-links @pparam=5'
+    ' @pparam=--no-skip-bots'
+    ' @pparam=--no-navigate-only'
+    ' @pparam=--persist-dir @pparam={pdir}'
+    ' @pparam=--debug-header @pparam=X-Early-Hints-Status').format(
+        port=ms_debounce.Variables.Port, pdir=persist_dir_debounce))
+ts_debounce.Disk.records_config.update({
+    'proxy.config.diags.debug.enabled': 1,
+    'proxy.config.diags.debug.tags': 'early_hints',
+    'proxy.config.ssl.server.cert.path': ts_debounce.Variables.SSLDir,
+    'proxy.config.ssl.server.private_key.path': ts_debounce.Variables.SSLDir,
+    'proxy.config.http2.active_timeout_in': 3,
+})
+
+tr_debounce_0 = Test.AddTestRun("Debounce: create persist dir and learn phase")
+tr_debounce_0.Processes.Default.Command = (
+    "mkdir -p {pdir}"
+    " && curl -s -D - -o /dev/null --http2 --insecure"
+    " 'https://127.0.0.1:{port}/page.html'").format(
+        pdir=persist_dir_debounce, port=ts_debounce.Variables.ssl_port)
+tr_debounce_0.Processes.Default.ReturnCode = 0
+tr_debounce_0.Processes.Default.StartBefore(ms_debounce, ready=When.PortOpen(ms_debounce.Variables.Port))
+tr_debounce_0.Processes.Default.StartBefore(ts_debounce)
+tr_debounce_0.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression("200", "Should receive 200")
+tr_debounce_0.StillRunningAfter = ms_debounce
+
+tr_debounce_1 = Test.AddTestRun("Debounce: second request receives 103 with cached hint")
+tr_debounce_1.Processes.Default.Command = (
+    "sleep 1 ; curl -s -D - -o /dev/null"
+    " --http2 --insecure"
+    " 'https://127.0.0.1:{port}/page.html'").format(port=ts_debounce.Variables.ssl_port)
+tr_debounce_1.Processes.Default.ReturnCode = 0
+tr_debounce_1.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
+    "x-early-hints-status: sent", "Hint must be served as 103 after warm-up")
+tr_debounce_1.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
+    "cdn/app.js", "app.js hint must appear in 103")
+tr_debounce_1.StillRunningAfter = ms_debounce
+
+tr_debounce_2 = Test.AddTestRun("Debounce: persist .bin file created in persist dir")
+tr_debounce_2.Processes.Default.Command = (
+    "sleep 1"
+    " && ls {pdir}/early_hints_*.bin 2>/dev/null | grep -q early_hints"
+    " && echo 'persist-file-ok'").format(pdir=persist_dir_debounce)
+tr_debounce_2.Processes.Default.ReturnCode = 0
+tr_debounce_2.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
+    "persist-file-ok", "early_hints_*.bin must be created in persist dir")
+tr_debounce_2.StillRunningAfter = ms_debounce
+
+tr_debounce_3 = Test.AddTestRun("Debounce: persist file valid after repeated identical hits")
+tr_debounce_3.Processes.Default.Command = (
+    "for i in $$(seq 1 4); do"
+    " curl -s -D - -o /dev/null --http2 --insecure"
+    " 'https://127.0.0.1:{port}/page.html' > /dev/null ; done"
+    " && BIN=$$(ls {pdir}/early_hints_*.bin 2>/dev/null | head -1)"
+    " && test -n \"$$BIN\" && test -s \"$$BIN\""
+    " && echo 'debounce-ok'").format(port=ts_debounce.Variables.ssl_port, pdir=persist_dir_debounce)
+tr_debounce_3.Processes.Default.ReturnCode = 0
+tr_debounce_3.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
+    "debounce-ok", "persist file must remain valid after repeated identical hits")
+tr_debounce_3.StillRunningAfter = ms_debounce
+
+# -------------------------------------------------------------------------------
+# Persist dirty flag data integrity
+# Verifies that a failed persist_to_disk() does NOT clear the dirty flag, so
+# the cache data is flushed on shutdown and survives ATS restarts.
+# -------------------------------------------------------------------------------
+
+ms_dirty = Test.MakeOriginServer("ms_dirty")
+
+_dirty_page_body = (
+    "<html><head>"
+    '<link rel="preload" href="/dirty-flag-test.js" as="script">'
+    "</head><body>Dirty flag test</body></html>\r\n"
+)
+ms_dirty.addResponse(
+    "sessionfile.log", {
+        "headers": "GET /dirty-flag.html HTTP/1.1\r\nHost: www.example.com\r\n\r\n",
+        "body": ""
+    }, {
+        "headers": "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/html\r\n\r\n",
+        "body": _dirty_page_body
+    })
+
+ts_dirty = Test.MakeATSProcess("ts_dirty", select_ports=True, enable_tls=True, enable_cache=False)
+ts_dirty.addDefaultSSLFiles()
+ts_dirty.Disk.ssl_multicert_config.AddLine('dest_ip=* ssl_cert_name=server.pem ssl_key_name=server.key')
+
+persist_dir_dirty = ts_dirty.Variables.RUNTIMEDIR + "/dirty_flag_hints"
+ts_dirty.Disk.remap_config.AddLines([
+    'map /dirty-flag.html http://127.0.0.1:{0}/dirty-flag.html'.format(ms_dirty.Variables.Port) +
+    ' @plugin=early_hints.so'
+    ' @pparam=--mode @pparam=auto-learn'
+    ' @pparam=--min-hit-count @pparam=1'
+    ' @pparam=--no-skip-bots'
+    ' @pparam=--no-navigate-only'
+    ' @pparam=--debug-header @pparam=X-Early-Hints-Status'
+    ' @pparam=--persist-dir @pparam=' + persist_dir_dirty,
+])
+ts_dirty.Disk.records_config.update({
+    'proxy.config.diags.debug.enabled': 1,
+    'proxy.config.diags.debug.tags': 'early_hints',
+    'proxy.config.ssl.server.cert.path': '{0}'.format(ts_dirty.Variables.SSLDir),
+    'proxy.config.ssl.server.private_key.path': '{0}'.format(ts_dirty.Variables.SSLDir),
+    'proxy.config.http2.active_timeout_in': 3,
+})
+
+tr_dirty_learn = Test.AddTestRun("Dirty flag: H1 request learns hints (no 103 yet)")
+tr_dirty_learn.Processes.Default.Command = (
+    "curl -s -D - -o /dev/null"
+    " --http1.1"
+    " --insecure"
+    " 'https://127.0.0.1:{0}/dirty-flag.html'".format(ts_dirty.Variables.ssl_port))
+tr_dirty_learn.Processes.Default.ReturnCode = 0
+tr_dirty_learn.Processes.Default.StartBefore(ms_dirty, ready=When.PortOpen(ms_dirty.Variables.Port))
+tr_dirty_learn.Processes.Default.StartBefore(ts_dirty)
+tr_dirty_learn.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
+    "200 OK", "Should receive 200 OK")
+tr_dirty_learn.StillRunningAfter = ms_dirty
+
+tr_dirty_serve = Test.AddTestRun("Dirty flag: H2 request gets 103 from in-memory cache")
+tr_dirty_serve.Processes.Default.Command = (
+    "sleep 1 && curl -s -D - -o /dev/null"
+    " --http2"
+    " --insecure"
+    " 'https://127.0.0.1:{0}/dirty-flag.html'".format(ts_dirty.Variables.ssl_port))
+tr_dirty_serve.Processes.Default.ReturnCode = 0
+tr_dirty_serve.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
+    "x-early-hints-status: sent", "Hints must be sent from in-memory cache")
+tr_dirty_serve.StillRunningAfter = ms_dirty
+
+tr_dirty_file_exists = Test.AddTestRun("Dirty flag: verify .bin file exists in persist dir")
+tr_dirty_file_exists.Processes.Default.Command = (
+    "sleep 2 && ls " + persist_dir_dirty + "/early_hints_*.bin 2>/dev/null && echo 'PERSIST_FILE_EXISTS'")
+tr_dirty_file_exists.Processes.Default.ReturnCode = 0
+tr_dirty_file_exists.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
+    "PERSIST_FILE_EXISTS",
+    "Persist file must be created after learn and ATS flush")
+tr_dirty_file_exists.StillRunningAfter = ms_dirty
+
+tr_dirty_file_valid = Test.AddTestRun("Dirty flag: verify .bin file is non-empty (not truncated)")
+tr_dirty_file_valid.Processes.Default.Command = (
+    "find " + persist_dir_dirty + " -name 'early_hints_*.bin' -size +8c -print | grep -q . && echo 'FILE_VALID' || echo 'FILE_INVALID'")
+tr_dirty_file_valid.Processes.Default.ReturnCode = 0
+tr_dirty_file_valid.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
+    "FILE_VALID",
+    "Persist file must be > 8 bytes (valid header + at least one entry)")
+tr_dirty_file_valid.StillRunningAfter = ms_dirty

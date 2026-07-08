@@ -46,8 +46,7 @@ experimental_early_hints_test_early_hints_SOURCES = \
   experimental/early_hints/unit_tests/test_link_parser.cc \
   experimental/early_hints/unit_tests/test_persistence.cc \
   experimental/early_hints/unit_tests/test_purge_rate_limiter.cc \
-  experimental/early_hints/unit_tests/test_bug_fixes.cc \
-  experimental/early_hints/unit_tests/test_fix_batch2.cc \
+  experimental/early_hints/unit_tests/test_crypto_utils.cc \
   experimental/early_hints/link_parser.cc \
   experimental/early_hints/config.cc \
   experimental/early_hints/hints_cache.cc \
@@ -65,6 +64,23 @@ experimental_early_hints_test_transform_LDADD = -lpthread
 experimental_early_hints_test_transform_SOURCES = \
   experimental/early_hints/unit_tests/test_transform_mocks.cc \
   experimental/early_hints/unit_tests/test_transform.cc \
+  experimental/early_hints/config.cc \
+  experimental/early_hints/hints_cache.cc \
+  experimental/early_hints/html_scanner.cc \
+  experimental/early_hints/link_parser.cc
+
+check_PROGRAMS += experimental/early_hints/test_plugin_hooks
+
+experimental_early_hints_test_plugin_hooks_CPPFLAGS = \
+  $(AM_CPPFLAGS) \
+  -I$(abs_top_srcdir)/plugins/experimental/early_hints \
+  -I$(abs_top_srcdir)/tests/include
+
+experimental_early_hints_test_plugin_hooks_LDADD = -lpthread
+
+experimental_early_hints_test_plugin_hooks_SOURCES = \
+  experimental/early_hints/unit_tests/test_plugin_hooks_mocks.cc \
+  experimental/early_hints/unit_tests/test_plugin_hooks.cc \
   experimental/early_hints/config.cc \
   experimental/early_hints/hints_cache.cc \
   experimental/early_hints/html_scanner.cc \

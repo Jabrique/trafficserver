@@ -43,7 +43,7 @@ parse_config(EarlyHintsConfig &config, std::initializer_list<const char *> args)
   return config.init(static_cast<int>(argv.size()), argv.data());
 }
 
-// ─── Contract 1: Scanner output format → HintsCache → is_valid_link_value ────
+// --- Contract 1: Scanner output format → HintsCache → is_valid_link_value ----
 
 TEST_CASE("Integration: Scanner links pass is_valid_link_value after cache round-trip", "[integration]")
 {
@@ -224,7 +224,7 @@ TEST_CASE("Integration: Scanner links pass is_valid_link_value after cache round
   }
 }
 
-// ─── Contract 2: Config → Scanner parameter propagation ─────────────────────
+// --- Contract 2: Config → Scanner parameter propagation ---------------------
 
 TEST_CASE("Integration: Config scan_limit propagates to Scanner", "[integration]")
 {
@@ -283,7 +283,7 @@ TEST_CASE("Integration: Config max_links propagates to Scanner", "[integration]"
   CHECK(scanner.get_links().size() == 2);
 }
 
-// ─── Contract 3: Config whitelist → Scanner cross-origin handling ────────────
+// --- Contract 3: Config whitelist → Scanner cross-origin handling ------------
 
 TEST_CASE("Integration: Config whitelist affects Scanner cross-origin decisions", "[integration]")
 {
@@ -355,7 +355,7 @@ TEST_CASE("Integration: Config whitelist affects Scanner cross-origin decisions"
   }
 }
 
-// ─── Contract 4: HintsCache::make_key matches transform handler key building ─
+// --- Contract 4: HintsCache::make_key matches transform handler key building -
 
 TEST_CASE("Integration: Cache key normalization matches transform handler", "[integration]")
 {
@@ -428,7 +428,7 @@ TEST_CASE("Integration: Cache key normalization matches transform handler", "[in
 
   SECTION("path with fragment is not stripped (make_key only strips query)")
   {
-    // make_key strips '?' but not '#' — this is correct since servers never see fragments
+    // make_key strips '?' but not '#'  -- this is correct since servers never see fragments
     // but documents the behavior at the interface
     std::string key = HintsCache::make_key("page#section", 12);
     if (key[0] != '/') {
@@ -438,7 +438,7 @@ TEST_CASE("Integration: Cache key normalization matches transform handler", "[in
   }
 }
 
-// ─── Contract 5: String format assumptions across interfaces ─────────────────
+// --- Contract 5: String format assumptions across interfaces -----------------
 
 TEST_CASE("Integration: Scanner-produced links are well-formed for all consumers", "[integration]")
 {
@@ -542,7 +542,7 @@ TEST_CASE("Integration: Streaming scanner produces same results as single-feed",
   }
 }
 
-// ─── Contract 3 (continued): Config change could invalidate cached links ─────
+// --- Contract 3 (continued): Config change could invalidate cached links -----
 
 TEST_CASE("Integration: Cached links remain valid regardless of config changes", "[integration]")
 {
@@ -564,9 +564,9 @@ TEST_CASE("Integration: Cached links remain valid regardless of config changes",
     HintsCache cache;
     cache.put("/page", links);
 
-    // Phase 2: "Config changes" — new config without whitelist
+    // Phase 2: "Config changes"  -- new config without whitelist
     // The cached link was a full preload for the cross-origin URL.
-    // is_valid_link_value doesn't check whitelist — it only validates format.
+    // is_valid_link_value doesn't check whitelist  -- it only validates format.
     // So the cached link remains valid (safe to serve).
     std::vector<std::string> retrieved;
     REQUIRE(cache.get("/page", retrieved, 1));
@@ -594,7 +594,7 @@ TEST_CASE("Integration: Cached links remain valid regardless of config changes",
   }
 }
 
-// ─── Full pipeline: Config → Scanner → Cache → Validate → Serve ─────────────
+// --- Full pipeline: Config → Scanner → Cache → Validate → Serve -------------
 
 TEST_CASE("Integration: Full pipeline simulates transform handler flow", "[integration]")
 {
@@ -630,7 +630,7 @@ TEST_CASE("Integration: Full pipeline simulates transform handler flow", "[integ
     HintsCache cache;
     cache.put(cache_key, scanned_links);
 
-    // Step 5: Next request — TSRemapDoRemap builds key and looks up cache
+    // Step 5: Next request  -- TSRemapDoRemap builds key and looks up cache
     const char *next_path = "products/widget?ref=123";
     int next_len          = static_cast<int>(strlen(next_path));
     std::string next_key  = HintsCache::make_key(next_path, next_len);
@@ -682,7 +682,7 @@ TEST_CASE("Integration: Cache min_hit_count from config gates serving", "[integr
   CHECK(is_valid_link_value((*result)[0]));
 }
 
-TEST_CASE("Integration: Cache shared_ptr semantics — no deep copy overhead", "[integration]")
+TEST_CASE("Integration: Cache shared_ptr semantics  -- no deep copy overhead", "[integration]")
 {
   // Verifies that get() returns a shared_ptr reference, not a copy,
   // matching the zero-copy design used in TSRemapDoRemap
@@ -831,7 +831,7 @@ TEST_CASE("Integration: Cache update overwrites stale scanner results", "[integr
   CHECK(is_valid_link_value(retrieved[0]));
 }
 
-// ─── Origin-forward dedup: simulate the dedup logic from early_hints.cc ──────
+// --- Origin-forward dedup: simulate the dedup logic from early_hints.cc ------
 //
 // The origin-forward dedup in early_hints.cc is inside an ATS-callback and
 // cannot be invoked without a running ATS process.  We simulate its logic here
@@ -920,7 +920,7 @@ TEST_CASE("Origin-forward dedup: same URL strongest-wins", "[integration][origin
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // Origin-forward dedup tautological comparison tests
 //
 // Bug in dedup_link_segments() (link_parser.cc), mirroring early_hints.cc:
@@ -928,15 +928,15 @@ TEST_CASE("Origin-forward dedup: same URL strongest-wins", "[integration][origin
 //   for (const auto &existing : result) {
 //     if (url_match && (seg.find("rel=preconnect") != npos) == is_preconnect)
 //
-// The inner condition is (is_preconnect == is_preconnect) — ALWAYS TRUE.
+// The inner condition is (is_preconnect == is_preconnect)  -- ALWAYS TRUE.
 // This means: if origin sends preload + preconnect for the same URL, the
 // second entry is always incorrectly flagged as duplicate and dropped.
 //
 // Fix: change seg.find → existing.find in the inner comparison.
 //
 // These tests call dedup_link_segments() DIRECTLY (production code in
-// link_parser.cc) — NOT a test helper. RED before fix, GREEN after fix.
-// ═══════════════════════════════════════════════════════════════════════════════
+// link_parser.cc)  -- NOT a test helper. RED before fix, GREEN after fix.
+// -------------------------------------------------------------------------------
 
 TEST_CASE("dedup_link_segments() URL-only strongest-wins", "[integration][dedup]")
 {
@@ -983,7 +983,7 @@ TEST_CASE("dedup_link_segments() URL-only strongest-wins", "[integration][dedup]
     CHECK(result.size() == 1);
   }
 
-  SECTION("Different URLs — no dedup regardless of rel type")
+  SECTION("Different URLs  -- no dedup regardless of rel type")
   {
     std::vector<std::string> segs = {
       "</cdn/app.js>; rel=preload; as=script",

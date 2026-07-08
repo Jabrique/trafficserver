@@ -24,7 +24,7 @@ std::atomic<int> g_mutex_destroy_count{0};
 
 extern "C" {
 
-// ─── Memory management ──────────────────────────────────────────────────────
+// --- Memory management ------------------------------------------------------
 
 void *
 _TSmalloc(size_t size, const char * /* path */)
@@ -50,7 +50,7 @@ _TSfree(void *ptr)
   free(ptr);
 }
 
-// ─── Mutex (real pthreads for thread-safety tests) ──────────────────────────
+// --- Mutex (real pthreads for thread-safety tests) --------------------------
 
 typedef void *TSMutex;
 
@@ -82,7 +82,7 @@ TSMutexDestroy(TSMutex mutexp)
   delete static_cast<pthread_mutex_t *>(mutexp);
 }
 
-// ─── Debug / Error logging (no-op) ─────────────────────────────────────────
+// --- Debug / Error logging (no-op) -----------------------------------------
 
 void
 TSDebug(const char * /* tag */, const char * /* fmt */, ...)
@@ -104,7 +104,7 @@ _TSAssert(const char *text, const char *file, int line)
   abort();
 }
 
-// ─── Stats (mock) ───────────────────────────────────────────────────────────
+// --- Stats (mock) -----------------------------------------------------------
 
 int
 TSStatCreate(const char * /* name */, int /* type */, int /* persist */, int /* sync */)

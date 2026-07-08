@@ -22,7 +22,7 @@
 
 TEST_CASE("HtmlScanner IN_ATTR_SEP: boolean attr then > with space", "[html_scanner][attr]")
 {
-  // crossorigin followed by space then > — tests IN_ATTR_SEP's '>' branch
+  // crossorigin followed by space then >  -- tests IN_ATTR_SEP's '>' branch
   std::string html = R"(<html><head><link rel="preload" href="/f.woff2" as="font" crossorigin ></head></html>)";
   auto links       = scan_html(html);
   REQUIRE(links.size() == 1);
@@ -32,7 +32,7 @@ TEST_CASE("HtmlScanner IN_ATTR_SEP: boolean attr then > with space", "[html_scan
 
 TEST_CASE("HtmlScanner: boolean defer with spaces then >", "[html_scanner][attr]")
 {
-  // defer   > — IN_ATTR_SEP: whitespace then '>'
+  // defer   >  -- IN_ATTR_SEP: whitespace then '>'
   std::string html = R"(<html><head><script src="/x.js" defer   ></script></head></html>)";
   auto links       = scan_html(html);
   CHECK(links.empty()); // defer means skip
@@ -72,7 +72,7 @@ TEST_CASE("HtmlScanner: tag names with digits (e.g. h1-h6) are parsed correctly"
   CHECK(links[0].find("/app.css") != std::string::npos);
 }
 
-// ─── process_tag / build_link_header gaps ───────────────────────────────────
+// --- process_tag / build_link_header gaps -----------------------------------
 
 TEST_CASE("HtmlScanner: link with unsupported rel value is skipped", "[html_scanner][build]")
 {
@@ -112,7 +112,7 @@ TEST_CASE("HtmlScanner: cross-origin stylesheet becomes preconnect", "[html_scan
   REQUIRE(links.size() == 1);
   CHECK(links[0].find("rel=preconnect") != std::string::npos);
   CHECK(links[0].find("https://fonts.googleapis.com") != std::string::npos);
-  // crossorigin has no defined semantics on preconnect — must not be emitted
+  // crossorigin has no defined semantics on preconnect  -- must not be emitted
   CHECK(links[0].find("crossorigin") == std::string::npos);
 }
 
@@ -149,7 +149,7 @@ TEST_CASE("HtmlScanner: non-whitelisted cross-origin font preconnect still has c
 // Regression: stylesheet preconnect must NOT have crossorigin (no regression from Commit 15)
 TEST_CASE("HtmlScanner: non-whitelisted cross-origin stylesheet preconnect has no crossorigin", "[html_scanner][build][regression]")
 {
-  // Stylesheets are NOT CORS-fetched — preconnect crossorigin would be wrong.
+  // Stylesheets are NOT CORS-fetched  -- preconnect crossorigin would be wrong.
   std::string html = R"(<html><head><link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto"></head></html>)";
   auto links       = scan_html(html);
   REQUIRE(links.size() == 1);
@@ -164,7 +164,7 @@ TEST_CASE("HtmlScanner: cross-origin script src becomes preconnect", "[html_scan
   REQUIRE(links.size() == 1);
   CHECK(links[0].find("rel=preconnect") != std::string::npos);
   CHECK(links[0].find("https://cdn.example.com") != std::string::npos);
-  // crossorigin has no defined semantics on preconnect — must not be emitted
+  // crossorigin has no defined semantics on preconnect  -- must not be emitted
   CHECK(links[0].find("crossorigin") == std::string::npos);
 }
 
@@ -206,7 +206,7 @@ TEST_CASE("HtmlScanner: whitelisted domain with crossorigin=use-credentials", "[
 
 TEST_CASE("HtmlScanner: font auto-crossorigin not doubled when explicit", "[html_scanner][build]")
 {
-  // crossorigin already set explicitly — font auto-add should not duplicate
+  // crossorigin already set explicitly  -- font auto-add should not duplicate
   std::string html =
     R"(<html><head><link rel="preload" href="/f.woff2" as="font" crossorigin="anonymous" type="font/woff2"></head></html>)";
   auto links = scan_html(html);
@@ -246,11 +246,11 @@ TEST_CASE("HtmlScanner: meta and base tags do not produce links", "[html_scanner
   }
 }
 
-// ─── is_crossorigin edge cases ──────────────────────────────────────────────
+// --- is_crossorigin edge cases ----------------------------------------------
 
 TEST_CASE("HtmlScanner is_crossorigin: fragment-only URL is same-origin", "[html_scanner][crossorigin]")
 {
-  // #anchor is a same-origin reference — should stay as preload
+  // #anchor is a same-origin reference  -- should stay as preload
   std::string html = R"(<html><head><link rel="preload" href="#section" as="document"></head></html>)";
   auto links       = scan_html(html);
   REQUIRE(links.size() == 1);
@@ -265,7 +265,7 @@ TEST_CASE("HtmlScanner is_crossorigin: path-only URL is same-origin", "[html_sca
   CHECK(links[0].find("rel=preload") != std::string::npos);
 }
 
-// ─── extract_origin edge cases ──────────────────────────────────────────────
+// --- extract_origin edge cases ----------------------------------------------
 
 TEST_CASE("HtmlScanner extract_origin: URL with port", "[html_scanner][extract]")
 {
@@ -278,7 +278,7 @@ TEST_CASE("HtmlScanner extract_origin: URL with port", "[html_scanner][extract]"
 
 TEST_CASE("HtmlScanner extract_origin: URL without path", "[html_scanner][extract]")
 {
-  // URL like "https://example.com" with no trailing '/' — extract_origin returns full URL
+  // URL like "https://example.com" with no trailing '/'  -- extract_origin returns full URL
   std::string html = R"(<html><head><link rel="preload" href="https://example.com" as="script"></head></html>)";
   auto links       = scan_html(html);
   REQUIRE(links.size() == 1);
@@ -294,7 +294,7 @@ TEST_CASE("HtmlScanner extract_origin: protocol-relative without path", "[html_s
   CHECK(links[0].find("https://example.com") != std::string::npos);
 }
 
-// ─── reset() edge cases ────────────────────────────────────────────────────
+// --- reset() edge cases ----------------------------------------------------
 
 TEST_CASE("HtmlScanner reset: after scan limit reached", "[html_scanner][reset]")
 {
@@ -326,7 +326,7 @@ TEST_CASE("HtmlScanner reset: mid-scan (not done)", "[html_scanner][reset]")
   EarlyHintsConfig config;
   HtmlScanner scanner(131072, 10, &config);
 
-  // Feed only part of the HTML — scanner is not done
+  // Feed only part of the HTML  -- scanner is not done
   std::string partial = "<html><head><link rel=\"preload\" href=\"/partial.js\" as=\"script\">";
   scanner.feed(partial.c_str(), static_cast<int64_t>(partial.size()));
   CHECK(!scanner.is_done());
@@ -353,7 +353,7 @@ TEST_CASE("HtmlScanner: feed after DONE is no-op", "[html_scanner][reset]")
   CHECK(scanner.is_done());
   REQUIRE(scanner.get_links().size() == 1);
 
-  // Feed more data after DONE — should be ignored
+  // Feed more data after DONE  -- should be ignored
   std::string html2 = "<head><link rel=\"stylesheet\" href=\"/second.css\"></head>";
   scanner.feed(html2.c_str(), static_cast<int64_t>(html2.size()));
   CHECK(scanner.get_links().size() == 1);
@@ -385,7 +385,7 @@ TEST_CASE("HtmlScanner: feed with negative length is no-op", "[html_scanner][res
   CHECK(scanner.get_links().empty());
 }
 
-// ─── IN_HEAD state: bogus comment edge cases ────────────────────────────────
+// --- IN_HEAD state: bogus comment edge cases --------------------------------
 
 TEST_CASE("HtmlScanner: all valid as= values accepted", "[html_scanner][build]")
 {
@@ -408,7 +408,7 @@ TEST_CASE("HtmlScanner: all valid as= values accepted", "[html_scanner][build]")
   SECTION("as=worker") { test_as_value("worker"); }
 }
 
-// ─── Stylesheet with same-origin produces preload as=style ──────────────────
+// --- Stylesheet with same-origin produces preload as=style ------------------
 
 TEST_CASE("HtmlScanner: same-origin stylesheet produces correct output", "[html_scanner][build]")
 {
@@ -418,7 +418,7 @@ TEST_CASE("HtmlScanner: same-origin stylesheet produces correct output", "[html_
   CHECK(links[0] == "</main.css>; rel=preload; as=style");
 }
 
-// ─── Same-origin modulepreload output format ────────────────────────────────
+// --- Same-origin modulepreload output format --------------------------------
 
 TEST_CASE("HtmlScanner: same-origin modulepreload output format", "[html_scanner][build]")
 {
@@ -428,7 +428,7 @@ TEST_CASE("HtmlScanner: same-origin modulepreload output format", "[html_scanner
   CHECK(links[0] == "</mod.mjs>; rel=modulepreload");
 }
 
-// ─── Script with both async and defer ───────────────────────────────────────
+// --- Script with both async and defer ---------------------------------------
 
 TEST_CASE("HtmlScanner: script with both async and defer is skipped", "[html_scanner][build]")
 {
@@ -437,7 +437,7 @@ TEST_CASE("HtmlScanner: script with both async and defer is skipped", "[html_sca
   CHECK(links.empty());
 }
 
-// ─── Whitelist: protocol-relative URL on whitelisted domain ─────────────────
+// --- Whitelist: protocol-relative URL on whitelisted domain -----------------
 
 TEST_CASE("HtmlScanner: whitelisted protocol-relative preload", "[html_scanner][build]")
 {
@@ -455,11 +455,11 @@ TEST_CASE("HtmlScanner: whitelisted protocol-relative preload", "[html_scanner][
   CHECK(links[0].find("crossorigin") != std::string::npos);
 }
 
-// ─── IN_ATTR_SEP: new attr name started (previous was boolean) ──────────────
+// --- IN_ATTR_SEP: new attr name started (previous was boolean) --------------
 
 TEST_CASE("HtmlScanner IN_ATTR_SEP: boolean then new attr without =", "[html_scanner][attr]")
 {
-  // "async src" — async is boolean (no =), then src starts new attr
+  // "async src"  -- async is boolean (no =), then src starts new attr
   // This exercises IN_ATTR_SEP's else branch (line 752-758)
   std::string html = R"(<html><head><script async src="/x.js"></script></head></html>)";
   auto links       = scan_html(html);
@@ -467,7 +467,7 @@ TEST_CASE("HtmlScanner IN_ATTR_SEP: boolean then new attr without =", "[html_sca
   CHECK(links.empty());
 }
 
-// ─── is_safe_url: leading whitespace before scheme ──────────────────────────
+// --- is_safe_url: leading whitespace before scheme --------------------------
 
 TEST_CASE("reset: clears IN_SCRIPT escaped state for reuse", "[html_scanner][reset][audit]")
 {
@@ -479,12 +479,12 @@ TEST_CASE("reset: clears IN_SCRIPT escaped state for reuse", "[html_scanner][res
   scanner.feed(html1.c_str(), static_cast<int64_t>(html1.size()));
   CHECK(!scanner.is_done());
 
-  // Reset — must clear script_escaped_, script_comment_pos_, raw_close_pos_
+  // Reset  -- must clear script_escaped_, script_comment_pos_, raw_close_pos_
   scanner.reset();
   CHECK(!scanner.is_done());
   CHECK(scanner.get_links().empty());
 
-  // Reuse with normal HTML — should work correctly
+  // Reuse with normal HTML  -- should work correctly
   std::string html2 = R"(<html><head><link rel="stylesheet" href="/after-reset.css"></head></html>)";
   scanner.feed(html2.c_str(), static_cast<int64_t>(html2.size()));
   CHECK(scanner.is_done());
@@ -530,7 +530,7 @@ TEST_CASE("reset: clears comment state for reuse", "[html_scanner][reset][audit]
   CHECK(scanner.get_links()[0].find("/post-comment.css") != std::string::npos);
 }
 
-// ─── QA audit: scan_limit boundary precision ────────────────────────────────
+// --- QA audit: scan_limit boundary precision --------------------------------
 
 TEST_CASE("QA: process_tag rejects non-hint rel values", "[html_scanner][qa][process_tag]")
 {
@@ -570,7 +570,7 @@ TEST_CASE("QA: process_tag rejects non-hint rel values", "[html_scanner][qa][pro
   }
 }
 
-// ─── process_tag: link with no href, no rel, or both missing ────────────────
+// --- process_tag: link with no href, no rel, or both missing ----------------
 
 TEST_CASE("QA: process_tag handles missing attributes", "[html_scanner][qa][process_tag]")
 {
@@ -610,7 +610,7 @@ TEST_CASE("QA: process_tag handles missing attributes", "[html_scanner][qa][proc
   }
 }
 
-// ─── process_tag: non-link/script tags do not produce output ────────────────
+// --- process_tag: non-link/script tags do not produce output ----------------
 
 TEST_CASE("QA: process_tag ignores non-link/script tags", "[html_scanner][qa][process_tag]")
 {
@@ -631,13 +631,13 @@ TEST_CASE("QA: process_tag ignores non-link/script tags", "[html_scanner][qa][pr
   }
 }
 
-// ─── build_link_header: special characters in URLs ──────────────────────────
+// --- build_link_header: special characters in URLs --------------------------
 
 TEST_CASE("QA: build_link_header URL special characters", "[html_scanner][qa][build_link_header]")
 {
   SECTION("semicolons in URL are preserved (valid per RFC 3986)")
   {
-    // Semicolons are path parameter delimiters in URLs — must not be stripped
+    // Semicolons are path parameter delimiters in URLs  -- must not be stripped
     // The <...> delimiters in Link header protect the URL boundary
     std::string html = R"(<html><head><link rel="preload" href="/path;param=1?q=2" as="fetch"></head></html>)";
     auto links       = scan_html(html);
@@ -680,14 +680,14 @@ TEST_CASE("QA: build_link_header URL special characters", "[html_scanner][qa][bu
 
   SECTION("angle bracket > in URL is rejected")
   {
-    // > inside a quoted attribute value — is_safe_url must still reject it
+    // > inside a quoted attribute value  -- is_safe_url must still reject it
     std::string html = "<html><head><link rel='preload' href='/path>inject' as='script'></head></html>";
     auto links       = scan_html(html);
     CHECK(links.empty());
   }
 }
 
-// ─── build_link_header: nopush is not an HTML attribute ─────────────────────
+// --- build_link_header: nopush is not an HTML attribute ---------------------
 
 TEST_CASE("QA: nopush HTML attribute does not appear in output", "[html_scanner][qa][build_link_header]")
 {
@@ -711,7 +711,7 @@ TEST_CASE("QA: nopush HTML attribute does not appear in output", "[html_scanner]
   }
 }
 
-// ─── build_link_header: crossorigin on same-origin resources ────────────────
+// --- build_link_header: crossorigin on same-origin resources ----------------
 
 TEST_CASE("QA: explicit crossorigin on same-origin preload", "[html_scanner][qa][build_link_header]")
 {
@@ -735,7 +735,7 @@ TEST_CASE("QA: explicit crossorigin on same-origin preload", "[html_scanner][qa]
   }
 }
 
-// ─── build_link_header: as= edge cases ─────────────────────────────────────
+// --- build_link_header: as= edge cases -------------------------------------
 
 TEST_CASE("QA: as= values frame, iframe, sharedworker accepted", "[html_scanner][qa][build_link_header]")
 {
@@ -764,7 +764,7 @@ TEST_CASE("QA: as= values frame, iframe, sharedworker accepted", "[html_scanner]
   }
 }
 
-// ─── build_link_header: fetchpriority NOT appended to preconnect ────────────
+// --- build_link_header: fetchpriority NOT appended to preconnect ------------
 
 TEST_CASE("QA: fetchpriority not appended for preconnect results", "[html_scanner][qa][build_link_header]")
 {
@@ -775,12 +775,12 @@ TEST_CASE("QA: fetchpriority not appended for preconnect results", "[html_scanne
     auto links = scan_html(html);
     REQUIRE(links.size() == 1);
     CHECK(links[0].find("rel=preconnect") != std::string::npos);
-    // fetchpriority makes no sense for preconnect — but check current behavior
+    // fetchpriority makes no sense for preconnect  -- but check current behavior
     // (The code does append it even for preconnect since the check is unconditional)
   }
 }
 
-// ─── build_link_header: type attribute only for rel=preload ─────────────────
+// --- build_link_header: type attribute only for rel=preload -----------------
 
 TEST_CASE("QA: type attribute only appended for rel=preload links", "[html_scanner][qa][build_link_header]")
 {
@@ -804,7 +804,7 @@ TEST_CASE("QA: type attribute only appended for rel=preload links", "[html_scann
 
   SECTION("type IS appended for stylesheet-converted preload")
   {
-    // stylesheet converts to preload — type IS relevant here
+    // stylesheet converts to preload  -- type IS relevant here
     std::string html = R"(<html><head><link rel="stylesheet" href="/main.css" type="text/css"></head></html>)";
     auto links       = scan_html(html);
     REQUIRE(links.size() == 1);
@@ -813,25 +813,25 @@ TEST_CASE("QA: type attribute only appended for rel=preload links", "[html_scann
   }
 }
 
-// ─── build_link_header: crossorigin invalid values ──────────────────────────
+// --- build_link_header: crossorigin invalid values --------------------------
 
-TEST_CASE("QA: crossorigin with invalid value normalizes to anonymous (A-29)", "[html_scanner][qa][build_link_header]")
+TEST_CASE("HtmlScanner: crossorigin with invalid value normalizes to anonymous", "[html_scanner][qa][build_link_header]")
 {
   SECTION("crossorigin=invalid normalizes to crossorigin=anonymous")
   {
     // Per HTML spec §2.5.3 (CORS settings attribute), only "anonymous" and
-    // "use-credentials" are valid enumerated states. Any other value — including
-    // misspellings — maps to "anonymous" (the missing-value and invalid-value default).
+    // "use-credentials" are valid enumerated states. Any other value  -- including
+    // misspellings  -- maps to "anonymous" (the missing-value and invalid-value default).
     std::string html = R"(<html><head><link rel="preload" href="/app.js" as="script" crossorigin="invalid"></head></html>)";
     auto links       = scan_html(html);
     REQUIRE(links.size() == 1);
-    // After A-29 fix: "invalid" is normalized to "anonymous" and emitted.
+    // After fix: "invalid" is normalized to "anonymous" and emitted.
     CHECK(links[0].find("crossorigin=anonymous") != std::string::npos);
     CHECK(links[0].find("crossorigin=invalid") == std::string::npos);
   }
 }
 
-// ─── build_link_header: as= with injection attempt ──────────────────────────
+// --- build_link_header: as= with injection attempt --------------------------
 
 TEST_CASE("QA: as= value injection attempts are blocked", "[html_scanner][qa][build_link_header]")
 {
@@ -858,7 +858,7 @@ TEST_CASE("QA: as= value injection attempts are blocked", "[html_scanner][qa][bu
   }
 }
 
-// ─── build_link_header: output format exact verification ────────────────────
+// --- build_link_header: output format exact verification --------------------
 
 TEST_CASE("QA: build_link_header exact output format", "[html_scanner][qa][build_link_header]")
 {
@@ -915,7 +915,7 @@ TEST_CASE("QA: build_link_header exact output format", "[html_scanner][qa][build
   }
 }
 
-// ─── build_link_header: rel=preload crossorigin precedence ──────────────────
+// --- build_link_header: rel=preload crossorigin precedence ------------------
 
 TEST_CASE("QA: font auto-crossorigin does not override use-credentials", "[html_scanner][qa][build_link_header]")
 {
@@ -931,7 +931,7 @@ TEST_CASE("QA: font auto-crossorigin does not override use-credentials", "[html_
   }
 }
 
-// ─── Deduplication: multiple cross-origin preloads collapsing to same origin ─────────────────
+// --- Deduplication: multiple cross-origin preloads collapsing to same origin -----------------
 //
 // Non-whitelisted cross-origin preloads are downgraded to preconnects, stripping
 // the resource path and keeping only the scheme+host origin.  When a page has
@@ -942,7 +942,7 @@ TEST_CASE("QA: font auto-crossorigin does not override use-credentials", "[html_
 
 TEST_CASE("HtmlScanner: multiple cross-origin preloads to same domain produce single preconnect", "[html_scanner][build][dedup]")
 {
-  SECTION("three script preloads on different paths — same origin → single preconnect")
+  SECTION("three script preloads on different paths  -- same origin → single preconnect")
   {
     std::string html = "<html><head>"
                        "<link rel=\"preload\" href=\"https://cdn.example.com/js/a.js\" as=\"script\">"
@@ -950,7 +950,7 @@ TEST_CASE("HtmlScanner: multiple cross-origin preloads to same domain produce si
                        "<link rel=\"preload\" href=\"https://cdn.example.com/js/c.js\" as=\"script\">"
                        "</head></html>";
     auto links = scan_html(html);
-    // All three collapse to the same origin URL — dedup must yield exactly one entry
+    // All three collapse to the same origin URL  -- dedup must yield exactly one entry
     REQUIRE(links.size() == 1);
     // crossorigin is not emitted on preconnect hints
     CHECK(links[0] == "<https://cdn.example.com>; rel=preconnect");
@@ -977,7 +977,7 @@ TEST_CASE("HtmlScanner: multiple cross-origin preloads to same domain produce si
                        "<link rel=\"preload\" href=\"https://cdn2.example.com/c.js\" as=\"script\">"
                        "</head></html>";
     auto links = scan_html(html);
-    // cdn1 and cdn2 are distinct origins — one preconnect per origin, no cross-dedup
+    // cdn1 and cdn2 are distinct origins  -- one preconnect per origin, no cross-dedup
     REQUIRE(links.size() == 2);
     bool has_cdn1 = false, has_cdn2 = false;
     for (const auto &l : links) {
@@ -999,7 +999,7 @@ TEST_CASE("HtmlScanner: multiple cross-origin preloads to same domain produce si
                        "<link rel=\"preload\" href=\"/js/b.js\" as=\"script\">"
                        "</head></html>";
     auto links = scan_html(html);
-    // Same-origin: each path is a distinct resource — both entries must be preserved
+    // Same-origin: each path is a distinct resource  -- both entries must be preserved
     REQUIRE(links.size() == 2);
   }
 
@@ -1019,7 +1019,7 @@ TEST_CASE("HtmlScanner: multiple cross-origin preloads to same domain produce si
   }
 }
 
-// ─── Deduplication: edge cases ───────────────────────────────────────────────────────────────
+// --- Deduplication: edge cases ---------------------------------------------------------------
 
 TEST_CASE("HtmlScanner dedup: URL-only strongest-wins across link types", "[html_scanner][build][dedup]")
 {
@@ -1145,9 +1145,9 @@ TEST_CASE("HtmlScanner dedup: max_links interacts correctly with deduplication",
   }
 }
 //
-// Complete transition table for IN_COMMENT (comment_dashes_ 0–6) and
+// Complete transition table for IN_COMMENT (comment_dashes_ 0-6) and
 // IN_BOGUS_COMMENT.  Each SECTION targets exactly one (sub-state, input class)
-// pair, verifying the transition matches HTML spec §13.2.5.42–56.
+// pair, verifying the transition matches HTML spec §13.2.5.42-56.
 //
 // Sub-state mapping:
 //   0 = comment body            (§13.2.5.45)
@@ -1159,7 +1159,7 @@ TEST_CASE("HtmlScanner dedup: max_links interacts correctly with deduplication",
 //   6 = comment-start-dash      (§13.2.5.44)
 //
 // Input classes: '-', '>', '!', alpha, space, NUL, other (e.g. '@')
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 // Helper: embed content inside a comment after "<!-- " (enters body, state 0),
 // then follow with --> close + link.  If the link is extracted, the comment
@@ -1167,11 +1167,11 @@ TEST_CASE("HtmlScanner dedup: max_links interacts correctly with deduplication",
 // `prefix` is injected right after "<!-- " to reach the desired sub-state
 // before `probe` is encountered.
 
-// ─── State 0 (comment body) ─────────────────────────────────────────────────
+// --- State 0 (comment body) -------------------------------------------------
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // --preload-whitelist: no-CORS cross-origin preload tests
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 TEST_CASE("HtmlScanner: --preload-whitelist emits no-cors preload", "[html_scanner][build][preload-whitelist]")
 {
@@ -1318,7 +1318,7 @@ TEST_CASE("HtmlScanner: --preload-whitelist emits no-cors preload", "[html_scann
   }
 }
 
-// ─── crossorigin must not appear on rel=preconnect hints ────────────────────
+// --- crossorigin must not appear on rel=preconnect hints --------------------
 //
 // Bug: when a cross-origin resource is downgraded to preconnect, the scanner
 // was auto-injecting crossorigin=anonymous onto the preconnect Link header.
@@ -1382,7 +1382,7 @@ TEST_CASE("preconnect hints must not carry crossorigin attribute", "[html_scanne
 
   SECTION("whitelisted crossorigin preload must still carry crossorigin (regression guard)")
   {
-    // Fix must NOT break whitelisted preloads — they must still carry crossorigin.
+    // Fix must NOT break whitelisted preloads  -- they must still carry crossorigin.
     const char *argv[] = {"from", "to", "--mode", "auto-learn", "--crossorigin-whitelist", "cdn.example.com"};
     EarlyHintsConfig config;
     config.init(6, argv);
@@ -1400,7 +1400,7 @@ TEST_CASE("preconnect hints must not carry crossorigin attribute", "[html_scanne
 
   SECTION("same-origin font must still carry crossorigin=anonymous (regression guard)")
   {
-    // Fonts always need crossorigin because of CORS — this must not be broken.
+    // Fonts always need crossorigin because of CORS  -- this must not be broken.
     std::string html =
       R"(<html><head><link rel="preload" href="/fonts/inter.woff2" as="font" crossorigin="anonymous"></head></html>)";
     auto links = scan_html(html);
@@ -1444,7 +1444,7 @@ TEST_CASE("fetchpriority must not appear on rel=preconnect hints", "[html_scanne
   }
 }
 
-// ─── WP6: noscript and template content must not be extracted ───────────────
+// --- WP6: noscript and template content must not be extracted ---------------
 //
 // <noscript> contains fallback content for when JavaScript is disabled.
 // The browser ignores it when JS is enabled, so preloading resources inside
@@ -1452,7 +1452,7 @@ TEST_CASE("fetchpriority must not appear on rel=preconnect hints", "[html_scanne
 // page could craft a <noscript><link rel="preload" href="evil.js"></noscript>
 // to poison the hint cache.
 //
-// <template> contains inert DOM — it is never rendered or fetched on load.
+// <template> contains inert DOM  -- it is never rendered or fetched on load.
 // Resources inside it should not be pre-fetched.
 //
 // Both tags must be treated as opaque containers: their inner content is
@@ -1520,20 +1520,20 @@ TEST_CASE("HtmlScanner: template content is not extracted as hints", "[html_scan
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // is_safe_url must reject space (0x20) in URL paths.
 //
 // The bug: the control-char filter uses `uc < 0x20`, which passes space
 // (0x20 is NOT less than 0x20). A URL with an embedded space must be rejected
 // because it breaks HTTP header framing and violates RFC 3986 §2.
 // Fix: change `uc < 0x20` to `uc <= 0x20` in html_scanner.cc is_safe_url().
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 TEST_CASE("HtmlScanner is_safe_url: space (0x20) in URL rejected", "[html_scanner][security]")
 {
   SECTION("space in URL path produces no link")
   {
-    // href="/path with spaces" contains 0x20 — must be rejected by is_safe_url
+    // href="/path with spaces" contains 0x20  -- must be rejected by is_safe_url
     std::string html = R"(<html><head><link rel="preload" href="/path with spaces.js" as="script"></head></html>)";
     auto links       = scan_html(html);
     // Bug: uc < 0x20 passes 0x20 → link is emitted. Fix: uc <= 0x20 rejects it.
@@ -1542,7 +1542,7 @@ TEST_CASE("HtmlScanner is_safe_url: space (0x20) in URL rejected", "[html_scanne
 
   SECTION("percent-encoded space (%20) is accepted (not a raw space)")
   {
-    // %20 is two bytes '%' and '2' and '0' — none is 0x20, so it must pass
+    // %20 is two bytes '%' and '2' and '0'  -- none is 0x20, so it must pass
     std::string html = R"(<html><head><link rel="preload" href="/path%20encoded.js" as="script"></head></html>)";
     auto links       = scan_html(html);
     REQUIRE(links.size() == 1);
@@ -1558,16 +1558,16 @@ TEST_CASE("HtmlScanner is_safe_url: space (0x20) in URL rejected", "[html_scanne
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // script_escaped_ and script_comment_pos_ must be reset for each new
-// <script> element — state must not leak across multiple scripts.
+// <script> element  -- state must not leak across multiple scripts.
 //
 // The bug: state_after_open_tag() did not reset script_escaped_/
 // script_comment_pos_ before entering IN_SCRIPT. If a prior script left
 // script_comment_pos_ > 0, the next <script> element could misparse its
 // content, potentially allowing a link inside an unclosed <!-- to be treated
 // as outside a comment and produce an erroneous hint.
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 TEST_CASE("HtmlScanner: script_escaped state resets between script elements without reset()", "[html_scanner][script][security]")
 {
@@ -1613,7 +1613,7 @@ TEST_CASE("HtmlScanner: script_escaped state resets between script elements with
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // Attribute value overflow: tag must be rejected when any attribute value
 // exceeds MAX_ATTR_VALUE_LEN (4096 chars).
 //
@@ -1621,13 +1621,13 @@ TEST_CASE("HtmlScanner: script_escaped state resets between script elements with
 // chars. The truncated URL is then used to build a Link header, emitting a
 // corrupt URL that will cause a fetch error in the browser.
 // Fix: set attr_overflowed_ = true and discard the entire tag.
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 TEST_CASE("HtmlScanner: tag rejected when href exceeds MAX_ATTR_VALUE_LEN", "[html_scanner][validation]")
 {
   SECTION("href exactly at limit is accepted")
   {
-    // MAX_ATTR_VALUE_LEN = 4096 — a href with 4092 chars fits safely
+    // MAX_ATTR_VALUE_LEN = 4096  -- a href with 4092 chars fits safely
     std::string long_href = "/" + std::string(4090, 'a') + ".js";
     std::string html      = "<html><head><link rel=\"preload\" href=\"" + long_href + "\" as=\"script\"></head></html>";
     auto links            = scan_html(html);
@@ -1636,7 +1636,7 @@ TEST_CASE("HtmlScanner: tag rejected when href exceeds MAX_ATTR_VALUE_LEN", "[ht
 
   SECTION("href exceeding limit produces no link")
   {
-    // 4097 chars in href value — must be rejected, not truncated
+    // 4097 chars in href value  -- must be rejected, not truncated
     std::string long_href = "/" + std::string(4096, 'a') + ".js";
     std::string html      = "<html><head><link rel=\"preload\" href=\"" + long_href + "\" as=\"script\"></head></html>";
     auto links            = scan_html(html);
@@ -1654,7 +1654,7 @@ TEST_CASE("HtmlScanner: tag rejected when href exceeds MAX_ATTR_VALUE_LEN", "[ht
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // type= attribute must be validated as "type/subtype" MIME structure.
 //
 // Bug: type_ passes character-level sanitization but is emitted without
@@ -1662,7 +1662,7 @@ TEST_CASE("HtmlScanner: tag rejected when href exceeds MAX_ATTR_VALUE_LEN", "[ht
 // type="font" which is not a valid MIME type and may confuse browsers).
 // Fix: only emit type= when value contains exactly one "/" with non-empty
 // tokens before and after.
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 TEST_CASE("HtmlScanner: type attribute requires type/subtype MIME structure", "[html_scanner][validation]")
 {
@@ -1676,10 +1676,10 @@ TEST_CASE("HtmlScanner: type attribute requires type/subtype MIME structure", "[
 
   SECTION("type without slash is not emitted")
   {
-    // "font" alone is not a valid MIME type — no "/" separator
+    // "font" alone is not a valid MIME type  -- no "/" separator
     auto links =
       scan_html(R"(<html><head><link rel="preload" href="/font.woff2" as="font" type="font" crossorigin></head></html>)");
-    // Link itself should still be emitted — type= just omitted
+    // Link itself should still be emitted  -- type= just omitted
     REQUIRE(links.size() == 1);
     CHECK(links[0].find("type=") == std::string::npos);
   }
@@ -1708,7 +1708,7 @@ TEST_CASE("HtmlScanner: type attribute requires type/subtype MIME structure", "[
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // Backslash evasion in is_safe_url must be comprehensively rejected.
 //
 // Browsers with "special" schemes (http/https) treat '\' as '/' per WHATWG
@@ -1716,7 +1716,7 @@ TEST_CASE("HtmlScanner: type attribute requires type/subtype MIME structure", "[
 //   \\ prefix  →  browser treats as authority reference (cross-origin)
 //   \/ prefix  →  same
 //   /\ prefix  →  same
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 TEST_CASE("HtmlScanner: backslash evasion variants are rejected by is_safe_url", "[html_scanner][security][backslash]")
 {
@@ -1828,7 +1828,7 @@ TEST_CASE("HtmlScanner: script type=module emits rel=modulepreload", "[html_scan
   }
 }
 
-// ─── Font crossorigin handling per whitelist type ────────────────────────────
+// --- Font crossorigin handling per whitelist type ----------------------------
 //
 // W3C CSS Fonts spec requires CORS for cross-origin fonts, but when an admin
 // explicitly places a font CDN in --preload-whitelist (no-cors mode), the plugin

@@ -50,7 +50,7 @@ TEST_CASE("Config default values", "[config]")
     std::vector<const char *> argv = {"http://from.example.com", "http://to.example.com"};
     CHECK(config.init(2, argv.data()));
 
-    // Default mode: origin-forward only (safe zero-config — no HTML scanning)
+    // Default mode: origin-forward only (safe zero-config  -- no HTML scanning)
     CHECK((config.mode() & EarlyHintsConfig::MODE_ORIGIN_FORWARD) != 0);
     CHECK((config.mode() & EarlyHintsConfig::MODE_AUTO_LEARN) == 0);
     CHECK((config.mode() & EarlyHintsConfig::MODE_MANUAL) == 0);
@@ -128,14 +128,14 @@ TEST_CASE("Config manual links", "[config]")
     CHECK_FALSE(parse_config(config, {"--mode", "manual", "--link", "</evil\r\nheader>; rel=preload; as=script"}));
   }
 
-  SECTION("R6: quoted rel values accepted (RFC 8288 §3)")
+  SECTION("quoted rel values accepted (RFC 8288 §3)")
   {
     EarlyHintsConfig config;
     CHECK(parse_config(config, {"--mode", "manual", "--link", R"(</style.css>; rel="preload"; as=style)"}));
     REQUIRE(config.manual_links().size() == 1);
   }
 
-  SECTION("R6: single-quoted rel values accepted")
+  SECTION("single-quoted rel values accepted")
   {
     EarlyHintsConfig config;
     CHECK(parse_config(config, {"--mode", "manual", "--link", R"(</style.css>; rel='preload'; as=style)"}));
@@ -145,7 +145,7 @@ TEST_CASE("Config manual links", "[config]")
   SECTION("R7: quoted rel with non-boundary prefix rejected (forel=\"preload\")")
   {
     EarlyHintsConfig config;
-    // "forel" is not "rel" — must NOT be accepted
+    // "forel" is not "rel"  -- must NOT be accepted
     CHECK_FALSE(parse_config(config, {"--mode", "manual", "--link", R"(</style.css>; forel="preload"; as=style)"}));
   }
 
@@ -156,7 +156,7 @@ TEST_CASE("Config manual links", "[config]")
     REQUIRE(config.manual_links().size() == 1);
   }
 
-  SECTION("R7: quoted rel with tab boundary — tab in link value rejected as control char")
+  SECTION("R7: quoted rel with tab boundary  -- tab in link value rejected as control char")
   {
     EarlyHintsConfig config;
     // Tab (0x09) is a control character < 0x20, correctly rejected by is_valid_link_value
@@ -390,7 +390,7 @@ TEST_CASE("Config crossorigin whitelist", "[config]")
   }
 }
 
-// ─── Integer parsing safety ─────────────────────────────────────────────────
+// --- Integer parsing safety -------------------------------------------------
 
 TEST_CASE("EarlyHintsConfig: safe integer parsing", "[config][security]")
 {
@@ -419,7 +419,7 @@ TEST_CASE("EarlyHintsConfig: safe integer parsing", "[config][security]")
   }
 }
 
-// ─── Strengthened link validation ───────────────────────────────────────────
+// --- Strengthened link validation -------------------------------------------
 
 TEST_CASE("EarlyHintsConfig: link validation blocks dangerous schemes", "[config][security]")
 {
@@ -461,7 +461,7 @@ TEST_CASE("EarlyHintsConfig: link validation blocks dangerous schemes", "[config
   }
 }
 
-// ─── BUG regression tests: check_rel, domain matching, wildcard ─────────────
+// --- BUG regression tests: check_rel, domain matching, wildcard -------------
 
 TEST_CASE("Config link validation: rel= after false prefix match", "[config][regression]")
 {
@@ -498,9 +498,9 @@ TEST_CASE("Config whitelist: bare suffix rejected by wildcard", "[config][regres
   CHECK_FALSE(config.is_whitelisted_domain(".example.com"));
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // GAP COVERAGE: parse_mode edge cases
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 TEST_CASE("Config parse_mode: edge cases", "[config]")
 {
@@ -563,9 +563,9 @@ TEST_CASE("Config parse_mode: edge cases", "[config]")
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // GAP COVERAGE: is_valid_link_value branches
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 TEST_CASE("Config link validation: structural branches", "[config]")
 {
@@ -616,7 +616,7 @@ TEST_CASE("Config link validation: structural branches", "[config]")
     CHECK_FALSE(parse_config(config, {"--mode", "manual", "--link", "</style.css>"}));
   }
 
-  SECTION("rel= inside URL portion only — no params after '>'")
+  SECTION("rel= inside URL portion only  -- no params after '>'")
   {
     EarlyHintsConfig config;
     CHECK_FALSE(parse_config(config, {"--mode", "manual", "--link", "</evil.js?rel=preload>"}));
@@ -720,7 +720,7 @@ TEST_CASE("Config link validation: check_rel boundary logic", "[config]")
   SECTION("rel=preload followed by double-quote is REJECTED (quote is not a valid unquoted boundary)")
   {
     EarlyHintsConfig config;
-    // rel=preload"extra" uses '"' as boundary for unquoted form — not valid.
+    // rel=preload"extra" uses '"' as boundary for unquoted form  -- not valid.
     // Use quoted form rel=\"preload\" instead. This is correct behavior.
     CHECK_FALSE(parse_config(config, {"--mode", "manual", "--link", "</a.js>; rel=preload\"extra\""}));
   }
@@ -744,9 +744,9 @@ TEST_CASE("Config link validation: check_rel boundary logic", "[config]")
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // GAP COVERAGE: is_whitelisted_domain edge cases
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 TEST_CASE("Config whitelist: domain edge cases", "[config]")
 {
@@ -783,7 +783,7 @@ TEST_CASE("Config whitelist: domain edge cases", "[config]")
   {
     EarlyHintsConfig config;
     CHECK(parse_config(config, {"--crossorigin-whitelist", "*example.com"}));
-    // Pattern is "*example.com" — pattern[0]='*', pattern[1]='e' (not '.'),
+    // Pattern is "*example.com"  -- pattern[0]='*', pattern[1]='e' (not '.'),
     // so code falls to exact match branch: domain must equal "*example.com"
     CHECK_FALSE(config.is_whitelisted_domain("cdn.example.com"));
     CHECK_FALSE(config.is_whitelisted_domain("example.com"));
@@ -805,9 +805,9 @@ TEST_CASE("Config whitelist: domain edge cases", "[config]")
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // GAP COVERAGE: safe_parse_int edge cases (tested through init options)
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 TEST_CASE("Config safe_parse_int: edge cases via --max-links", "[config]")
 {
@@ -851,9 +851,9 @@ TEST_CASE("Config safe_parse_int: edge cases via --max-links", "[config]")
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // GAP COVERAGE: init() edge cases
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 TEST_CASE("Config init: argc edge cases", "[config]")
 {
@@ -922,9 +922,9 @@ TEST_CASE("Config init: --option=value syntax", "[config]")
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // GAP COVERAGE: Boundary value tests (exact min and max for each parameter)
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 TEST_CASE("Config boundary: max-links", "[config]")
 {
@@ -1125,9 +1125,9 @@ TEST_CASE("Config boundary: max-cache-entries", "[config]")
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// AUDIT GAP: safe_parse_int — strtol quirks and extreme values
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
+// AUDIT GAP: safe_parse_int  -- strtol quirks and extreme values
+// -------------------------------------------------------------------------------
 
 TEST_CASE("Config audit: safe_parse_int strtol behavior", "[config][audit]")
 {
@@ -1165,15 +1165,15 @@ TEST_CASE("Config audit: safe_parse_int strtol behavior", "[config][audit]")
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// AUDIT GAP: is_valid_link_value — whitespace-only URL, extra '>' in params
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
+// AUDIT GAP: is_valid_link_value  -- whitespace-only URL, extra '>' in params
+// -------------------------------------------------------------------------------
 
 TEST_CASE("Config audit: link validation URL edge cases", "[config][audit]")
 {
   SECTION("whitespace-only URL REJECTED by allowlist (scheme_start == npos)")
   {
-    // URL portion is " " — after allowlist fix, url_part.find_first_not_of returns npos
+    // URL portion is " "  -- after allowlist fix, url_part.find_first_not_of returns npos
     // for all-whitespace URLs, which is now correctly rejected (useless URL).
     EarlyHintsConfig config;
     CHECK_FALSE(parse_config(config, {"--mode", "manual", "--link", "< >; rel=preload; as=script"}));
@@ -1202,9 +1202,9 @@ TEST_CASE("Config audit: link validation URL edge cases", "[config][audit]")
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// AUDIT GAP: is_whitelisted_domain — trailing dot, port, TLD wildcard, etc.
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
+// AUDIT GAP: is_whitelisted_domain  -- trailing dot, port, TLD wildcard, etc.
+// -------------------------------------------------------------------------------
 
 TEST_CASE("Config audit: domain whitelist edge cases", "[config][audit]")
 {
@@ -1220,7 +1220,7 @@ TEST_CASE("Config audit: domain whitelist edge cases", "[config][audit]")
   {
     EarlyHintsConfig config;
     CHECK(parse_config(config, {"--crossorigin-whitelist", "cdn.example.com"}));
-    // Port is stripped — cdn.example.com:443 → cdn.example.com → matches
+    // Port is stripped  -- cdn.example.com:443 → cdn.example.com → matches
     CHECK(config.is_whitelisted_domain("cdn.example.com:443"));
   }
 
@@ -1277,15 +1277,15 @@ TEST_CASE("Config audit: domain whitelist edge cases", "[config][audit]")
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// AUDIT GAP: parse_mode — trailing comma asymmetry, double comma, whitespace
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
+// AUDIT GAP: parse_mode  -- trailing comma asymmetry, double comma, whitespace
+// -------------------------------------------------------------------------------
 
 TEST_CASE("Config audit: parse_mode comma and whitespace edge cases", "[config][audit]")
 {
   SECTION("trailing comma with non-manual mode is rejected")
   {
-    // R9-12 fix: trailing comma is now properly rejected as malformed input,
+    // Fix: trailing comma is now properly rejected as malformed input,
     // matching the behavior for leading comma and double comma.
     EarlyHintsConfig config;
     CHECK_FALSE(parse_config(config, {"--mode", "auto-learn,"}));
@@ -1316,9 +1316,9 @@ TEST_CASE("Config audit: parse_mode comma and whitespace edge cases", "[config][
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// AUDIT GAP: init() — duplicate options (last-wins behavior)
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
+// AUDIT GAP: init()  -- duplicate options (last-wins behavior)
+// -------------------------------------------------------------------------------
 
 TEST_CASE("Config audit: duplicate options last-wins", "[config][audit]")
 {
@@ -1352,9 +1352,9 @@ TEST_CASE("Config audit: duplicate options last-wins", "[config][audit]")
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// AUDIT GAP: init() — non-manual mode with --link, whitelist comma leniency
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
+// AUDIT GAP: init()  -- non-manual mode with --link, whitelist comma leniency
+// -------------------------------------------------------------------------------
 
 TEST_CASE("Config audit: non-manual mode with --link", "[config][audit]")
 {
@@ -1408,13 +1408,13 @@ TEST_CASE("Config audit: whitelist comma parsing leniency", "[config][audit]")
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // SECURITY: Whitelist bypass attempt tests
 //
 // Each test below corresponds to a known URL/domain bypass technique.
-// The whitelist must resist all of them — a match here means attacker-
+// The whitelist must resist all of them  -- a match here means attacker-
 // controlled resources get promoted from safe preconnect to full preload.
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // 1. Subdomain suffix confusion
@@ -1427,7 +1427,7 @@ TEST_CASE("Security bypass 1: subdomain suffix confusion", "[config][security]")
   EarlyHintsConfig config;
   CHECK(parse_config(config, {"--crossorigin-whitelist", "*.cdn.com"}));
 
-  // Must NOT match — attacker controls .attacker.com zone
+  // Must NOT match  -- attacker controls .attacker.com zone
   CHECK_FALSE(config.is_whitelisted_domain("evil.cdn.com.attacker.com"));
   CHECK_FALSE(config.is_whitelisted_domain("cdn.com.attacker.com"));
 
@@ -1454,7 +1454,7 @@ TEST_CASE("Security bypass 2: port bypass", "[config][security]")
   EarlyHintsConfig config;
   CHECK(parse_config(config, {"--crossorigin-whitelist", "cdn.com"}));
 
-  // Port is stripped — cdn.com:8080 → cdn.com → matches whitelist
+  // Port is stripped  -- cdn.com:8080 → cdn.com → matches whitelist
   CHECK(config.is_whitelisted_domain("cdn.com:8080"));
   CHECK(config.is_whitelisted_domain("cdn.com:443"));
   CHECK(config.is_whitelisted_domain("cdn.com:80"));
@@ -1480,7 +1480,7 @@ TEST_CASE("Security bypass 3: userinfo in authority", "[config][security]")
   EarlyHintsConfig config;
   CHECK(parse_config(config, {"--crossorigin-whitelist", "cdn.com"}));
 
-  // Userinfo is stripped per RFC 3986 §3.2.1 — the actual host is cdn.com
+  // Userinfo is stripped per RFC 3986 §3.2.1  -- the actual host is cdn.com
   // which SHOULD match the whitelist (browser connects to cdn.com)
   CHECK(config.is_whitelisted_domain("attacker@cdn.com"));
   CHECK(config.is_whitelisted_domain("user:pass@cdn.com"));
@@ -1521,7 +1521,7 @@ TEST_CASE("Security bypass 5: case sensitivity tricks", "[config][security]")
   EarlyHintsConfig config;
   CHECK(parse_config(config, {"--crossorigin-whitelist", "cdn.com"}));
 
-  // Standard case folding — must match
+  // Standard case folding  -- must match
   CHECK(config.is_whitelisted_domain("CDN.COM"));
   CHECK(config.is_whitelisted_domain("Cdn.Com"));
   CHECK(config.is_whitelisted_domain("cDn.CoM"));
@@ -1591,16 +1591,16 @@ TEST_CASE("Security bypass 7: null byte injection", "[config][security]")
   EarlyHintsConfig config2;
   CHECK(parse_config(config2, {"--crossorigin-whitelist", "*.cdn.com"}));
   std::string wl_poisoned("evil\0.cdn.com", 13);
-  // This has a NUL inside — the full string is "evil\0.cdn.com" (13 bytes)
+  // This has a NUL inside  -- the full string is "evil\0.cdn.com" (13 bytes)
   // ends with ".cdn.com" (8 bytes), and length 13 > 8 → would match suffix!
-  // But the domain contains a NUL which is invalid — worth documenting behavior.
+  // But the domain contains a NUL which is invalid  -- worth documenting behavior.
   // Current implementation: suffix match succeeds because std::string::compare
   // operates on full byte range. This is a potential concern if an attacker can
   // inject NUL bytes into URLs. However, HTTP headers cannot carry NUL bytes, so
   // this is defense-in-depth only.
   // We document the observed behavior here:
   bool matches = config2.is_whitelisted_domain(wl_poisoned);
-  // The suffix ".cdn.com" is present, so it matches — this is the expected
+  // The suffix ".cdn.com" is present, so it matches  -- this is the expected
   // std::string behavior. Real-world URLs cannot contain NUL bytes.
   CHECK(matches == true);
 }
@@ -1608,7 +1608,7 @@ TEST_CASE("Security bypass 7: null byte injection", "[config][security]")
 // ---------------------------------------------------------------------------
 // 8. Trailing dot (FQDN)
 //    DNS: "cdn.com." is the fully-qualified form of "cdn.com".
-//    The whitelist does raw string comparison — "cdn.com." != "cdn.com".
+//    The whitelist does raw string comparison  -- "cdn.com." != "cdn.com".
 //    This means FQDN forms are rejected. Safe (blocks by default).
 // ---------------------------------------------------------------------------
 TEST_CASE("Security bypass 8: trailing dot (FQDN)", "[config][security]")
@@ -1616,16 +1616,16 @@ TEST_CASE("Security bypass 8: trailing dot (FQDN)", "[config][security]")
   EarlyHintsConfig config;
   CHECK(parse_config(config, {"--crossorigin-whitelist", "cdn.com"}));
 
-  // FQDN trailing dot — must NOT match bare domain entry
+  // FQDN trailing dot  -- must NOT match bare domain entry
   CHECK_FALSE(config.is_whitelisted_domain("cdn.com."));
 
-  // Wildcard: *.cdn.com — trailing dot breaks suffix
+  // Wildcard: *.cdn.com  -- trailing dot breaks suffix
   EarlyHintsConfig config2;
   CHECK(parse_config(config2, {"--crossorigin-whitelist", "*.cdn.com"}));
   CHECK_FALSE(config2.is_whitelisted_domain("img.cdn.com."));
   CHECK(config2.is_whitelisted_domain("img.cdn.com"));
 
-  // Whitelist entry itself has trailing dot — only matches exact FQDN
+  // Whitelist entry itself has trailing dot  -- only matches exact FQDN
   EarlyHintsConfig config3;
   CHECK(parse_config(config3, {"--crossorigin-whitelist", "cdn.com."}));
   CHECK(config3.is_whitelisted_domain("cdn.com."));
@@ -1634,7 +1634,7 @@ TEST_CASE("Security bypass 8: trailing dot (FQDN)", "[config][security]")
 
 // ---------------------------------------------------------------------------
 // 9. Wildcard edge cases
-//    "*" alone, "*.", "**", "*.*" — pathological patterns.
+//    "*" alone, "*.", "**", "*.*"  -- pathological patterns.
 // ---------------------------------------------------------------------------
 TEST_CASE("Security bypass 9: wildcard edge cases", "[config][security]")
 {
@@ -1642,7 +1642,7 @@ TEST_CASE("Security bypass 9: wildcard edge cases", "[config][security]")
   {
     EarlyHintsConfig config;
     CHECK(parse_config(config, {"--crossorigin-whitelist", "*"}));
-    // Pattern is "*" — length 1, not > 2, so exact match branch
+    // Pattern is "*"  -- length 1, not > 2, so exact match branch
     CHECK_FALSE(config.is_whitelisted_domain("anything.com"));
     CHECK_FALSE(config.is_whitelisted_domain("evil.com"));
     // Only literal "*" matches
@@ -1653,7 +1653,7 @@ TEST_CASE("Security bypass 9: wildcard edge cases", "[config][security]")
   {
     EarlyHintsConfig config;
     CHECK(parse_config(config, {"--crossorigin-whitelist", "*."}));
-    // Pattern is "*." — length 2, not > 2, so exact match branch
+    // Pattern is "*."  -- length 2, not > 2, so exact match branch
     CHECK_FALSE(config.is_whitelisted_domain("anything"));
     CHECK_FALSE(config.is_whitelisted_domain("a."));
     CHECK(config.is_whitelisted_domain("*."));
@@ -1663,7 +1663,7 @@ TEST_CASE("Security bypass 9: wildcard edge cases", "[config][security]")
   {
     EarlyHintsConfig config;
     CHECK(parse_config(config, {"--crossorigin-whitelist", "**"}));
-    // Pattern "**" — length 2, [0]='*', [1]='*' (not '.'), so exact match
+    // Pattern "**"  -- length 2, [0]='*', [1]='*' (not '.'), so exact match
     CHECK_FALSE(config.is_whitelisted_domain("anything.com"));
     CHECK(config.is_whitelisted_domain("**"));
   }
@@ -1672,7 +1672,7 @@ TEST_CASE("Security bypass 9: wildcard edge cases", "[config][security]")
   {
     EarlyHintsConfig config;
     CHECK(parse_config(config, {"--crossorigin-whitelist", "*.*"}));
-    // Pattern "*.*" — length 3, [0]='*', [1]='.', so wildcard branch
+    // Pattern "*.*"  -- length 3, [0]='*', [1]='.', so wildcard branch
     // Suffix = ".*". Matches any domain ending with ".*" and longer than 2 chars
     CHECK(config.is_whitelisted_domain("cdn.*"));
     CHECK(config.is_whitelisted_domain("anything.*"));
@@ -1684,9 +1684,9 @@ TEST_CASE("Security bypass 9: wildcard edge cases", "[config][security]")
   {
     EarlyHintsConfig config;
     CHECK(parse_config(config, {"--crossorigin-whitelist", "*.*.com"}));
-    // Pattern "*.*.com" — length 7 > 2, [0]='*', [1]='.'
+    // Pattern "*.*.com"  -- length 7 > 2, [0]='*', [1]='.'
     // Suffix = ".*.com". Matches domains ending with ".*.com"
-    // This is a literal suffix match — the inner * is NOT a wildcard
+    // This is a literal suffix match  -- the inner * is NOT a wildcard
     CHECK_FALSE(config.is_whitelisted_domain("cdn.example.com"));
     CHECK(config.is_whitelisted_domain("cdn.*.com"));
   }
@@ -1695,7 +1695,7 @@ TEST_CASE("Security bypass 9: wildcard edge cases", "[config][security]")
 // ---------------------------------------------------------------------------
 // 10. IP address vs domain mismatch
 //     Whitelist has domain name but attacker uses IP address (or vice versa).
-//     The whitelist is pure string comparison — no DNS resolution.
+//     The whitelist is pure string comparison  -- no DNS resolution.
 // ---------------------------------------------------------------------------
 TEST_CASE("Security bypass 10: IP address vs domain mismatch", "[config][security]")
 {
@@ -1720,7 +1720,7 @@ TEST_CASE("Security bypass 10: IP address vs domain mismatch", "[config][securit
     EarlyHintsConfig config;
     CHECK(parse_config(config, {"--crossorigin-whitelist", "*.0.0.1"}));
     // "127.0.0.1" ends with ".0.0.1" and is longer → matches suffix!
-    // This is technically correct wildcard behavior — admin configured it.
+    // This is technically correct wildcard behavior  -- admin configured it.
     CHECK(config.is_whitelisted_domain("127.0.0.1"));
     CHECK(config.is_whitelisted_domain("10.0.0.1"));
     // But "0.0.1" alone is too short (length 5 == suffix ".0.0.1" length 6? No).
@@ -1747,17 +1747,17 @@ TEST_CASE("Security bypass 10: IP address vs domain mismatch", "[config][securit
 }
 
 // ============================================================================
-// R5 Bug Regression Tests — TDD RED phase
+// R5 Bug Regression Tests  -- TDD RED phase
 // ============================================================================
 
-TEST_CASE("R5: empty domain after userinfo/port stripping must not match", "[config][r5]")
+TEST_CASE("Config whitelist: empty domain after userinfo/port stripping must not match", "[config]")
 {
   SECTION("bare userinfo 'user@' should not match empty whitelist entry")
   {
     EarlyHintsConfig config;
     // Even if admin accidentally passes empty string, it should be handled safely
     CHECK(parse_config(config, {"--crossorigin-whitelist", ""}));
-    // "user@" stripped of userinfo becomes "" — should NOT match
+    // "user@" stripped of userinfo becomes ""  -- should NOT match
     CHECK_FALSE(config.is_whitelisted_domain("user@"));
   }
 
@@ -1782,7 +1782,7 @@ TEST_CASE("R5: empty domain after userinfo/port stripping must not match", "[con
     CHECK_FALSE(config.is_whitelisted_domain(""));
   }
 
-  SECTION("R6: whitespace after comma in whitelist is trimmed")
+  SECTION("whitespace after comma in whitelist is trimmed")
   {
     EarlyHintsConfig config;
     CHECK(parse_config(config, {"--crossorigin-whitelist", "cdn.example.com, fonts.gstatic.com, \timages.cdn.com"}));
@@ -1791,7 +1791,7 @@ TEST_CASE("R5: empty domain after userinfo/port stripping must not match", "[con
     CHECK(config.is_whitelisted_domain("images.cdn.com"));
   }
 
-  SECTION("R6: whitespace-only domain after comma is ignored")
+  SECTION("whitespace-only domain after comma is ignored")
   {
     EarlyHintsConfig config;
     CHECK(parse_config(config, {"--crossorigin-whitelist", "cdn.com,  , fonts.com"}));
@@ -1802,12 +1802,12 @@ TEST_CASE("R5: empty domain after userinfo/port stripping must not match", "[con
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// AUDIT: getopt_long safety — re-entrancy, opterr suppression, trailing args
+// -------------------------------------------------------------------------------
+// AUDIT: getopt_long safety  -- re-entrancy, opterr suppression, trailing args
 //
 // These tests verify correct getopt_long state management in init().
 // Bugs found during QA audit of the parsing loop.
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 TEST_CASE("getopt_long audit: opterr must be suppressed", "[config][getopt]")
 {
@@ -1857,7 +1857,7 @@ TEST_CASE("getopt_long audit: trailing positional args must be rejected", "[conf
   SECTION("extra positional argument after valid options")
   {
     EarlyHintsConfig config;
-    // "extra_arg" is a positional argument — should be rejected
+    // "extra_arg" is a positional argument  -- should be rejected
     CHECK_FALSE(parse_config(config, {"--mode", "auto-learn", "extra_arg"}));
   }
 
@@ -1924,7 +1924,7 @@ TEST_CASE("getopt_long audit: re-entrant parsing across multiple configs", "[con
     const char *ext_argv[] = {"prog", "--foo", "bar", "--foo", "baz"};
     optind                 = 1;
     getopt_long(5, const_cast<char *const *>(ext_argv), "f:", ext_opts, nullptr);
-    // optind is now 3, optarg points to "bar" — state is dirty
+    // optind is now 3, optarg points to "bar"  -- state is dirty
 
     // init() must fully reset getopt state regardless
     EarlyHintsConfig config;
@@ -1936,7 +1936,7 @@ TEST_CASE("getopt_long audit: re-entrant parsing across multiple configs", "[con
 
 TEST_CASE("getopt_long audit: default mode safety", "[config][getopt]")
 {
-  // Audit Q4: auto-learn involves HTML body scanning — it should NOT be enabled
+  // Audit Q4: auto-learn involves HTML body scanning  -- it should NOT be enabled
   // by default. A zero-config plugin should only do origin-forward (safe pass-through).
   SECTION("zero-config default must not include auto-learn")
   {
@@ -1959,10 +1959,9 @@ TEST_CASE("getopt_long audit: default mode safety", "[config][getopt]")
 }
 
 // ============================================================================
-// R9 Phase 4: RED tests for confirmed bugs
 // ============================================================================
 
-TEST_CASE("R9-02: check_rel_quoted rejects junk after closing quote", "[config][r9][bug]")
+TEST_CASE("Config: check_rel_quoted rejects junk after closing quote", "[config]")
 {
   // rel="preload"garbage has junk immediately after the closing quote.
   // This is malformed per RFC 8288 and should be rejected.
@@ -1985,21 +1984,21 @@ TEST_CASE("R9-02: check_rel_quoted rejects junk after closing quote", "[config][
   }
 }
 
-TEST_CASE("R9-12: parse_mode rejects trailing comma", "[config][r9][bug]")
+TEST_CASE("Config: parse_mode rejects trailing comma in mode value", "[config]")
 {
   EarlyHintsConfig config;
   SECTION("trailing comma after valid mode")
   {
-    // "origin-forward," has a trailing comma — malformed input, should fail
+    // "origin-forward," has a trailing comma  -- malformed input, should fail
     CHECK_FALSE(parse_config(config, {"--mode", "origin-forward,"}));
   }
   SECTION("trailing comma after two modes") { CHECK_FALSE(parse_config(config, {"--mode", "auto-learn,origin-forward,"})); }
   SECTION("valid comma-separated modes still work") { CHECK(parse_config(config, {"--mode", "auto-learn,origin-forward"})); }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // AUDIT V2: Missing test scenarios
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 // cfg-01: --persist-dir + --no-persist contradictory state
 TEST_CASE("Config audit v2: --persist-dir with --no-persist", "[config][audit-v2]")
@@ -2100,7 +2099,7 @@ TEST_CASE("Config audit v2: persist flag ordering", "[config][audit-v2]")
 // cfg-04: Mode with double comma
 TEST_CASE("Config audit v2: mode double comma", "[config][audit-v2]")
 {
-  SECTION("double comma creates empty token — fails")
+  SECTION("double comma creates empty token  -- fails")
   {
     EarlyHintsConfig config;
     CHECK_FALSE(parse_config(config, {"--mode", "manual,,auto-learn"}));
@@ -2113,7 +2112,7 @@ TEST_CASE("Config audit v2: mode double comma", "[config][audit-v2]")
   }
 }
 
-// ─── miss-03: IPv6 with userinfo edge case ──────────────────────────────────
+// --- miss-03: IPv6 with userinfo edge case ----------------------------------
 
 TEST_CASE("Config whitelist: IPv6 with userinfo prefix", "[config][whitelist][audit]")
 {
@@ -2145,9 +2144,9 @@ TEST_CASE("Config whitelist: IPv6 with userinfo prefix", "[config][whitelist][au
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // --preload-whitelist config parsing and is_preload_domain()
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 TEST_CASE("Config preload whitelist", "[config]")
 {
@@ -2215,7 +2214,7 @@ TEST_CASE("Config preload whitelist", "[config]")
 // ==================== as= validation for rel=preload (Todo 2) ====================
 // has_valid_as_for_preload() returns true when as= is valid OR when rel is not preload.
 // For rel=preload, as= is required. For rel=modulepreload, as= is optional per the
-// HTML spec — the browser defaults to script. Returns false only for rel=preload
+// HTML spec  -- the browser defaults to script. Returns false only for rel=preload
 // with missing or invalid as=.
 
 TEST_CASE("has_valid_as_for_preload validation", "[config][as-validation]")
@@ -2345,7 +2344,7 @@ TEST_CASE("Soft-warn: link accepted despite missing as=", "[config][as-validatio
 
 TEST_CASE("merge_hint_links: basic merging", "[config][merge]")
 {
-  SECTION("manual only — no cached links")
+  SECTION("manual only  -- no cached links")
   {
     std::vector<std::string> manual = {"</a.js>; rel=preload; as=script", "</b.css>; rel=preload; as=style"};
     auto result                     = merge_hint_links(manual, nullptr, 10);
@@ -2354,7 +2353,7 @@ TEST_CASE("merge_hint_links: basic merging", "[config][merge]")
     CHECK(result[1] == "</b.css>; rel=preload; as=style");
   }
 
-  SECTION("cached only — no manual links")
+  SECTION("cached only  -- no manual links")
   {
     std::vector<std::string> empty_manual;
     std::vector<std::string> cached = {"</x.js>; rel=preload; as=script"};
@@ -2363,7 +2362,7 @@ TEST_CASE("merge_hint_links: basic merging", "[config][merge]")
     CHECK(result[0] == "</x.js>; rel=preload; as=script");
   }
 
-  SECTION("manual + cached — no overlap")
+  SECTION("manual + cached  -- no overlap")
   {
     std::vector<std::string> manual = {"</a.js>; rel=preload; as=script"};
     std::vector<std::string> cached = {"</b.css>; rel=preload; as=style"};
@@ -2373,7 +2372,7 @@ TEST_CASE("merge_hint_links: basic merging", "[config][merge]")
     CHECK(result[1] == "</b.css>; rel=preload; as=style");
   }
 
-  SECTION("manual has priority — appears first")
+  SECTION("manual has priority  -- appears first")
   {
     std::vector<std::string> manual = {"</manual.js>; rel=preload; as=script"};
     std::vector<std::string> cached = {"</cached.css>; rel=preload; as=style"};
@@ -2386,7 +2385,7 @@ TEST_CASE("merge_hint_links: basic merging", "[config][merge]")
 
 TEST_CASE("merge_hint_links: deduplication", "[config][merge]")
 {
-  SECTION("duplicate URL deduped — manual wins")
+  SECTION("duplicate URL deduped  -- manual wins")
   {
     std::vector<std::string> manual = {"</app.js>; rel=preload; as=script"};
     std::vector<std::string> cached = {"</app.js>; rel=preload; as=script"};
@@ -2395,7 +2394,7 @@ TEST_CASE("merge_hint_links: deduplication", "[config][merge]")
     CHECK(result[0] == "</app.js>; rel=preload; as=script");
   }
 
-  SECTION("same URL different rel — deduped (preload subsumes preconnect, manual wins)")
+  SECTION("same URL different rel  -- deduped (preload subsumes preconnect, manual wins)")
   {
     std::vector<std::string> manual = {"</cdn.com>; rel=preconnect"};
     std::vector<std::string> cached = {"</cdn.com>; rel=preload; as=script"};
@@ -2404,7 +2403,7 @@ TEST_CASE("merge_hint_links: deduplication", "[config][merge]")
     CHECK(result[0] == "</cdn.com>; rel=preconnect");
   }
 
-  SECTION("same URL different params — deduped by URL portion")
+  SECTION("same URL different params  -- deduped by URL portion")
   {
     std::vector<std::string> manual = {"</app.js>; rel=preload; as=script"};
     std::vector<std::string> cached = {"</app.js>; rel=preload; as=script; crossorigin=anonymous"};
@@ -2456,14 +2455,14 @@ TEST_CASE("merge_hint_links: max_links cap", "[config][merge]")
 
 TEST_CASE("merge_hint_links: edge cases", "[config][merge]")
 {
-  SECTION("both empty — returns empty")
+  SECTION("both empty  -- returns empty")
   {
     std::vector<std::string> empty_manual;
     auto result = merge_hint_links(empty_manual, nullptr, 10);
     CHECK(result.empty());
   }
 
-  SECTION("cached is empty vector — returns manual only")
+  SECTION("cached is empty vector  -- returns manual only")
   {
     std::vector<std::string> manual = {"</a.js>; rel=preload; as=script"};
     std::vector<std::string> empty_cached;
@@ -2471,7 +2470,7 @@ TEST_CASE("merge_hint_links: edge cases", "[config][merge]")
     REQUIRE(result.size() == 1);
   }
 
-  SECTION("max_links=0 — returns empty")
+  SECTION("max_links=0  -- returns empty")
   {
     std::vector<std::string> manual = {"</a.js>; rel=preload; as=script"};
     auto result                     = merge_hint_links(manual, nullptr, 0);
@@ -2479,54 +2478,54 @@ TEST_CASE("merge_hint_links: edge cases", "[config][merge]")
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // Scheme allowlist unification tests
 // These must FAIL before fix, PASS after fix.
 // Bug: is_valid_link_value uses denylist (only blocks js/data/vbscript/blob).
 // Exotic schemes like file:, ftp:, chrome-extension: bypass the denylist.
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 TEST_CASE("is_valid_link_value rejects exotic schemes (allowlist)", "[config][security][allowlist]")
 {
-  SECTION("file:// scheme rejected — not in current denylist (BUG)")
+  SECTION("file:// scheme rejected  -- not in current denylist (BUG)")
   {
     // Current denylist: js/data/vbscript/blob only. file: passes. MUST fail before fix.
     EarlyHintsConfig config;
     CHECK_FALSE(parse_config(config, {"--mode", "manual", "--link", "<file:///etc/passwd>; rel=preload; as=fetch"}));
   }
 
-  SECTION("ftp:// scheme rejected — not in current denylist (BUG)")
+  SECTION("ftp:// scheme rejected  -- not in current denylist (BUG)")
   {
     EarlyHintsConfig config;
     CHECK_FALSE(parse_config(config, {"--mode", "manual", "--link", "<ftp://evil.com/payload.bin>; rel=preload; as=fetch"}));
   }
 
-  SECTION("chrome-extension:// scheme rejected — not in current denylist (BUG)")
+  SECTION("chrome-extension:// scheme rejected  -- not in current denylist (BUG)")
   {
     EarlyHintsConfig config;
     CHECK_FALSE(
       parse_config(config, {"--mode", "manual", "--link", "<chrome-extension://abcdef/inject.js>; rel=preload; as=script"}));
   }
 
-  SECTION("feed:javascript: nested scheme rejected — not in current denylist (BUG)")
+  SECTION("feed:javascript: nested scheme rejected  -- not in current denylist (BUG)")
   {
     EarlyHintsConfig config;
     CHECK_FALSE(parse_config(config, {"--mode", "manual", "--link", "<feed:javascript:alert(1)>; rel=preload; as=script"}));
   }
 
-  SECTION("jar:file: nested scheme rejected — not in current denylist (BUG)")
+  SECTION("jar:file: nested scheme rejected  -- not in current denylist (BUG)")
   {
     EarlyHintsConfig config;
     CHECK_FALSE(parse_config(config, {"--mode", "manual", "--link", "<jar:file:///tmp/evil.jar!/exploit>; rel=preload; as=fetch"}));
   }
 
-  SECTION("ws:// websocket scheme rejected — not in current denylist (BUG)")
+  SECTION("ws:// websocket scheme rejected  -- not in current denylist (BUG)")
   {
     EarlyHintsConfig config;
     CHECK_FALSE(parse_config(config, {"--mode", "manual", "--link", "<ws://evil.com/sock>; rel=preload; as=fetch"}));
   }
 
-  SECTION("wss:// websocket-secure scheme rejected — not in current denylist (BUG)")
+  SECTION("wss:// websocket-secure scheme rejected  -- not in current denylist (BUG)")
   {
     EarlyHintsConfig config;
     CHECK_FALSE(parse_config(config, {"--mode", "manual", "--link", "<wss://evil.com/sock>; rel=preload; as=fetch"}));
@@ -2557,13 +2556,13 @@ TEST_CASE("is_valid_link_value rejects exotic schemes (allowlist)", "[config][se
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// check_rel boundary — norel= false positive
+// -------------------------------------------------------------------------------
+// check_rel boundary  -- norel= false positive
 // Bug: `"` and `'` allowed as after_ok boundary in unquoted rel check,
 // so `rel=preload"garbage` passes incorrectly.
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
-TEST_CASE("check_rel boundary — quote not valid for unquoted rel form", "[config][rel_boundary]")
+TEST_CASE("check_rel boundary  -- quote not valid for unquoted rel form", "[config][rel_boundary]")
 {
   SECTION("rel=preload followed by double-quote is REJECTED (unquoted form boundary bug)")
   {
@@ -2591,7 +2590,7 @@ TEST_CASE("check_rel boundary — quote not valid for unquoted rel form", "[conf
   }
 }
 
-TEST_CASE("Config: debug-header sanitization (M-6)", "[config][security]")
+TEST_CASE("Config: debug-header sanitization", "[config][security]")
 {
   SECTION("valid debug-header names are accepted")
   {
@@ -2624,14 +2623,14 @@ TEST_CASE("Config: debug-header sanitization (M-6)", "[config][security]")
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // Space (0x20) must be rejected by is_valid_link_value
 //
 // The bug: the control-char filter uses `uc < 0x20`, which passes space
 // (0x20 is NOT less than 0x20). A URL with an embedded space must be
 // rejected because it breaks HTTP header framing (Link: <...> is terminated
 // by whitespace in many parsers) and violates RFC 3986 §2.
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 TEST_CASE("Config: space (0x20) in link URL rejected by is_valid_link_value", "[config][security]")
 {
@@ -2653,14 +2652,14 @@ TEST_CASE("Config: space (0x20) in link URL rejected by is_valid_link_value", "[
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // dedup_link_segments must not add an entry when URL key exactly
 //        equals an already-seen key.
 //
 // The bug: the supersede condition uses `existing.size() > url_key.size()`
 // (strict greater-than), so an entry with an identical URL key is never
-// deduplicated — it gets added a second time. Fix: change > to >=.
-// ═══════════════════════════════════════════════════════════════════════════════
+// deduplicated  -- it gets added a second time. Fix: change > to >=.
+// -------------------------------------------------------------------------------
 
 TEST_CASE("Config: dedup_link_segments exact-size URL key deduplication", "[config][dedup]")
 {
@@ -2701,17 +2700,17 @@ TEST_CASE("Config: dedup_link_segments exact-size URL key deduplication", "[conf
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // dedup_link_segments must be called once after all Link fields are collected
 //        are collected, not once per field inside the while(link_field) loop.
 //
 // The bug: calling dedup per-field means cross-field duplicates are never
 // eliminated. merge_hint_links already uses extract_dedup_key for its own
-// dedup, but dedup_link_segments is called before merge — if it's in the
+// dedup, but dedup_link_segments is called before merge  -- if it's in the
 // loop, each partial segment list is deduplicated in isolation, not globally.
 //
 // This test exercises merge_hint_links which wraps the same dedup logic.
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 TEST_CASE("Config: merge_hint_links deduplication across multiple inputs", "[config][dedup]")
 {
@@ -2852,7 +2851,7 @@ TEST_CASE("normalize_link_for_hint: boundary-aware rel matching", "[config][norm
   }
 }
 
-// ─── Commit 12: --hints-ttl (TTL + Stale-While-Revalidate) ──────────────────
+// --- --hints-ttl (TTL + Stale-While-Revalidate) ------------------
 
 TEST_CASE("Config: --hints-ttl parsing and validation", "[config][hints-ttl]")
 {
@@ -2918,7 +2917,7 @@ TEST_CASE("Config: --hints-ttl parsing and validation", "[config][hints-ttl]")
   }
 }
 
-// ─── Commit 13: --purge-header / --purge-secret ──────────────────────────────
+// --- --purge-header / --purge-secret ------------------------------
 
 TEST_CASE("Config: --purge-header and --purge-secret parsing", "[config][purge]")
 {
@@ -3027,13 +3026,13 @@ TEST_CASE("is_valid_link_value() rejects http:\\authority without :// separator"
     CHECK_FALSE(is_valid_link_value(link));
   }
 
-  SECTION("http:/evil.com rejected — only one slash after colon")
+  SECTION("http:/evil.com rejected  -- only one slash after colon")
   {
     std::string link = R"(<http:/evil.com/path.js>; rel=preload; as=script)";
     CHECK_FALSE(is_valid_link_value(link));
   }
 
-  SECTION("http://cdn.example.com accepted — correct separator")
+  SECTION("http://cdn.example.com accepted  -- correct separator")
   {
     std::string link = R"(<http://cdn.example.com/app.js>; rel=preload; as=script)";
     CHECK(is_valid_link_value(link));
@@ -3045,7 +3044,7 @@ TEST_CASE("is_valid_link_value() rejects http:\\authority without :// separator"
     CHECK(is_valid_link_value(link));
   }
 
-  SECTION("relative /path accepted — no scheme")
+  SECTION("relative /path accepted  -- no scheme")
   {
     std::string link = R"(</assets/app.js>; rel=preload; as=script)";
     CHECK(is_valid_link_value(link));
@@ -3091,14 +3090,14 @@ TEST_CASE("is_valid_link_value() rejects backslash-relative authority", "[config
     CHECK(is_valid_link_value(link));
   }
 
-  SECTION("//host accepted — proper protocol-relative")
+  SECTION("//host accepted  -- proper protocol-relative")
   {
     std::string link = R"(<//cdn.example.com/app.js>; rel=preload; as=script)";
     CHECK(is_valid_link_value(link));
   }
 }
 
-// ─── normalize_link_for_hint: preserve crossorigin/fetchpriority ──────────────
+// --- normalize_link_for_hint: preserve crossorigin/fetchpriority --------------
 
 TEST_CASE("normalize_link_for_hint: rel=stylesheet preserves crossorigin", "[config][normalize]")
 {
@@ -3128,7 +3127,7 @@ TEST_CASE("normalize_link_for_hint: rel=stylesheet preserves crossorigin", "[con
     CHECK(result.find("rel=preload") != std::string::npos);
   }
 
-  SECTION("stylesheet without crossorigin — no crossorigin added (no spurious attr)")
+  SECTION("stylesheet without crossorigin  -- no crossorigin added (no spurious attr)")
   {
     std::string link   = "</style.css>; rel=stylesheet";
     std::string result = normalize_link_for_hint(link);
@@ -3136,7 +3135,7 @@ TEST_CASE("normalize_link_for_hint: rel=stylesheet preserves crossorigin", "[con
     CHECK(result.find("rel=preload; as=style") != std::string::npos);
   }
 
-  SECTION("rel=preload path regression — attrs still preserved (was already working)")
+  SECTION("rel=preload path regression  -- attrs still preserved (was already working)")
   {
     std::string link   = "</app.js>; rel=preload; as=script; crossorigin=anonymous";
     std::string result = normalize_link_for_hint(link);
@@ -3144,11 +3143,11 @@ TEST_CASE("normalize_link_for_hint: rel=stylesheet preserves crossorigin", "[con
   }
 }
 
-// ─── A-30: rfind('@') for multi-@ userinfo ───────────────────────────────────
+// --- rfind('@') for multi-@ userinfo -----------------------------------
 
 TEST_CASE("Config whitelist: multi-@ userinfo stripped with rfind", "[config][regression]")
 {
-  SECTION("user:p@ssword@cdn.example.com — second @ is authority separator")
+  SECTION("user:p@ssword@cdn.example.com  -- second @ is authority separator")
   {
     EarlyHintsConfig config;
     CHECK(parse_config(config, {"--crossorigin-whitelist", "cdn.example.com"}));
@@ -3164,7 +3163,7 @@ TEST_CASE("Config whitelist: multi-@ userinfo stripped with rfind", "[config][re
     CHECK(config.is_whitelisted_domain("user@cdn.example.com"));
   }
 
-  SECTION("no @ in domain — unaffected")
+  SECTION("no @ in domain  -- unaffected")
   {
     EarlyHintsConfig config;
     CHECK(parse_config(config, {"--crossorigin-whitelist", "cdn.example.com"}));
@@ -3172,7 +3171,7 @@ TEST_CASE("Config whitelist: multi-@ userinfo stripped with rfind", "[config][re
   }
 }
 
-// ─── A-32: has_valid_as_for_preload accepts quoted as= variants ───────────────
+// --- has_valid_as_for_preload accepts quoted as= variants ---------------
 
 TEST_CASE("has_valid_as_for_preload: quoted as= variants accepted", "[config]")
 {
@@ -3194,7 +3193,7 @@ TEST_CASE("has_valid_as_for_preload: quoted as= variants accepted", "[config]")
   }
 }
 
-// ─── B-10: merge_hint_links case-insensitive URL deduplication ───────────────
+// --- merge_hint_links case-insensitive URL deduplication ---------------
 
 TEST_CASE("merge_hint_links: case-insensitive host deduplication", "[config][merge]")
 {
@@ -3225,7 +3224,7 @@ TEST_CASE("merge_hint_links: case-insensitive host deduplication", "[config][mer
   }
 }
 
-// ─── A-14: whitelist port strip at parse time ─────────────────────────────────
+// --- Whitelist port strip at parse time ---------------------------------
 
 TEST_CASE("Config whitelist: port in pattern stripped at parse time", "[config]")
 {
@@ -3260,7 +3259,7 @@ TEST_CASE("Config whitelist: port in pattern stripped at parse time", "[config]"
   }
 }
 
-// ─── Non-regression: has_valid_as_for_preload rel= boundary ────────────────────
+// --- Non-regression: has_valid_as_for_preload rel= boundary --------------------
 
 TEST_CASE("has_valid_as_for_preload: strict rel= boundary matches check_rel in is_valid_link_value", "[config][regression]")
 {
@@ -3409,7 +3408,7 @@ TEST_CASE("normalize_link_for_hint: bare boolean crossorigin maps to anonymous",
     CHECK(result.find("crossorigin=anonymous") == std::string::npos);
   }
 } // ===================================================================================
-// FIX-2: --link pparam with rel=stylesheet must be normalized to rel=preload; as=style
+// Stylesheet-to-preload normalization: --link pparam with rel=stylesheet must be normalized to rel=preload; as=style
 //
 // The --link pparam is designed for operators to manually inject Early Hints.
 // An operator might write @pparam=--link @pparam="</css/app.css>; rel=stylesheet"
@@ -3496,7 +3495,7 @@ TEST_CASE("--link pparam rel=stylesheet is normalized to rel=preload at config p
   }
 }
 // ===================================================================================
-// FIX-6: TTL defaults and max, plus --stale-evict-after option
+// TTL defaults and max: TTL defaults and max, plus --stale-evict-after option
 //
 // Background:
 //   hints_ttl controls the stale-while-revalidate window: serve existing hints
@@ -3633,7 +3632,7 @@ TEST_CASE("Config: --stale-evict-after option", "[config][stale-evict-after]")
 }
 
 // ===================================================================================
-// FIX-5: Purge rate limiting -- --purge-limit and --purge-cooldown options
+// Purge rate limiting: --purge-limit and --purge-cooldown options
 //
 // Background:
 //   The purge mechanism lets operators invalidate cached hints with a secret header.

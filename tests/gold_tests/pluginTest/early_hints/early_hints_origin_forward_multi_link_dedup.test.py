@@ -1,5 +1,5 @@
 '''
-Test 103 Early Hints plugin -- origin-forward with multiple Link header fields (H3 fix)
+Test 103 Early Hints plugin -- origin-forward with multiple Link header fields
 
 The TOCTOU dedup bug: dedup_link_segments() was called inside the while loop
 that iterates over multiple Link header fields from the origin response.
@@ -39,7 +39,7 @@ GREEN (after fix): exactly correct set of deduplicated links cached and
 #  limitations under the License.
 
 Test.Summary = '''
-Origin-forward with multiple Link header fields from origin. After H3 fix,
+Origin-forward with multiple Link header fields from origin. After the dedup-outside-loop fix,
 dedup is called once after all fields are collected, correctly deduplicating
 same-URL entries and preserving all unique entries.
 '''

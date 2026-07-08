@@ -1,5 +1,5 @@
 '''
-Test 103 Early Hints plugin — Cache persistence hardening
+Test 103 Early Hints plugin  -- Cache persistence hardening
 '''
 #  Licensed to the Apache Software Foundation (ASF) under one
 #  or more contributor license agreements.  See the NOTICE file
@@ -46,7 +46,7 @@ PAGE_BODY = (
     "</head><body>App</body></html>\r\n"
 )
 
-# 4 identical responses — request 1+2 learn, request 3 serves hints, request 4 regression guard
+# 4 identical responses  -- request 1+2 learn, request 3 serves hints, request 4 regression guard
 for _ in range(4):
     microserver.addResponse(
         "sessionfile.log", {
@@ -88,9 +88,9 @@ ts.Disk.records_config.update({
 })
 
 # ----
-# TC0: First request — learn (no hints yet, min-hit-count=2 not reached)
+# TC0: First request  -- learn (no hints yet, min-hit-count=2 not reached)
 # ----
-tr0 = Test.AddTestRun("Persistence: First learn request (no hints — below min-hit-count)")
+tr0 = Test.AddTestRun("Persistence: First learn request (no hints  -- below min-hit-count)")
 tr0.Processes.Default.Command = (
     "curl -s -D - -o /dev/null"
     " --http2"
@@ -116,9 +116,9 @@ tr0b.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression("200"
 tr0b.StillRunningAfter = microserver
 
 # ----
-# TC1: Third request — hints must be served (request_count=2 >= min-hit-count=2)
+# TC1: Third request  -- hints must be served (request_count=2 >= min-hit-count=2)
 # ----
-tr1 = Test.AddTestRun("Persistence: Third request — hints served (min-hit-count=2 reached)")
+tr1 = Test.AddTestRun("Persistence: Third request  -- hints served (min-hit-count=2 reached)")
 tr1.Processes.Default.Command = (
     "sleep 1 ; curl -s -D - -o /dev/null"
     " --http2"
@@ -143,9 +143,9 @@ tr2.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
 tr2.StillRunningAfter = microserver
 
 # ----
-# TC3: Fourth request — hints still served (regression guard)
+# TC3: Fourth request  -- hints still served (regression guard)
 # ----
-tr3 = Test.AddTestRun("Persistence: Fourth request — hints served (regression guard)")
+tr3 = Test.AddTestRun("Persistence: Fourth request  -- hints served (regression guard)")
 tr3.Processes.Default.Command = (
     "sleep 1 ; curl -s -D - -o /dev/null"
     " --http2"

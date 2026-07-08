@@ -1,5 +1,5 @@
 '''
-Test 103 Early Hints plugin — fetchpriority injection security and valid forwarding
+Test 103 Early Hints plugin  -- fetchpriority injection security and valid forwarding
 '''
 #  Licensed to the Apache Software Foundation (ASF) under one
 #  or more contributor license agreements.  See the NOTICE file
@@ -115,7 +115,7 @@ ts.Disk.records_config.update({
 })
 
 # ----
-# TR0: Learn fetchpriority=high — first H1 request (no 103 on H1)
+# TR0: Learn fetchpriority=high  -- first H1 request (no 103 on H1)
 # ----
 tr0 = Test.AddTestRun("Learn: stylesheet with fetchpriority=high")
 tr0.Processes.Default.Command = (
@@ -130,7 +130,7 @@ tr0.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression("200",
 tr0.StillRunningAfter = microserver
 
 # ----
-# TR1: H2 request for fetchpriority=high — should get 103 with fetchpriority=high preserved
+# TR1: H2 request for fetchpriority=high  -- should get 103 with fetchpriority=high preserved
 # ----
 tr1 = Test.AddTestRun("H2: fetchpriority=high preserved in 103")
 tr1.Processes.Default.Command = (
@@ -148,7 +148,7 @@ tr1.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
 tr1.StillRunningAfter = microserver
 
 # ----
-# TR2: Learn fetchpriority=auto — H1 first request
+# TR2: Learn fetchpriority=auto  -- H1 first request
 # ----
 tr2 = Test.AddTestRun("Learn: stylesheet with fetchpriority=auto")
 tr2.Processes.Default.Command = (
@@ -177,7 +177,7 @@ tr3.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr3.StillRunningAfter = microserver
 
 # ----
-# TR4: Learn fetchpriority=critical (unknown token) — H1 first request
+# TR4: Learn fetchpriority=critical (unknown token)  -- H1 first request
 # ----
 tr4 = Test.AddTestRun("Learn: stylesheet with unknown fetchpriority=critical")
 tr4.Processes.Default.Command = (
@@ -190,7 +190,7 @@ tr4.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression("200",
 tr4.StillRunningAfter = microserver
 
 # ----
-# TR5: H2 for unknown fetchpriority — hint sent but without fetchpriority=critical
+# TR5: H2 for unknown fetchpriority  -- hint sent but without fetchpriority=critical
 # ----
 tr5 = Test.AddTestRun("H2: unknown fetchpriority=critical silently dropped")
 tr5.Processes.Default.Command = (
@@ -214,7 +214,7 @@ tr5.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
 tr5.StillRunningAfter = microserver
 
 # ----
-# TR6: Learn injection attempt — H1 first request (Link with > in params)
+# TR6: Learn injection attempt  -- H1 first request (Link with > in params)
 # ----
 tr6 = Test.AddTestRun("Learn: Link with > in params (injection attempt)")
 tr6.Processes.Default.Command = (
@@ -227,7 +227,7 @@ tr6.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression("200",
 tr6.StillRunningAfter = microserver
 
 # ----
-# TR7: H2 for injection page — no 103 because the injected header was rejected
+# TR7: H2 for injection page  -- no 103 because the injected header was rejected
 # ----
 tr7 = Test.AddTestRun("H2: Link with > in params not forwarded as hint")
 tr7.Processes.Default.Command = (
@@ -236,7 +236,7 @@ tr7.Processes.Default.Command = (
     " --insecure"
     " 'https://127.0.0.1:{0}/inject.html'".format(ts.Variables.ssl_port))
 tr7.Processes.Default.ReturnCode = 0
-# The malformed Link was rejected by is_valid_link_value — nothing to cache.
+# The malformed Link was rejected by is_valid_link_value  -- nothing to cache.
 # Plugin reports no-hints or no-cached.
 tr7.Processes.Default.Streams.stdout.Content = Testers.ExcludesExpression(
     "x-early-hints-status: sent", "Injected Link must not result in a 103 being sent")

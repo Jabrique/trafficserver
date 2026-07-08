@@ -1,5 +1,28 @@
+/** @file
+ * Unit tests for the link_parser component.
+ *
+ * Covers: split_link_header_value, dedup_link_segments, is_valid_link_value,
+ * normalize_link_for_hint, and has_rel_type.
+ *
+ * @section license License
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one or more contributor license
+ * agreements. See the NOTICE file distributed with this work for additional information regarding
+ * copyright ownership. The ASF licenses this file to you under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with the License. You may obtain
+ * a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software distributed under the
+ * License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
+ * express or implied. See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include <catch.hpp>
 #include "../link_parser.h"
+#include "../config.h"
 #include <string>
 #include <vector>
 
@@ -154,33 +177,34 @@ TEST_CASE("LinkParser: multiple consecutive commas", "[link_parser][rfc8288]")
 }
 
 // ============================================================================
-// R9 Phase 4: RED tests for confirmed bugs
+// split_link_header_value: quoted-string backslash escape correctness
+//
+// Per RFC 7230 §3.2.6: inside a quoted-string, a backslash-escaped character
+// pair is a single quoted-pair. Even backslash count before a quote means the
+// quote is a real delimiter (all backslashes are paired). Odd count means the
+// quote itself is escaped and is part of the value.
 // ============================================================================
 
-TEST_CASE("R9-01: double-backslash before quote should close quoted string", "[link_parser][r9][bug]")
+TEST_CASE("LinkParser: even backslash count before quote closes quoted string and splits", "[link_parser][rfc8288]")
 {
-  // "foo\\" is an escaped backslash followed by a real closing quote.
-  // Two backslashes = one escaped backslash, so the quote IS a real delimiter.
-  // The comma after should split into two segments.
+  // "foo\\" has 2 backslashes = 1 escaped backslash; the following quote is a real
+  // delimiter → the comma after closes the value → two segments produced.
   std::string input = R"(</a.css>; title="foo\\", </b.js>; rel=preload)";
   auto result       = split_link_header_value(input, 10);
 
-  // BUG: code sees single backslash before quote and thinks quote is escaped,
-  // so comma is treated as inside the quoted string → only 1 segment.
-  // CORRECT: even number of backslashes means quote is NOT escaped → 2 segments.
   REQUIRE(result.size() == 2);
   CHECK(result[0] == R"(</a.css>; title="foo\\")");
   CHECK(result[1] == "</b.js>; rel=preload");
 }
 
-TEST_CASE("R9-01b: triple-backslash before quote keeps quote escaped", "[link_parser][r9][bug]")
+TEST_CASE("LinkParser: odd backslash count before quote keeps quote escaped  -- no split", "[link_parser][rfc8288]")
 {
-  // "foo\\\" has THREE backslashes: escaped-backslash + escaped-quote.
-  // Odd number of backslashes means quote IS escaped → stays in quotes.
+  // "foo\\\" has 3 backslashes = 1 escaped backslash + 1 escape of quote → quote IS escaped
+  // → comma inside is NOT a delimiter → one segment.
   std::string input = R"(</a.css>; title="foo\\\", </b.js>"; rel=preload)";
   auto result       = split_link_header_value(input, 10);
 
-  // Odd backslashes → quote is escaped → entire remainder is one segment.
+  // Odd backslashes → quote escaped → entire remainder is one segment.
   REQUIRE(result.size() == 1);
 }
 
@@ -211,11 +235,11 @@ TEST_CASE("LinkParser: rel boundary check in deduplication", "[link_parser][dedu
   CHECK(result3.size() == 2);
 }
 
-// ─── Non-regression: O(n) backslash counting must not change output ───────────
+// --- Non-regression: O(n) backslash counting must not change output -----------
 
 TEST_CASE("LinkParser: many consecutive backslashes before closing quote", "[link_parser][rfc8288]")
 {
-  SECTION("even backslash count: quote is real delimiter — two segments")
+  SECTION("even backslash count: quote is real delimiter  -- two segments")
   {
     // 4 backslashes = 2 escaped backslashes → quote is real → split into 2 links
     std::string input = R"(<a.css>; title="foo\\\\", </b.js>; rel=preload; as=script)";
@@ -224,7 +248,7 @@ TEST_CASE("LinkParser: many consecutive backslashes before closing quote", "[lin
     CHECK(result[1].find("b.js") != std::string::npos);
   }
 
-  SECTION("odd backslash count: quote is escaped — one segment (no split)")
+  SECTION("odd backslash count: quote is escaped  -- one segment (no split)")
   {
     // 3 backslashes = 1 escaped backslash + 1 escape of quote → quote escaped → no split
     std::string input = R"(<a.css>; title="foo\\\", </b.js>; rel=preload; as=script)";
@@ -303,34 +327,8 @@ TEST_CASE("LinkParser: unclosed quoted string keeps comma inside its context", "
   }
 }
 
-// ===========================================================================================
-// The MAX_LINK_FIELD_LEN guard compared via static_cast<int>(size()) which is
-// implementation-defined for values exceeding INT_MAX. The comparison is now
-// performed entirely in the unsigned domain to guarantee defined behavior.
-// ===========================================================================================
-
-TEST_CASE("LinkParser: header size guard uses unsigned comparison at boundary", "[link_parser][size-guard]")
-{
-  SECTION("header exactly at limit is accepted")
-  {
-    // Build a valid-looking header padded to exactly MAX_LINK_FIELD_LEN (8192) bytes.
-    // The URL is valid; trailing spaces are harmless whitespace.
-    std::string input = "</a.css>; rel=preload; as=style";
-    input.resize(8192, ' ');
-    auto result = split_link_header_value(input, 10);
-    // One segment (the link, padded with spaces that are trimmed)
-    REQUIRE(result.size() == 1);
-    CHECK(result[0].find("/a.css") != std::string::npos);
-  }
-
-  SECTION("header one byte over limit is rejected")
-  {
-    std::string input = "</a.css>; rel=preload; as=style";
-    input.resize(8193, ' ');
-    auto result = split_link_header_value(input, 10);
-    CHECK(result.empty());
-  }
-}
+// NOTE: header size guard boundary (8192/8193) is already tested above at L122-138.
+// Duplicate test removed during audit  -- see audit report §2.3.
 
 // ===========================================================================================
 // dedup_link_segments() now derives url_key from the lowercased copy of the segment
@@ -587,3 +585,273 @@ TEST_CASE("dedup preserves path case sensitivity per RFC 3986", "[link_parser][d
     CHECK(result.size() == 2);
   }
 }
+
+// ============================================================================
+// dedup_link_segments: dedup called once after full accumulation vs per-field
+//
+// The origin-forward loop must call dedup ONCE after all Link header fields
+// have been collected. Calling dedup inside the per-field loop is O(n²) and
+// cannot correctly apply strongest-wins across separate header fields.
+//
+// Behavioral contract:
+//   1. dedup([A, B, A]) → [A, B]  (dedup works)
+//   2. Calling dedup once after accumulation == calling inside loop (same result)
+//   3. dedup is idempotent: dedup(dedup(list)) == dedup(list)
+// ============================================================================
+
+TEST_CASE("dedup_link_segments: calling once after full accumulation yields same result as per-field", "[link_parser][dedup]")
+{
+  // Simulate collecting segments from 3 separate Link header fields.
+  std::vector<std::string> field1 = {
+    "</style.css>; rel=preload; as=style",
+    "</app.js>; rel=preload; as=script",
+  };
+  std::vector<std::string> field2 = {
+    "</app.js>; rel=preload; as=script", // duplicate of field1[1]
+    "</font.woff2>; rel=preload; as=font; crossorigin=anonymous",
+  };
+  std::vector<std::string> field3 = {
+    "</style.css>; rel=preload; as=style", // duplicate of field1[0]
+    "<https://cdn.example.com>; rel=preconnect",
+  };
+
+  // OLD (incorrect) behavior: dedup inside loop (called per field).
+  std::vector<std::string> inside_loop;
+  inside_loop.insert(inside_loop.end(), field1.begin(), field1.end());
+  inside_loop = dedup_link_segments(inside_loop, 50);
+  inside_loop.insert(inside_loop.end(), field2.begin(), field2.end());
+  inside_loop = dedup_link_segments(inside_loop, 50);
+  inside_loop.insert(inside_loop.end(), field3.begin(), field3.end());
+  inside_loop = dedup_link_segments(inside_loop, 50);
+
+  // NEW (correct) behavior: dedup once after full accumulation.
+  std::vector<std::string> all;
+  all.insert(all.end(), field1.begin(), field1.end());
+  all.insert(all.end(), field2.begin(), field2.end());
+  all.insert(all.end(), field3.begin(), field3.end());
+  std::vector<std::string> outside_loop = dedup_link_segments(all, 50);
+
+  // Both approaches must produce the same result.
+  REQUIRE(inside_loop.size() == outside_loop.size());
+  for (size_t i = 0; i < inside_loop.size(); i++) {
+    INFO("index " << i);
+    CHECK(inside_loop[i] == outside_loop[i]);
+  }
+}
+
+TEST_CASE("dedup_link_segments: is idempotent  -- calling twice produces the same result", "[link_parser][dedup]")
+{
+  std::vector<std::string> segments = {
+    "</style.css>; rel=preload; as=style",
+    "</app.js>; rel=preload; as=script",
+    "</style.css>; rel=preload; as=style", // duplicate
+    "<https://cdn.example.com>; rel=preconnect",
+  };
+
+  auto once  = dedup_link_segments(segments, 50);
+  auto twice = dedup_link_segments(once, 50);
+
+  REQUIRE(once.size() == twice.size());
+  for (size_t i = 0; i < once.size(); i++) {
+    CHECK(once[i] == twice[i]);
+  }
+}
+
+TEST_CASE("dedup_link_segments: max_links cap enforced when called after full accumulation", "[link_parser][dedup][limits]")
+{
+  std::vector<std::string> all;
+  for (int i = 0; i < 10; i++) {
+    all.push_back("</asset" + std::to_string(i) + ".js>; rel=preload; as=script");
+  }
+
+  auto result = dedup_link_segments(all, 5);
+  CHECK(result.size() <= 5);
+  CHECK(result.size() == 5);
+}
+
+TEST_CASE("dedup_link_segments: preload beats preconnect regardless of insertion order", "[link_parser][dedup][strongest-wins]")
+{
+  // Preconnect appears first, preload appears later for the same URL.
+  // A single dedup call after full accumulation must keep only preload.
+  std::vector<std::string> same_url = {
+    "<https://cdn.example.com>; rel=preconnect",
+    "<https://cdn.example.com>; rel=preload; as=script",
+  };
+
+  auto result = dedup_link_segments(same_url, 50);
+
+  REQUIRE(result.size() == 1);
+  CHECK(result[0].find("rel=preload") != std::string::npos);
+}
+
+TEST_CASE("dedup_link_segments: empty input returns empty output", "[link_parser][dedup]")
+{
+  std::vector<std::string> empty;
+  auto result = dedup_link_segments(empty, 50);
+  CHECK(result.empty());
+}
+
+TEST_CASE("dedup_link_segments: all unique entries preserved", "[link_parser][dedup]")
+{
+  std::vector<std::string> unique = {
+    "</style.css>; rel=preload; as=style",
+    "</app.js>; rel=preload; as=script",
+    "<https://cdn.example.com>; rel=preconnect",
+  };
+
+  auto result = dedup_link_segments(unique, 50);
+  REQUIRE(result.size() == 3);
+}
+
+// ============================================================================
+// is_valid_link_value: angle-bracket injection guard in params portion
+//
+// When origin sends a Link header with an injected second URL inside a param
+// (e.g. fetchpriority=high<https://evil.com/m.js>), the function must reject
+// the entire value. Guards also cover '>' alone in params.
+// ============================================================================
+
+TEST_CASE("is_valid_link_value: rejects angle-bracket injection in params portion", "[link_parser][is_valid_link_value][security]")
+{
+  SECTION("injected <url> in fetchpriority value is rejected")
+  {
+    std::string injected = "<https://cdn.example.com/x.css>; rel=preload; as=style; fetchpriority=high<https://evil.com/m.js>";
+    CHECK(is_valid_link_value(injected) == false);
+  }
+
+  SECTION("injected > in fetchpriority value is rejected")
+  {
+    std::string injected = "<https://cdn.example.com/x.css>; rel=preload; as=style; fetchpriority=high>evil";
+    CHECK(is_valid_link_value(injected) == false);
+  }
+
+  SECTION("injected <> in rel value is rejected")
+  {
+    std::string injected = "<https://cdn.example.com/x.css>; rel=preload<evil>; as=style";
+    CHECK(is_valid_link_value(injected) == false);
+  }
+
+  SECTION("clean fetchpriority=high is accepted")
+  {
+    std::string clean = "<https://cdn.example.com/x.css>; rel=preload; as=style; fetchpriority=high";
+    CHECK(is_valid_link_value(clean) == true);
+  }
+
+  SECTION("clean fetchpriority=low is accepted")
+  {
+    std::string clean = "<https://cdn.example.com/x.css>; rel=preload; as=style; fetchpriority=low";
+    CHECK(is_valid_link_value(clean) == true);
+  }
+
+  SECTION("clean fetchpriority=auto is accepted")
+  {
+    std::string clean = "<https://cdn.example.com/x.css>; rel=preload; as=style; fetchpriority=auto";
+    CHECK(is_valid_link_value(clean) == true);
+  }
+
+  SECTION("link without fetchpriority is unaffected")
+  {
+    std::string clean = "<https://cdn.example.com/x.css>; rel=preload; as=style";
+    CHECK(is_valid_link_value(clean) == true);
+  }
+
+  SECTION("nested < in URL portion is rejected (existing behavior)")
+  {
+    std::string bad_url = "<<https://cdn.example.com/x.css>>; rel=preload; as=style";
+    CHECK(is_valid_link_value(bad_url) == false);
+  }
+}
+
+TEST_CASE("normalize_link_for_hint: drops unsafe fetchpriority values before emitting",
+          "[link_parser][normalize_link_for_hint][security]")
+{
+  SECTION("stylesheet with safe fetchpriority=high is preserved")
+  {
+    std::string link   = "<https://cdn.example.com/style.css>; rel=stylesheet; fetchpriority=high";
+    std::string result = normalize_link_for_hint(link);
+    CHECK(result.find("rel=preload") != std::string::npos);
+    CHECK(result.find("fetchpriority=high") != std::string::npos);
+    CHECK(result.find("<https://evil.com") == std::string::npos);
+  }
+
+  SECTION("stylesheet with injected fetchpriority does not emit injected URL")
+  {
+    std::string link   = "<https://cdn.example.com/style.css>; rel=stylesheet; fetchpriority=high<https://evil.com>";
+    std::string result = normalize_link_for_hint(link);
+    // Must either reject entirely (empty) or emit without the injected URL
+    CHECK((result.empty() || result.find("<https://evil.com") == std::string::npos));
+    CHECK((result.empty() || result.find("fetchpriority=high<") == std::string::npos));
+  }
+
+  SECTION("unknown fetchpriority token is dropped")
+  {
+    std::string link   = "<https://cdn.example.com/style.css>; rel=stylesheet; fetchpriority=critical";
+    std::string result = normalize_link_for_hint(link);
+    // Must either reject entirely (empty) or emit without the unknown token
+    CHECK((result.empty() || result.find("fetchpriority=critical") == std::string::npos));
+  }
+}
+
+TEST_CASE("is_valid_link_value: URL scheme validation", "[link_parser][is_valid_link_value]")
+{
+  SECTION("standard https URL accepted")
+  {
+    CHECK(is_valid_link_value("<https://cdn.example.com/app.js>; rel=preload; as=script") == true);
+  }
+
+  SECTION("standard http URL accepted")
+  {
+    CHECK(is_valid_link_value("<http://cdn.example.com/app.js>; rel=preload; as=script") == true);
+  }
+
+  SECTION("relative URL accepted") { CHECK(is_valid_link_value("</app.js>; rel=preload; as=script") == true); }
+
+  SECTION("URL with tab character (0x09) rejected")
+  {
+    std::string with_tab = "<https://cdn.example.com/\tapp.js>; rel=preload; as=script";
+    CHECK(is_valid_link_value(with_tab) == false);
+  }
+
+  SECTION("URL with space in URL portion rejected")
+  {
+    std::string with_space = "<https://cdn.example.com/my file.js>; rel=preload; as=script";
+    CHECK(is_valid_link_value(with_space) == false);
+  }
+
+  SECTION("ftp:// scheme rejected") { CHECK(is_valid_link_value("<ftp://cdn.example.com/file>; rel=preload; as=fetch") == false); }
+
+  SECTION("file:// scheme rejected") { CHECK(is_valid_link_value("<file:///etc/passwd>; rel=preload; as=fetch") == false); }
+
+  SECTION("http without :// rejected")
+  {
+    CHECK(is_valid_link_value("<http:\\cdn.example.com/app.js>; rel=preload; as=script") == false);
+  }
+
+  SECTION("backslash authority reference rejected")
+  {
+    CHECK(is_valid_link_value("<\\\\evil.com/x.js>; rel=preload; as=script") == false);
+  }
+}
+
+TEST_CASE("is_valid_link_value: carriage-return in link value is rejected", "[link_parser][is_valid_link_value]")
+{
+  SECTION("\\r anywhere in link value is rejected (0x0D < 0x20 control char)")
+  {
+    std::string with_cr = "<https://cdn.example.com/app.js>; rel=preload\r; as=script";
+    CHECK(is_valid_link_value(with_cr) == false);
+  }
+
+  SECTION("\\r before rel= is rejected")
+  {
+    std::string with_cr = "<https://cdn.example.com/app.js>;\r rel=preload; as=script";
+    CHECK(is_valid_link_value(with_cr) == false);
+  }
+
+  SECTION("valid link without \\r is unaffected")
+  {
+    CHECK(is_valid_link_value("<https://cdn.example.com/app.js>; rel=preload; as=script") == true);
+  }
+}
+
+// NOTE: rel-strength strongest-wins logic is already tested at L470-527.
+// Duplicate test removed during audit  -- see audit report §2.2.

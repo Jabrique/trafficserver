@@ -47,7 +47,7 @@ is_valid_header_name(const std::string &name)
   return true;
 }
 
-// Safe integer parsing — returns false on overflow, trailing garbage, or empty input
+// Safe integer parsing  -- returns false on overflow, trailing garbage, or empty input
 static bool
 safe_parse_int(const char *str, int *out)
 {
@@ -105,7 +105,7 @@ is_valid_link_value(const std::string &link)
     }
   }
 
-  // Allowlist URL scheme check — same RFC 3986 §3.1 logic as is_safe_url() in html_scanner.cc.
+  // Allowlist URL scheme check  -- same RFC 3986 §3.1 logic as is_safe_url() in html_scanner.cc.
   // A denylist (blocking js/data/vbscript/blob) is fragile: any new or exotic scheme
   // (file:, ftp:, chrome-extension:, feed:javascript:, jar:, ws:, wss:, etc.) bypasses it.
   // An allowlist is inherently safe against unknown schemes.
@@ -113,13 +113,13 @@ is_valid_link_value(const std::string &link)
   const char *s    = url_part.c_str();
   size_t remaining = url_part.size();
   if (remaining == 0) {
-    return false; // empty URL — useless
+    return false; // empty URL  -- useless
   }
   if (remaining > 0 && std::isalpha(static_cast<unsigned char>(s[0]))) {
     for (size_t i = 1; i < remaining; i++) {
       char c = s[i];
       if (c == ':') {
-        // Found a scheme — only http and https are allowed.
+        // Found a scheme  -- only http and https are allowed.
         // Lowercase for case-insensitive comparison.
         std::string scheme_lower(s, i);
         for (char &ch : scheme_lower) {
@@ -131,19 +131,19 @@ is_valid_link_value(const std::string &link)
           // http://evil.com, so a bare colon without "//" is a cross-origin
           // evasion vector in origin-forward mode.
           if (i + 2 < remaining && s[i + 1] == '/' && s[i + 2] == '/') {
-            break; // proper "://" — safe, continue to rel= check
+            break; // proper "://"  -- safe, continue to rel= check
           }
-          return false; // http:\ or http:/ — missing authority separator
+          return false; // http:\ or http:/  -- missing authority separator
         }
         return false; // exotic scheme: file:, ftp:, chrome-extension:, etc.
       }
       // Valid scheme chars: ALPHA / DIGIT / "+" / "-" / "."
       if (!std::isalnum(static_cast<unsigned char>(c)) && c != '+' && c != '-' && c != '.') {
-        break; // not a valid scheme char — relative URL, no scheme
+        break; // not a valid scheme char  -- relative URL, no scheme
       }
     }
   }
-  // No scheme (relative URL) or http/https with "://" — allowed.
+  // No scheme (relative URL) or http/https with "://"  -- allowed.
 
   // Reject backslash-based authority references per WHATWG URL spec section 4.2.
   // Browsers normalize \\evil.com, \/evil.com, /\evil.com, all resolve as
@@ -152,12 +152,12 @@ is_valid_link_value(const std::string &link)
   if (remaining >= 2) {
     char c0 = s[0], c1 = s[1];
     if ((c0 == '\\' && (c1 == '\\' || c1 == '/')) || (c0 == '/' && c1 == '\\')) {
-      return false; // backslash authority reference — cross-origin evasion
+      return false; // backslash authority reference  -- cross-origin evasion
     }
   }
-  // No scheme (relative URL) or http/https with "://" — allowed.
+  // No scheme (relative URL) or http/https with "://"  -- allowed.
 
-  // Must contain a valid rel= value — search only in params portion (after '>'), not the URL
+  // Must contain a valid rel= value  -- search only in params portion (after '>'), not the URL
   std::string params_lower;
   if (url_end + 1 < link.size()) {
     std::string params_part = link.substr(url_end + 1);
@@ -187,7 +187,7 @@ is_valid_link_value(const std::string &link)
                        params_lower[pos - 1] == '\t' || params_lower[pos - 1] == '\r';
       size_t end = pos + rel_len;
       // After-boundary: only ';', space, tab, \r, or end-of-string for the unquoted form.
-      // '"' and '\'' are NOT valid unquoted boundaries — rel=preload"garbage" must be rejected.
+      // '"' and '\'' are NOT valid unquoted boundaries  -- rel=preload"garbage" must be rejected.
       // Quoted forms (rel="preload") are handled separately by check_rel_quoted.
       // \r is included to match the boundary set used by has_rel_type() in link_parser.cc.
       bool after_ok = end >= params_lower.size() || params_lower[end] == ';' || params_lower[end] == ' ' ||
@@ -237,7 +237,7 @@ has_valid_as_for_preload(const std::string &link)
   // Extract params portion (after '>')
   size_t url_end = link.find('>');
   if (url_end == std::string::npos || url_end + 1 >= link.size()) {
-    return true; // No params — nothing to validate
+    return true; // No params  -- nothing to validate
   }
 
   std::string params;
@@ -253,7 +253,7 @@ has_valid_as_for_preload(const std::string &link)
     while ((pos = params.find(rel_str, pos)) != std::string::npos) {
       bool before_ok = (pos == 0) || params[pos - 1] == ';' || params[pos - 1] == ' ' || params[pos - 1] == '\t';
       size_t end     = pos + rel_len;
-      // Strict boundary: same rule as check_rel in is_valid_link_value() —
+      // Strict boundary: same rule as check_rel in is_valid_link_value()  --
       // only ';', space, tab, or end-of-string terminate the unquoted form.
       // Quoted variants (rel="preload") are matched with explicit needles
       // so '"' is not needed (and would permit rel=preload"garbage").
@@ -273,14 +273,14 @@ has_valid_as_for_preload(const std::string &link)
   bool needs_as = has_rel("rel=preload") || has_rel("rel=\"preload\"") || has_rel("rel='preload'");
 
   if (!needs_as) {
-    return true; // rel=preconnect, rel=stylesheet etc — as= not required
+    return true; // rel=preconnect, rel=stylesheet etc  -- as= not required
   }
 
   // Valid fetch destinations per Fetch spec §8
   static const char *valid_as[] = {"audio",  "document", "embed",        "fetch", "font",  "frame", "iframe", "image",
                                    "object", "script",   "sharedworker", "style", "track", "video", "worker"};
 
-  // Search for as=<value> with word boundaries — unquoted and quoted (RFC 8288 §3)
+  // Search for as=<value> with word boundaries  -- unquoted and quoted (RFC 8288 §3)
   for (const char *as_val : valid_as) {
     // Helper: search for needle with word boundaries
     auto check_needle = [&](const std::string &needle) -> bool {
@@ -374,7 +374,7 @@ EarlyHintsConfig::parse_mode(const char *mode_str)
 
   std::string modes(mode_str);
 
-  // Reject trailing comma (e.g. "manual,") — the empty token after it
+  // Reject trailing comma (e.g. "manual,")  -- the empty token after it
   // would otherwise be silently skipped by the loop below.
   if (!modes.empty() && modes.back() == ',') {
     TSError("[%s] trailing comma in mode: %s", PLUGIN_NAME, mode_str);
@@ -414,7 +414,7 @@ EarlyHintsConfig::parse_mode(const char *mode_str)
 bool
 EarlyHintsConfig::match_domain_list(const std::string &domain, const std::vector<std::string> &list)
 {
-  // DNS domains are case-insensitive — normalize to lowercase for comparison
+  // DNS domains are case-insensitive  -- normalize to lowercase for comparison
   std::string domain_lower;
   domain_lower.reserve(domain.size());
   for (char c : domain) {
@@ -423,7 +423,7 @@ EarlyHintsConfig::match_domain_list(const std::string &domain, const std::vector
 
   // Strip userinfo (RFC 3986 §3.2.1): "user@host" → "host".
   // rfind('@') is used because passwords may legally contain '@'
-  // e.g. user:p@ssword@host — the last '@' separates userinfo from host.
+  // e.g. user:p@ssword@host  -- the last '@' separates userinfo from host.
   size_t at_pos = domain_lower.rfind('@');
   if (at_pos != std::string::npos) {
     domain_lower = domain_lower.substr(at_pos + 1);
@@ -923,7 +923,7 @@ normalize_link_for_hint(const std::string &link)
     return {};
   };
 
-  // Check for stylesheet — convert to preload; as=style, preserving optional attrs.
+  // Check for stylesheet  -- convert to preload; as=style, preserving optional attrs.
   if (has_param_match(params_lower, "rel=stylesheet") || has_param_match(params_lower, "rel=\"stylesheet\"") ||
       has_param_match(params_lower, "rel='stylesheet'")) {
     // Allowlist fetchpriority to known-safe tokens: high, low, auto.
@@ -939,7 +939,7 @@ normalize_link_for_hint(const std::string &link)
     return url_part + "; rel=preload; as=style" + carry_crossorigin() + fp;
   }
 
-  // rel=preload, rel=preconnect, rel=modulepreload — return unchanged
+  // rel=preload, rel=preconnect, rel=modulepreload  -- return unchanged
   if (has_param_match(params_lower, "rel=preload") || has_param_match(params_lower, "rel=preconnect") ||
       has_param_match(params_lower, "rel=modulepreload") || has_param_match(params_lower, "rel=\"preload\"") ||
       has_param_match(params_lower, "rel=\"preconnect\"") || has_param_match(params_lower, "rel=\"modulepreload\"") ||

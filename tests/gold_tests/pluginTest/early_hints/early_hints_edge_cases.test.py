@@ -1,5 +1,5 @@
 '''
-Test 103 Early Hints plugin — edge cases
+Test 103 Early Hints plugin  -- edge cases
 '''
 #  Licensed to the Apache Software Foundation (ASF) under one
 #  or more contributor license agreements.  See the NOTICE file
@@ -60,7 +60,7 @@ microserver.addResponse(
     })
 
 # ----
-# Setup ATS — navigate_only enabled (default), skip_bots disabled
+# Setup ATS  -- navigate_only enabled (default), skip_bots disabled
 # ----
 ts = Test.MakeATSProcess("ts", select_ports=True, enable_tls=True, enable_cache=False)
 
@@ -85,7 +85,7 @@ ts.Disk.records_config.update({
 })
 
 # ----
-# Test Case 0: HTML without <head> — nothing learned (two requests)
+# Test Case 0: HTML without <head>  -- nothing learned (two requests)
 # ----
 tr1 = Test.AddTestRun("HTML without head - first request to learn")
 tr1.Processes.Default.Command = (
@@ -98,7 +98,7 @@ tr1.Processes.Default.StartBefore(microserver, ready=When.PortOpen(microserver.V
 tr1.Processes.Default.StartBefore(Test.Processes.ts)
 tr1.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "200 OK", "Should receive 200")
-# Plugin must engage — debug header proves plugin loaded and processing
+# Plugin must engage  -- debug header proves plugin loaded and processing
 tr1.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
     "X-Early-Hints-Status:", "Plugin should engage on no-head HTML (debug header present)")
 tr1.StillRunningAfter = microserver
@@ -112,10 +112,10 @@ tr2.Processes.Default.Command = (
 tr2.Processes.Default.ReturnCode = 0
 tr2.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "200 OK", "Should receive 200")
-# Plugin engages but finds nothing to learn — debug header must be present
+# Plugin engages but finds nothing to learn  -- debug header must be present
 tr2.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
     "X-Early-Hints-Status:", "Plugin should engage (debug header present)")
-# No Link headers — HTML without <head> produces no hints
+# No Link headers  -- HTML without <head> produces no hints
 tr2.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
     "Link:", "HTML without head should not have Link headers")
 tr2.StillRunningAfter = microserver
@@ -135,7 +135,7 @@ tr3.Processes.Default.Command = (
     " -H 'Sec-Fetch-Mode: cors'"
     " 'https://127.0.0.1:{0}/page.html'".format(ts.Variables.ssl_port))
 tr3.Processes.Default.ReturnCode = 0
-# H1 skip fires first — verify the exact debug header value
+# H1 skip fires first  -- verify the exact debug header value
 tr3.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "X-Early-Hints-Status: skipped-h1", "H1 skip fires before navigate-only check")
 tr3.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
@@ -143,10 +143,10 @@ tr3.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr3.StillRunningAfter = microserver
 
 # ----
-# Test Case 3: H2 non-navigate request — REAL navigate-only test
+# Test Case 3: H2 non-navigate request  -- REAL navigate-only test
 # Over H2, the H1 check passes (is H2), then the navigate-only check at plugin
 # line 911-916 fires for non-navigate requests. This is the isolated test that
-# verifies navigate-only filtering works — unlike TR2 which only tests H1 skip.
+# verifies navigate-only filtering works  -- unlike TR2 which only tests H1 skip.
 # ----
 tr_nav_h2 = Test.AddTestRun("H2 non-navigate - skipped-non-navigate")
 tr_nav_h2.Processes.Default.Command = (

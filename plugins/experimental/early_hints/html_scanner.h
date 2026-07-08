@@ -32,7 +32,7 @@ public:
   HtmlScanner(int scan_limit, int max_links, const EarlyHintsConfig *config);
   ~HtmlScanner() = default;
 
-  /** Feed data chunk (streaming — called multiple times from transform). */
+  /** Feed data chunk (streaming  -- called multiple times from transform). */
   void feed(const char *data, int64_t length);
 
   /** Check if scanning is complete (found </head> or limit reached). */
@@ -52,7 +52,7 @@ public:
   /** Reset for reuse. */
   void reset();
 
-  // ── Public static helpers (exposed for direct unit testing — RFC 3986 compliance) ──
+  // Public static helpers (exposed for direct unit testing, RFC 3986 compliance):
   //
   // extract_origin() and is_crossorigin() are placed in the public section so that
   // unit tests can call them directly without going through the full HTML scanning path.
@@ -68,8 +68,8 @@ private:
     IN_ATTR_SEP,      // After attr name, whitespace before possible '='
     IN_ATTR_VALUE,    // Reading attribute value (handling quotes)
     IN_COMMENT,       // Inside HTML comment (<!-- ... -->)
-    IN_BOGUS_COMMENT, // Inside bogus comment (<![CDATA[, <!DOCTYPE, etc.) — skip until >
-    IN_SCRIPT,        // Inside <script> body — skip until </script>
+    IN_BOGUS_COMMENT, // Inside bogus comment (<![CDATA[, <!DOCTYPE, etc.)  -- skip until >
+    IN_SCRIPT,        // Inside <script> body  -- skip until </script>
     DONE              // Found </head> or exceeded scan_limit
   };
 
@@ -95,7 +95,7 @@ private:
                               //   0-N = matching "</tagname" chars
                               //   N   = matched full name, checking separator
                               //   N+1 = confirmed close tag, scanning for '>'
-  std::string raw_close_tag_; // e.g. "</script" or "</style" — set by state_after_open_tag()
+  std::string raw_close_tag_; // e.g. "</script" or "</style"  -- set by state_after_open_tag()
 
   // Script data escaped state (HTML spec §13.2.6.2):
   // When <!-- appears inside <script>, the parser enters "escaped" mode.

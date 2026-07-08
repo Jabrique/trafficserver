@@ -1,5 +1,5 @@
 '''
-Test 103 Early Hints plugin — origin-forward dedup tautological comparison
+Test 103 Early Hints plugin  -- origin-forward dedup tautological comparison
 '''
 #  Licensed to the Apache Software Foundation (ASF) under one
 #  or more contributor license agreements.  See the NOTICE file
@@ -44,7 +44,7 @@ Test.ContinueOnFail = True
 microserver = Test.MakeOriginServer("microserver")
 
 # Scenario A: origin sends ONLY rel=preconnect for an asset (no preload for same URL).
-# This must work correctly — preconnect must be cached and served.
+# This must work correctly  -- preconnect must be cached and served.
 microserver.addResponse(
     "sessionfile.log", {
         "headers": "GET /preconnect-only.html HTTP/1.1\r\nHost: www.example.com\r\n\r\n",
@@ -69,7 +69,7 @@ microserver.addResponse(
         "body": "<html><body>Preconnect only</body></html>\r\n"
     })
 
-# Scenario B: origin sends DIFFERENT URLs — each different URL gets its own hint.
+# Scenario B: origin sends DIFFERENT URLs  -- each different URL gets its own hint.
 # Bug scenario: second URL gets false-deduped against first URL only if they share
 # URL key prefix. These have different URLs so dedup must NOT fire.
 microserver.addResponse(
@@ -127,7 +127,7 @@ microserver.addResponse(
     })
 
 # ----
-# Setup ATS — origin-forward mode
+# Setup ATS  -- origin-forward mode
 # ----
 ts = Test.MakeATSProcess("ts", select_ports=True, enable_tls=True, enable_cache=False)
 
@@ -153,7 +153,7 @@ ts.Disk.records_config.update({
 })
 
 # ----
-# TC0: Learn — preconnect-only page
+# TC0: Learn  -- preconnect-only page
 # ----
 tr0 = Test.AddTestRun("Dedup-fix: Learn preconnect-only page")
 tr0.Processes.Default.Command = (
@@ -167,7 +167,7 @@ tr0.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression("200",
 tr0.StillRunningAfter = microserver
 
 # ----
-# TC1: Serve — preconnect-only must be served in 103
+# TC1: Serve  -- preconnect-only must be served in 103
 # Regression guard: preconnect-only (no dedup possible) must work correctly.
 # ----
 tr1 = Test.AddTestRun("Dedup-fix: Preconnect-only hint must be served in 103")
@@ -183,7 +183,7 @@ tr1.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr1.StillRunningAfter = microserver
 
 # ----
-# TC2: Learn — multi-asset page (different URLs, both must survive — no false dedup)
+# TC2: Learn  -- multi-asset page (different URLs, both must survive  -- no false dedup)
 # Dedup bug: second DIFFERENT URL was never false-deduped (dedup only fires for same URL prefix).
 # This is a regression guard: both preload for style.css and preload for app.js must survive.
 # ----

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-inject_invalid_link.py — inject an invalid link into an early_hints persist file.
+inject_invalid_link.py  -- inject an invalid link into an early_hints persist file.
 
 Usage: inject_invalid_link.py <persist_file>
 

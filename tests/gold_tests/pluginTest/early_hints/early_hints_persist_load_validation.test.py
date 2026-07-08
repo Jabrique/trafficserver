@@ -1,5 +1,5 @@
 '''
-Test 103 Early Hints plugin — persist file link validation on load
+Test 103 Early Hints plugin  -- persist file link validation on load
 
 Verifies that links loaded from a persist file are re-validated before serving.
 In the buggy version: invalid links (rel=prefetch) from disk are trusted blindly.
@@ -43,7 +43,7 @@ Test.SkipUnless(
 Test.testName = "early_hints_persist_load_validation"
 Test.ContinueOnFail = True
 
-# ─── FNV-1a 64-bit hash (mirrors fnv1a_hash() in early_hints.cc) ─────────────
+# --- FNV-1a 64-bit hash (mirrors fnv1a_hash() in early_hints.cc) -------------
 def fnv1a_64(s):
     h = 14695981039346656037
     for c in s.encode('utf-8'):
@@ -53,10 +53,10 @@ def fnv1a_64(s):
 
 HINTS_CACHE_MAGIC = 0x45480003  # v3 format (no learn_count; key + last_updated + links)
 
-# ─── Setup origin ─────────────────────────────────────────────────────────────
+# --- Setup origin -------------------------------------------------------------
 microserver = Test.MakeOriginServer("microserver")
 
-# Plain page — no <link> tags. Any hint served must come from the persist file.
+# Plain page  -- no <link> tags. Any hint served must come from the persist file.
 microserver.addResponse(
     "sessionfile.log", {
         "headers": "GET /load-valid.html HTTP/1.1\r\nHost: www.example.com\r\n\r\n",
@@ -66,7 +66,7 @@ microserver.addResponse(
         "body": "<html><body>Load validation test</body></html>\r\n"
     })
 
-# ─── Setup ATS ────────────────────────────────────────────────────────────────
+# --- Setup ATS ----------------------------------------------------------------
 ts = Test.MakeATSProcess("ts", select_ports=True, enable_tls=True, enable_cache=False)
 ts.addDefaultSSLFiles()
 ts.Disk.ssl_multicert_config.AddLine('dest_ip=* ssl_cert_name=server.pem ssl_key_name=server.key')
@@ -107,7 +107,7 @@ ts.Disk.File(ts.Variables.LOGDIR + "/traffic.out", id="traffic_out").Content = \
         r"rejecting invalid persisted link",
         "ATS must log rejection of the invalid rel=prefetch link on load from disk")
 
-# ─── Build the persist binary in test setup ───────────────────────────────────
+# --- Build the persist binary in test setup -----------------------------------
 # Craft a .bin file (v3 format: no learn_count) with 1 valid + 1 invalid link.
 # min_hit_count=1 is satisfied by the first get() call (request_count gate).
 valid_link   = "</valid-asset.js>; rel=preload; as=script"
@@ -127,7 +127,7 @@ persist_bytes += struct.pack('<H', len(ib)) + ib                   # link 2: inv
 # Create persist dir and write file in a setup TestRun BEFORE ATS starts
 tr_setup = Test.AddTestRun("Setup: write persist .bin with valid+invalid link before ATS")
 tr_setup.Setup.MakeDir(persist_dir)
-# Use python3 to write the binary file — avoids issues with null bytes in shell
+# Use python3 to write the binary file  -- avoids issues with null bytes in shell
 import base64
 b64_content = base64.b64encode(persist_bytes).decode('ascii')
 tr_setup.Processes.Default.Command = (
@@ -141,7 +141,7 @@ tr_setup.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "SETUP_DONE", "Persist file must be written before ATS starts")
 tr_setup.StillRunningAfter = microserver
 
-# ─── TR1: H2 request — ATS loads persist file (with invalid link) and serves 103
+# --- TR1: H2 request  -- ATS loads persist file (with invalid link) and serves 103
 tr1 = Test.AddTestRun("Load: H2 request gets 103 from pre-crafted persist cache")
 tr1.Processes.Default.Command = (
     "sleep 2 && curl -s -D - -o /dev/null --http2 --insecure"

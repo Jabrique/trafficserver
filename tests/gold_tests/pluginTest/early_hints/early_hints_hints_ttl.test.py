@@ -1,5 +1,5 @@
 '''
-Test 103 Early Hints plugin — hints-ttl (TTL + Stale-While-Revalidate)
+Test 103 Early Hints plugin  -- hints-ttl (TTL + Stale-While-Revalidate)
 '''
 #  Licensed to the Apache Software Foundation (ASF) under one
 #  or more contributor license agreements.  See the NOTICE file
@@ -50,7 +50,7 @@ microserver.addResponse(
     })
 
 # ----
-# Setup ATS (cache disabled — every request hits origin to control scan timing)
+# Setup ATS (cache disabled  -- every request hits origin to control scan timing)
 # ----
 ts = Test.MakeATSProcess("ts", select_ports=True, enable_tls=True, enable_cache=False)
 
@@ -80,9 +80,9 @@ ts.Disk.records_config.update({
 })
 
 # ----
-# TR1: H1 request — scanner learns /style.css (first learn)
+# TR1: H1 request  -- scanner learns /style.css (first learn)
 # ----
-tr1 = Test.AddTestRun("TTL: H1 request 1 — scanner learns /style.css")
+tr1 = Test.AddTestRun("TTL: H1 request 1  -- scanner learns /style.css")
 tr1.Processes.Default.Command = (
     "curl -s -D - -o /dev/null"
     " --http1.1"
@@ -98,9 +98,9 @@ tr1.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr1.StillRunningAfter = microserver
 
 # ----
-# TR2: H2 request — hints fresh (age < 2s) → 103 sent (request_count 0→1 >= 1)
+# TR2: H2 request  -- hints fresh (age < 2s) → 103 sent (request_count 0→1 >= 1)
 # ----
-tr2 = Test.AddTestRun("TTL: H2 request — fresh hints → 103 sent")
+tr2 = Test.AddTestRun("TTL: H2 request  -- fresh hints → 103 sent")
 tr2.Processes.Default.Command = (
     "sleep 1 && curl -s -D - -o /dev/null"
     " --http2"
@@ -121,7 +121,7 @@ tr2.StillRunningAfter = microserver
 # SWR: hints are stale → 103 is STILL sent with old hints.
 # Scanner re-runs (re-learn) to refresh the cache entry.
 # ----
-tr3 = Test.AddTestRun("TTL: H2 request after TTL expiry — stale hints but 103 still sent (SWR)")
+tr3 = Test.AddTestRun("TTL: H2 request after TTL expiry  -- stale hints but 103 still sent (SWR)")
 tr3.Processes.Default.Command = (
     "sleep 3 && curl -s -D - -o /dev/null"
     " --http2"
@@ -141,7 +141,7 @@ tr3.StillRunningAfter = microserver
 # ----
 # TR4: Immediately after TR3 re-learned, hints are fresh again → 103 sent.
 # ----
-tr4 = Test.AddTestRun("TTL: H2 request after re-learn — fresh hints again → 103 sent")
+tr4 = Test.AddTestRun("TTL: H2 request after re-learn  -- fresh hints again → 103 sent")
 tr4.Processes.Default.Command = (
     "sleep 1 && curl -s -D - -o /dev/null"
     " --http2"

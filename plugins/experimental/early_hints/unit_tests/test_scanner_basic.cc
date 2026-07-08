@@ -180,7 +180,7 @@ TEST_CASE("HtmlScanner attribute quoting", "[html_scanner]")
 
   SECTION("self-closing tag without space before slash")
   {
-    // <link .../> without space before / — tests IN_TAG handling of /
+    // <link .../> without space before /  -- tests IN_TAG handling of /
     std::string html = "<html><head><link rel=\"preload\" href=\"/app.js\" as=\"script\"/></head></html>";
     auto links       = scan_html(html);
     REQUIRE(links.size() == 1);
@@ -268,10 +268,10 @@ TEST_CASE("HtmlScanner cross-origin handling", "[html_scanner]")
 
   SECTION("backslash-backslash cross-origin rejected outright (WHATWG URL spec)")
   {
-    // is_safe_url() rejects \\evil.com at URL validation — no hint emitted at all.
+    // is_safe_url() rejects \\evil.com at URL validation  -- no hint emitted at all.
     std::string html = R"(<html><head><link rel="preload" href="\\evil.com/tracker.js" as="script"></head></html>)";
     auto links       = scan_html(html);
-    CHECK(links.empty()); // blocked at URL validation — not downgraded to preconnect
+    CHECK(links.empty()); // blocked at URL validation  -- not downgraded to preconnect
   }
 
   SECTION("slash-backslash cross-origin rejected outright")
@@ -341,7 +341,7 @@ TEST_CASE("HtmlScanner edge cases", "[html_scanner]")
   {
     std::string html = "<<<>>><head<link rel=\"preload href=\"/x\" as=\"script\">>";
     auto links       = scan_html(html);
-    // Malformed — should not extract valid links
+    // Malformed  -- should not extract valid links
     CHECK(links.empty());
   }
 
@@ -539,7 +539,7 @@ TEST_CASE("HtmlScanner: <header> vs <head> distinction", "[html_scanner]")
 {
   SECTION("<header> tag is not confused with <head>")
   {
-    // HTML with <header> before <head> — should not pick up resources from <header>
+    // HTML with <header> before <head>  -- should not pick up resources from <header>
     std::string html = "<html><header><link rel=\"stylesheet\" href=\"/bad.css\"></header>"
                        "<head><link rel=\"stylesheet\" href=\"/good.css\"></head></html>";
     auto links = scan_html(html);
@@ -587,7 +587,7 @@ TEST_CASE("HtmlScanner: control character and type sanitization", "[html_scanner
       "<html><head><link rel=\"preload\" href=\"/font.woff2\" as=\"font\" type=\"font/woff2; evil=injected\"></head></html>";
     auto links = scan_html(html);
     REQUIRE(links.size() == 1);
-    // Semicolons and spaces stripped — injection parameters neutralized
+    // Semicolons and spaces stripped  -- injection parameters neutralized
     CHECK(links[0].find("type=\"font/woff2") != std::string::npos);
     // The ';' that would separate parameters must be stripped
     CHECK(links[0].find("; type=\"font/woff2\";") == std::string::npos);
@@ -596,7 +596,7 @@ TEST_CASE("HtmlScanner: control character and type sanitization", "[html_scanner
 
   SECTION("attribute value length: oversized href causes tag rejection")
   {
-    // A truncated href would emit a corrupt URL — the entire tag is now rejected.
+    // A truncated href would emit a corrupt URL  -- the entire tag is now rejected.
     std::string long_href(5000, 'a');
     std::string html = "<html><head><link rel=\"stylesheet\" href=\"/" + long_href +
                        ".css\"><link rel=\"stylesheet\" href=\"/good.css\"></head></html>";
@@ -607,7 +607,7 @@ TEST_CASE("HtmlScanner: control character and type sanitization", "[html_scanner
   }
 }
 
-// ─── Spaces around = in attributes (HTML spec §13.1.2.3) ────────────────────
+// --- Spaces around = in attributes (HTML spec §13.1.2.3) --------------------
 
 TEST_CASE("HtmlScanner handles spaces around = in attributes", "[html_scanner][spaces]")
 {
@@ -655,15 +655,15 @@ TEST_CASE("HtmlScanner handles spaces around = in attributes", "[html_scanner][s
   }
 }
 
-// ─── Script body skipping (IN_SCRIPT state) ─────────────────────────────────
+// --- Script body skipping (IN_SCRIPT state) ---------------------------------
 
 TEST_CASE("HtmlScanner additional edge cases", "[html_scanner][edge]")
 {
-  SECTION("unclosed quote in attribute — no crash, no link")
+  SECTION("unclosed quote in attribute  -- no crash, no link")
   {
     std::string html = R"(<html><head><link rel="preload" href="style.css</head></html>)";
     auto links       = scan_html(html);
-    // The unclosed quote consumes everything — no valid link extracted
+    // The unclosed quote consumes everything  -- no valid link extracted
     CHECK(links.empty());
   }
 
@@ -682,7 +682,7 @@ TEST_CASE("HtmlScanner additional edge cases", "[html_scanner][edge]")
     CHECK(links[0].find("/tab.css") != std::string::npos);
   }
 
-  SECTION("multiple rel values — combined rel not matched")
+  SECTION("multiple rel values  -- combined rel not matched")
   {
     // rel="preload stylesheet" is NOT the same as rel="preload"
     std::string html = R"(<html><head><link rel="preload stylesheet" href="/combo.css" as="style"></head></html>)";
@@ -691,7 +691,7 @@ TEST_CASE("HtmlScanner additional edge cases", "[html_scanner][edge]")
     CHECK(links.empty());
   }
 
-  SECTION("style body is skipped — no false link extraction")
+  SECTION("style body is skipped  -- no false link extraction")
   {
     std::string html = R"(<html><head>
       <style>
@@ -721,11 +721,11 @@ TEST_CASE("HtmlScanner additional edge cases", "[html_scanner][edge]")
   }
 }
 
-// ─── Edge cases: script close tag with trailing whitespace (HTML spec) ───────
+// --- Edge cases: script close tag with trailing whitespace (HTML spec) -------
 
 TEST_CASE("HtmlScanner: duplicate attribute handling", "[html_scanner][edge]")
 {
-  SECTION("duplicate href — first value wins (A-28)")
+  SECTION("duplicate href  -- first value wins (HTML spec first-attribute rule)")
   {
     // Per HTML spec §13.1.2.3: first occurrence of a duplicate attribute wins.
     std::string html = R"(<html><head><link rel="preload" href="/first.css" href="/second.css" as="style"></head></html>)";
@@ -735,16 +735,16 @@ TEST_CASE("HtmlScanner: duplicate attribute handling", "[html_scanner][edge]")
     CHECK(links[0].find("/second.css") == std::string::npos);
   }
 
-  SECTION("duplicate rel — first value wins")
+  SECTION("duplicate rel  -- first value wins")
   {
     // First rel="preload" wins; second rel="stylesheet" is ignored.
     std::string html = R"(<html><head><link rel="preload" as="style" href="/x.css" rel="stylesheet"></head></html>)";
     auto links       = scan_html(html);
-    // First rel="preload" wins — should still produce a preload link
+    // First rel="preload" wins  -- should still produce a preload link
     REQUIRE(links.size() == 1);
   }
 
-  SECTION("duplicate as — first value wins (A-28)")
+  SECTION("duplicate as  -- first value wins (HTML spec first-attribute rule)")
   {
     // First as="style" wins; second as="script" is ignored.
     std::string html = R"(<html><head><link rel="preload" as="style" as="script" href="/x.js"></head></html>)";
@@ -755,7 +755,7 @@ TEST_CASE("HtmlScanner: duplicate attribute handling", "[html_scanner][edge]")
   }
 }
 
-// ─── Pathological inputs — no crash, bounded behavior ───────────────────────
+// --- Pathological inputs  -- no crash, bounded behavior -----------------------
 
 TEST_CASE("HtmlScanner: pathological inputs", "[html_scanner][fuzz]")
 {
@@ -781,7 +781,7 @@ TEST_CASE("HtmlScanner: pathological inputs", "[html_scanner][fuzz]")
 
   SECTION("very long attribute value causes tag rejection")
   {
-    // Oversized attribute rejects the entire tag — not silently truncated.
+    // Oversized attribute rejects the entire tag  -- not silently truncated.
     std::string long_val(5000, 'x');
     std::string html = R"(<html><head><link rel="preload" href="/)" + long_val +
                        R"(" as="style"><link rel="stylesheet" href="/safe.css"></head></html>)";
@@ -800,11 +800,11 @@ TEST_CASE("HtmlScanner: pathological inputs", "[html_scanner][fuzz]")
   }
 }
 
-// ─── Cross-origin and extract_origin edge cases ─────────────────────────────
+// --- Cross-origin and extract_origin edge cases -----------------------------
 
 TEST_CASE("HtmlScanner INIT: <head followed by digit is not <head>", "[html_scanner][init]")
 {
-  // <head2> should not match as <head> — the 6th char is a digit, not > or space
+  // <head2> should not match as <head>  -- the 6th char is a digit, not > or space
   std::string html = "<html><head2><link rel=\"stylesheet\" href=\"/bad.css\"></head2>"
                      "<head><link rel=\"stylesheet\" href=\"/good.css\"></head></html>";
   auto links = scan_html(html);
@@ -854,11 +854,11 @@ TEST_CASE("HtmlScanner INIT: <head> not found within scan limit", "[html_scanner
   CHECK(links.empty());
 }
 
-// ─── IN_TAG state edge cases ────────────────────────────────────────────────
+// --- IN_TAG state edge cases ------------------------------------------------
 
 TEST_CASE("HtmlScanner IN_TAG: unexpected char in tag name resets to IN_HEAD", "[html_scanner][in_tag]")
 {
-  // A tag name with unusual characters (e.g. <link@foo>) — the '@' triggers
+  // A tag name with unusual characters (e.g. <link@foo>)  -- the '@' triggers
   // the else branch in IN_TAG which resets to IN_HEAD
   std::string html = R"(<html><head><link@bad href="/evil.css"><link rel="stylesheet" href="/good.css"></head></html>)";
   auto links       = scan_html(html);
@@ -868,7 +868,7 @@ TEST_CASE("HtmlScanner IN_TAG: unexpected char in tag name resets to IN_HEAD", "
 
 TEST_CASE("HtmlScanner IN_TAG: closing tag for non-head element stays in head", "[html_scanner][in_tag]")
 {
-  // </title> should NOT terminate scanning — only </head> does
+  // </title> should NOT terminate scanning  -- only </head> does
   std::string html = R"(<html><head><title>Test</title><link rel="stylesheet" href="/a.css"></head></html>)";
   auto links       = scan_html(html);
   REQUIRE(links.size() == 1);
@@ -883,11 +883,11 @@ TEST_CASE("HtmlScanner IN_TAG: </HEAD> uppercase closes scanning", "[html_scanne
   CHECK(links[0].find("/a.css") != std::string::npos);
 }
 
-// ─── IN_ATTR_NAME / IN_ATTR_SEP / IN_ATTR_VALUE edge cases ─────────────────
+// --- IN_ATTR_NAME / IN_ATTR_SEP / IN_ATTR_VALUE edge cases -----------------
 
 TEST_CASE("HtmlScanner IN_HEAD: non-alpha after </ is not a tag", "[html_scanner][in_head]")
 {
-  // </123> — digit after </ should not be recognized as a tag name
+  // </123>  -- digit after </ should not be recognized as a tag name
   std::string html = R"(<html><head></123><link rel="stylesheet" href="/a.css"></head></html>)";
   auto links       = scan_html(html);
   REQUIRE(links.size() == 1);
@@ -896,14 +896,14 @@ TEST_CASE("HtmlScanner IN_HEAD: non-alpha after </ is not a tag", "[html_scanner
 
 TEST_CASE("HtmlScanner IN_HEAD: non-alpha after < is not a tag", "[html_scanner][in_head]")
 {
-  // <123> — digit after < should not start a tag
+  // <123>  -- digit after < should not start a tag
   std::string html = R"(<html><head><123><link rel="stylesheet" href="/a.css"></head></html>)";
   auto links       = scan_html(html);
   REQUIRE(links.size() == 1);
   CHECK(links[0].find("/a.css") != std::string::npos);
 }
 
-// ─── as= attribute validation ───────────────────────────────────────────────
+// --- as= attribute validation -----------------------------------------------
 
 TEST_CASE("DONE: multiple feeds after DONE are all no-ops", "[html_scanner][done][audit]")
 {
@@ -915,7 +915,7 @@ TEST_CASE("DONE: multiple feeds after DONE are all no-ops", "[html_scanner][done
   CHECK(scanner.is_done());
   REQUIRE(scanner.get_links().size() == 1);
 
-  // Feed three more times — all should be no-ops
+  // Feed three more times  -- all should be no-ops
   for (int i = 0; i < 3; i++) {
     std::string extra = R"(<head><link rel="stylesheet" href="/extra.css"></head>)";
     scanner.feed(extra.c_str(), static_cast<int64_t>(extra.size()));
@@ -924,7 +924,7 @@ TEST_CASE("DONE: multiple feeds after DONE are all no-ops", "[html_scanner][done
   CHECK(scanner.get_links()[0].find("/first.css") != std::string::npos);
 }
 
-// ─── QA audit: feed() edge cases ────────────────────────────────────────────
+// --- QA audit: feed() edge cases --------------------------------------------
 
 TEST_CASE("feed: large input processed up to scan_limit", "[html_scanner][feed][audit]")
 {
@@ -947,7 +947,7 @@ TEST_CASE("feed: large input within limit is extracted", "[html_scanner][feed][a
   CHECK(links[0].find("/within.css") != std::string::npos);
 }
 
-// ─── QA audit: reset() thoroughness ─────────────────────────────────────────
+// --- QA audit: reset() thoroughness -----------------------------------------
 
 TEST_CASE("scan_limit: exactly limit_ characters are processed", "[html_scanner][limit][audit]")
 {
@@ -970,7 +970,7 @@ TEST_CASE("scan_limit: exactly limit_ characters are processed", "[html_scanner]
 
 TEST_CASE("scan_limit: character at limit+1 is NOT processed", "[html_scanner][limit][audit]")
 {
-  // Build HTML where '</head>' '>' falls at limit+1 — should NOT trigger </head> close.
+  // Build HTML where '</head>' '>' falls at limit+1  -- should NOT trigger </head> close.
   // Instead, scan_limit fires first.
   std::string prefix  = "<html><head>";       // 12 chars
   std::string padding = std::string(11, ' '); // 11 chars
@@ -980,14 +980,14 @@ TEST_CASE("scan_limit: character at limit+1 is NOT processed", "[html_scanner][l
   EarlyHintsConfig config;
   HtmlScanner scanner(limit, 10, &config);
   scanner.feed(html.c_str(), static_cast<int64_t>(html.size()));
-  // Scanner hit limit before processing '>' — DONE via limit, not via </head>
+  // Scanner hit limit before processing '>'  -- DONE via limit, not via </head>
   CHECK(scanner.is_done());
   // The scanner went DONE from scan_limit, not from finding </head>
 }
 
 TEST_CASE("scan_limit: expires mid </script> close tag", "[html_scanner][limit][audit]")
 {
-  // Scan limit runs out while matching "</script>" — scanner goes to DONE,
+  // Scan limit runs out while matching "</script>"  -- scanner goes to DONE,
   // abandoning the partial close-tag match.
   // scanned_ > limit_ triggers DONE, so feeding exactly `limit` chars means
   // the last char is at scanned_==limit which is NOT > limit. Need limit-1.
@@ -1010,12 +1010,12 @@ TEST_CASE("scan_limit: link just within limit is extracted", "[html_scanner][lim
   CHECK(links[0].find("/a.css") != std::string::npos);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// SECURITY PENETRATION TESTS — Injection Attack Vectors
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
+// SECURITY PENETRATION TESTS  -- Injection Attack Vectors
+// -------------------------------------------------------------------------------
 //
 // Each test below probes a specific attack vector. A test that PASSES means the
-// ─── miss-04: Self-closing non-link tags (e.g. <br/>) ───────────────────────
+// --- miss-04: Self-closing non-link tags (e.g. <br/>) -----------------------
 
 TEST_CASE("HtmlScanner: self-closing non-link tags do not break scanning", "[html_scanner][audit]")
 {
@@ -1055,7 +1055,7 @@ TEST_CASE("HtmlScanner: self-closing non-link tags do not break scanning", "[htm
   }
 }
 
-// ─── miss-05: MAX_ATTR_VALUE_LEN boundary tests ────────────────────────────
+// --- miss-05: MAX_ATTR_VALUE_LEN boundary tests ----------------------------
 
 TEST_CASE("HtmlScanner: MAX_ATTR_VALUE_LEN boundary (4096)", "[html_scanner][boundary][audit]")
 {
@@ -1083,7 +1083,7 @@ TEST_CASE("HtmlScanner: MAX_ATTR_VALUE_LEN boundary (4096)", "[html_scanner][bou
     CHECK(links[0].find("/safe.css") != std::string::npos);
   }
 
-  SECTION("attr name at exactly 256 chars is capped — excess ignored")
+  SECTION("attr name at exactly 256 chars is capped  -- excess ignored")
   {
     // Build an attr name longer than MAX_ATTR_NAME_LEN (256)
     std::string long_attr(257, 'z');
@@ -1098,16 +1098,16 @@ TEST_CASE("HtmlScanner: MAX_ATTR_VALUE_LEN boundary (4096)", "[html_scanner][bou
 // plugin correctly BLOCKS the attack. A test that FAILS indicates a CRITICAL
 // vulnerability that an attacker could exploit in production.
 
-// ─── 1. Header Injection via CRLF ───────────────────────────────────────────
+// --- 1. Header Injection via CRLF -------------------------------------------
 //
 // HTTP header injection: attacker embeds \r\n inside an href value to break out
 // of the Link header and inject arbitrary response headers. If the raw CRLF
 // bytes survive into the Link header value, a downstream proxy or browser will
 // interpret the injected bytes as a separate HTTP header.
 
-// ─── Commit 4: Scanner correctness fixes ─────────────────────────────────────
+// --- Scanner correctness fixes -------------------------------------
 
-// B-06: </script> in script_escaped mode should close the script element.
+// </script> in script_escaped mode should close the script element (HTML spec §13.2.6.4).
 // The HTML spec (§13.2.6.4) treats </script> as a valid end tag in
 // "script data escaped" state. The scanner's script_escaped_ branch currently
 // breaks before reaching the close-tag detection logic, so the script is never
@@ -1115,7 +1115,7 @@ TEST_CASE("HtmlScanner: MAX_ATTR_VALUE_LEN boundary (4096)", "[html_scanner][bou
 TEST_CASE("IN_SCRIPT: </script> inside <!--...--> escaped region closes script", "[html_scanner][script][escaped]")
 {
   // First <script src> extracts a preload.
-  // Second <script><!-- ... </script> — the <!-- enters escaped mode.
+  // Second <script><!-- ... </script>  -- the <!-- enters escaped mode.
   // </script> must still close the script per HTML spec §13.2.6.4.
   // A <link> after the second </script> must then be extracted.
   std::string html = "<html><head>"
@@ -1141,12 +1141,12 @@ TEST_CASE("IN_SCRIPT: </script> inside <!--...--> escaped region closes script",
   CHECK(has_after);
 }
 
-// A-06: Carriage-return (\r) is valid HTML whitespace (per HTML spec §13.1.2.6)
+// Carriage-return (\r) is valid HTML whitespace (per HTML spec §13.1.2.6)
 // and must be accepted as a separator between the close-tag name and '>'.
 // The close-tag path checks for tab/LF/FF/space but was missing \r.
 TEST_CASE("IN_SCRIPT: </script\\r> carriage-return separator closes script", "[html_scanner][script]")
 {
-  // </script\r> — \r appears between the tag name and '>'.
+  // </script\r>  -- \r appears between the tag name and '>'.
   // Per HTML spec §13.2.6.3 this is a valid separator (ASCII whitespace).
   // Without the fix the \r hits the else-branch and resets raw_close_pos_,
   // so the script is never closed and /after.css is consumed inside it.
@@ -1171,35 +1171,10 @@ TEST_CASE("IN_SCRIPT: </script\\r> carriage-return separator closes script", "[h
   CHECK(has_after);
 }
 
-// A-28: Per the HTML spec (§13.1.2.3), when the same attribute name appears
-// more than once in an element, the first occurrence wins and subsequent ones
-// are ignored.  finish_attr() currently overwrites on every call (last-wins).
-TEST_CASE("finish_attr: first occurrence of duplicate attribute wins", "[html_scanner][attrs]")
-{
-  SECTION("duplicate href — first value wins")
-  {
-    // href appears twice: /first.css then /second.css.
-    // First-wins: the scanner must use /first.css.
-    std::string html = R"(<html><head><link rel="preload" href="/first.css" as="style" href="/second.css"></head></html>)";
-    auto links       = scan_html(html);
-    REQUIRE(links.size() == 1);
-    CHECK(links[0].find("/first.css") != std::string::npos);
-    CHECK(links[0].find("/second.css") == std::string::npos);
-  }
+// NOTE: duplicate attribute first-wins behavior is already tested at L726-756
+// ("HtmlScanner: duplicate attribute handling"). Duplicate removed during audit  -- see §2.1.
 
-  SECTION("duplicate as — first value wins")
-  {
-    // as appears twice: style then script.
-    // First-wins: the scanner must use as=style.
-    std::string html = R"(<html><head><link rel="preload" href="/x.css" as="style" as="script"></head></html>)";
-    auto links       = scan_html(html);
-    REQUIRE(links.size() == 1);
-    CHECK(links[0].find("as=style") != std::string::npos);
-    CHECK(links[0].find("as=script") == std::string::npos);
-  }
-}
-
-// A-29: The HTML spec (§2.5.3) defines only two valid crossorigin states:
+// The HTML spec (§2.5.3) defines only two valid crossorigin states:
 // "anonymous" and "use-credentials". Any other value maps to "anonymous".
 // finish_attr() currently stores the raw lowercased value without validation,
 // so crossorigin="garbage" leaks into the Link header as crossorigin=garbage.

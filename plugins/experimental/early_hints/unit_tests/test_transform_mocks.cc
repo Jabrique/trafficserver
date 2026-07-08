@@ -32,7 +32,7 @@
 #include <cstring>
 #include <pthread.h>
 
-// ─── Mock control state (accessible from test_transform.cc) ─────────────────
+// --- Mock control state (accessible from test_transform.cc) -----------------
 
 void *mock_cont_data                     = nullptr;
 int mock_vconn_closed                    = 0;
@@ -79,7 +79,7 @@ int mock_send_early_hints_last_nlinks = 0;
 // --- Field append tracking (R11) ---
 int mock_field_append_count = 0;
 
-// ─── ATS API Mock Implementations ──────────────────────────────────────────
+// --- ATS API Mock Implementations ------------------------------------------
 
 extern "C" {
 
@@ -133,6 +133,20 @@ TSError(const char *fmt, ...)
   std::vfprintf(stderr, fmt, args);
   va_end(args);
   std::fprintf(stderr, "\n");
+}
+
+void
+TSNote(const char *fmt, ...)
+{
+  // No-op in unit tests; TSNote is informational only.
+  (void)fmt;
+}
+
+int
+_TSAssert(const char *text, const char *file, int line)
+{
+  std::fprintf(stderr, "TSAssert failed: %s at %s:%d\n", text, file, line);
+  abort();
 }
 
 // --- Statistics ---
@@ -390,7 +404,7 @@ TSIOBufferBlock TSIOBufferReaderStart(TSIOBufferReader /* readerp */)
 
 TSIOBufferBlock TSIOBufferBlockNext(TSIOBufferBlock /* blockp */)
 {
-  return nullptr; // single-block simulation — always one block
+  return nullptr; // single-block simulation  -- always one block
 }
 
 const char *
@@ -581,7 +595,7 @@ TSUserArgGet(void * /* data */, int /* arg_idx */)
 
 } // extern "C"
 
-// ─── ATS global constants referenced by early_hints.cc ──────────────────────
+// --- ATS global constants referenced by early_hints.cc ----------------------
 
 extern "C" {
 const char *TS_MIME_FIELD_USER_AGENT       = "User-Agent";
@@ -594,7 +608,7 @@ const char *TS_HTTP_METHOD_GET             = "GET";
 const char *TS_HTTP_METHOD_HEAD            = "HEAD";
 }
 
-// ─── Runtime dir mock ───────────────────────────────────────────────────────
+// --- Runtime dir mock -------------------------------------------------------
 
 const char *
 TSRuntimeDirGet()

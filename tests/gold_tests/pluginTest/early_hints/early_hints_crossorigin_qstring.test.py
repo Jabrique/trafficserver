@@ -1,5 +1,5 @@
 '''
-Test 103 Early Hints plugin — is_crossorigin false positive on :// in query string
+Test 103 Early Hints plugin  -- is_crossorigin false positive on :// in query string
 '''
 #  Licensed to the Apache Software Foundation (ASF) under one
 #  or more contributor license agreements.  See the NOTICE file
@@ -27,7 +27,7 @@ https://cdn.example.com instead of a same-origin rel=preload hint for
 the full proxy URL.
 
 Fix: detect scheme only when :// is preceded by valid RFC 3986 ALPHA chars
-from the very start of the URL — not when it appears inside a query string.
+from the very start of the URL  -- not when it appears inside a query string.
 
 These tests document the expected behavior after the RFC 3986 fix.
 '''
@@ -43,7 +43,7 @@ Test.ContinueOnFail = True
 # ----
 microserver = Test.MakeOriginServer("microserver")
 
-# Page with proxy URL containing :// in query string — must produce same-origin preload
+# Page with proxy URL containing :// in query string  -- must produce same-origin preload
 # BUG: current is_crossorigin returns true for /proxy?url=https://... → preconnect to cdn
 # FIX: must return false (same-origin) → preload for full /proxy?url=... URL
 microserver.addResponse(
@@ -71,7 +71,7 @@ microserver.addResponse(
             "</head><body>Proxy page</body></html>\r\n"
     })
 
-# Genuine cross-origin page — must still produce preconnect (control case)
+# Genuine cross-origin page  -- must still produce preconnect (control case)
 microserver.addResponse(
     "sessionfile.log", {
         "headers": "GET /cross-origin.html HTTP/1.1\r\nHost: www.example.com\r\n\r\n",
@@ -97,7 +97,7 @@ microserver.addResponse(
     })
 
 # ----
-# Setup ATS — auto-learn mode
+# Setup ATS  -- auto-learn mode
 # ----
 ts = Test.MakeATSProcess("ts", select_ports=True, enable_tls=True, enable_cache=False)
 
@@ -122,7 +122,7 @@ ts.Disk.records_config.update({
 })
 
 # ----
-# TC0: Learn — proxy URL with :// in query string
+# TC0: Learn  -- proxy URL with :// in query string
 # ----
 tr0 = Test.AddTestRun("Crossorigin-fix: Learn proxy URL (same-origin with :// in query string)")
 tr0.Processes.Default.Command = (
@@ -137,7 +137,7 @@ tr0.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression("200",
 tr0.StillRunningAfter = microserver
 
 # ----
-# TC1: Serve — verify proxy URL produces same-origin rel=preload (not rel=preconnect)
+# TC1: Serve  -- verify proxy URL produces same-origin rel=preload (not rel=preconnect)
 # BUG: /proxy?url=https://... is treated as cross-origin → gets preconnect hint to cdn.example.com
 # FIX: is_crossorigin returns false → full proxy URL gets rel=preload; as=script
 # ----
@@ -151,8 +151,8 @@ tr1.Processes.Default.ReturnCode = 0
 # MUST have 103 sent with the full proxy URL as preload
 tr1.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "x-early-hints-status: sent", "Proxy URL hint must be learned and served")
-# BUG check: before fix, hint is preconnect to cdn.example.com (wrong — cross-origin false positive)
-# PASS check: after fix, hint is preload for full /proxy?url=... (correct — same-origin)
+# BUG check: before fix, hint is preconnect to cdn.example.com (wrong  -- cross-origin false positive)
+# PASS check: after fix, hint is preload for full /proxy?url=... (correct  -- same-origin)
 tr1.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
     "rel=preload; as=script", "Proxy URL must produce rel=preload not rel=preconnect")
 # This ExcludesExpression proves the false positive is fixed
@@ -162,9 +162,9 @@ tr1.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
 tr1.StillRunningAfter = microserver
 
 # ----
-# TC2+3: Control — genuine cross-origin URL still produces preconnect (regression guard)
+# TC2+3: Control  -- genuine cross-origin URL still produces preconnect (regression guard)
 # ----
-tr2 = Test.AddTestRun("Crossorigin-fix: Control — genuine cross-origin learn phase")
+tr2 = Test.AddTestRun("Crossorigin-fix: Control  -- genuine cross-origin learn phase")
 tr2.Processes.Default.Command = (
     "curl -s -D - -o /dev/null"
     " --http2"
@@ -174,7 +174,7 @@ tr2.Processes.Default.ReturnCode = 0
 tr2.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression("200", "Should receive 200 OK")
 tr2.StillRunningAfter = microserver
 
-tr3 = Test.AddTestRun("Crossorigin-fix: Control — genuine cross-origin still gets preconnect after fix")
+tr3 = Test.AddTestRun("Crossorigin-fix: Control  -- genuine cross-origin still gets preconnect after fix")
 tr3.Processes.Default.Command = (
     "sleep 1 && curl -s -D - -o /dev/null"
     " --http2"
@@ -185,5 +185,5 @@ tr3.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "x-early-hints-status: sent", "Genuine cross-origin must still produce preconnect hint")
 tr3.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
     "cdn.example.com>; rel=preconnect",
-    "Genuine https://cdn.example.com/lib.js must still produce preconnect — not broken by fix")
+    "Genuine https://cdn.example.com/lib.js must still produce preconnect  -- not broken by fix")
 tr3.StillRunningAfter = microserver

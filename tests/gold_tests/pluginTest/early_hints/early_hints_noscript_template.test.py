@@ -1,5 +1,5 @@
 '''
-Test 103 Early Hints plugin — noscript and template content isolation
+Test 103 Early Hints plugin  -- noscript and template content isolation
 '''
 #  Licensed to the Apache Software Foundation (ASF) under one
 #  or more contributor license agreements.  See the NOTICE file
@@ -38,7 +38,7 @@ Test.ContinueOnFail = True
 
 microserver = Test.MakeOriginServer("microserver")
 
-# Page with link inside noscript only — no real hints
+# Page with link inside noscript only  -- no real hints
 NOSCRIPT_ONLY_PAGE = (
     "<html><head>"
     '<noscript><link rel="stylesheet" href="/noscript.css"></noscript>'
@@ -53,7 +53,7 @@ NOSCRIPT_PLUS_REAL_PAGE = (
     "</head><body>Mixed</body></html>\r\n"
 )
 
-# Page with link inside template only — no real hints
+# Page with link inside template only  -- no real hints
 TEMPLATE_ONLY_PAGE = (
     "<html><head>"
     '<template><link rel="preload" href="/template.js" as="script"></template>'
@@ -98,7 +98,7 @@ ts.Disk.records_config.update({
     'proxy.config.ssl.server.private_key.path': '{0}'.format(ts.Variables.SSLDir),
 })
 
-# ── TC0/1: Learn noscript-only page twice, verify no 103 sent ──────────────
+# -- TC0/1: Learn noscript-only page twice, verify no 103 sent --------------
 tr0 = Test.AddTestRun("noscript-template: Learn noscript-only (1)")
 tr0.Processes.Default.Command = (
     "curl -s -D - -o /dev/null --http2 --insecure "
@@ -122,12 +122,12 @@ tr1.Processes.Default.Command = (
     "sleep 1 ; curl -s -D - -o /dev/null --http2 --insecure "
     "'https://127.0.0.1:{0}/noscript_only.html'".format(ts.Variables.ssl_port))
 tr1.Processes.Default.ReturnCode = 0
-# No x-early-hints-status: sent — scanner must have found no learnable links
+# No x-early-hints-status: sent  -- scanner must have found no learnable links
 tr1.Processes.Default.Streams.stdout.Content = Testers.ExcludesExpression(
     "x-early-hints-status: sent", "no 103 should be sent for noscript-only page")
 tr1.StillRunningAfter = microserver
 
-# ── TC2/3: Mixed page — only real preload after noscript is extracted ───────
+# -- TC2/3: Mixed page  -- only real preload after noscript is extracted -------
 tr2 = Test.AddTestRun("noscript-template: Learn mixed noscript+real (1)")
 tr2.Processes.Default.Command = (
     "sleep 1 ; curl -s -D - -o /dev/null --http2 --insecure "
@@ -157,7 +157,7 @@ tr3.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
     "noscript.js", "noscript.js must NOT appear in 103 Link header")
 tr3.StillRunningAfter = microserver
 
-# ── TC4/5: Template-only page — no hints extracted ──────────────────────────
+# -- TC4/5: Template-only page  -- no hints extracted --------------------------
 tr4 = Test.AddTestRun("noscript-template: Learn template-only (1)")
 tr4.Processes.Default.Command = (
     "sleep 1 ; curl -s -D - -o /dev/null --http2 --insecure "

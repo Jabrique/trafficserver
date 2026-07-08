@@ -36,7 +36,7 @@
 #include <chrono>
 #include <cstring>
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// --- Helpers -----------------------------------------------------------------
 
 static std::vector<std::string>
 dos_scan(const std::string &html, int scan_limit = 131072, int max_links = 10)
@@ -62,9 +62,9 @@ dos_scan_byte_by_byte(const std::string &html, int scan_limit = 131072, int max_
   return scanner.get_links();
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// DoS VECTOR 1: CPU exhaustion — millions of <link> tags
-// ═════════════════════════════════════════════════════════════════════════════
+// -----------------------------------------------------------------------------
+// DoS VECTOR 1: CPU exhaustion  -- millions of <link> tags
+// -----------------------------------------------------------------------------
 //
 // Attack: An attacker sends a response with millions of valid <link> tags
 // attempting to keep the scanner busy indefinitely.
@@ -92,7 +92,7 @@ TEST_CASE("DoS: CPU exhaustion via mass link tags", "[dos][scanner]")
     scanner.feed(html.c_str(), static_cast<int64_t>(html.size()));
     auto elapsed = std::chrono::steady_clock::now() - start;
 
-    // Scanner must have stopped early — should NOT have extracted all 100 links
+    // Scanner must have stopped early  -- should NOT have extracted all 100 links
     CHECK(scanner.is_done());
     CHECK(scanner.get_links().size() < 100);
     // Must complete in well under 100ms even on slow hardware
@@ -113,7 +113,7 @@ TEST_CASE("DoS: CPU exhaustion via mass link tags", "[dos][scanner]")
     HtmlScanner scanner(scan_limit, max_links, &config);
     scanner.feed(html.c_str(), static_cast<int64_t>(html.size()));
 
-    // Must not exceed max_links — with 50 tags and max_links=5, should extract exactly 5
+    // Must not exceed max_links  -- with 50 tags and max_links=5, should extract exactly 5
     CHECK(scanner.get_links().size() == static_cast<size_t>(max_links));
   }
 
@@ -145,9 +145,9 @@ TEST_CASE("DoS: CPU exhaustion via mass link tags", "[dos][scanner]")
   }
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// DoS VECTOR 2: Memory exhaustion — response with many valid preload links
-// ═════════════════════════════════════════════════════════════════════════════
+// -----------------------------------------------------------------------------
+// DoS VECTOR 2: Memory exhaustion  -- response with many valid preload links
+// -----------------------------------------------------------------------------
 //
 // Attack: HTML with 10,000 valid preload links to balloon links_ vector.
 //
@@ -214,9 +214,9 @@ TEST_CASE("DoS: Memory exhaustion via link vector growth", "[dos][scanner]")
   }
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// DoS VECTOR 3: Cache flooding — requests to unique URLs
-// ═════════════════════════════════════════════════════════════════════════════
+// -----------------------------------------------------------------------------
+// DoS VECTOR 3: Cache flooding  -- requests to unique URLs
+// -----------------------------------------------------------------------------
 //
 // Attack: Attacker sends requests to /page1, /page2, ..., /page1000000 to
 // fill the cache with entries that will never be hit.
@@ -232,7 +232,7 @@ TEST_CASE("DoS: Cache flooding with unique URLs", "[dos][cache]")
     HintsCache cache(max_entries);
     std::vector<std::string> links = {"</app.js>; rel=preload; as=script"};
 
-    // Insert 200 unique keys — only 100 should be stored
+    // Insert 200 unique keys  -- only 100 should be stored
     for (int i = 0; i < 200; i++) {
       cache.put("/page" + std::to_string(i), links);
     }
@@ -266,7 +266,7 @@ TEST_CASE("DoS: Cache flooding with unique URLs", "[dos][cache]")
     }
     CHECK(cache.size() == 10);
 
-    // Insert more — oldest entries should be evicted to make room
+    // Insert more  -- oldest entries should be evicted to make room
     for (int i = 0; i < 20; i++) {
       cache.put("/new" + std::to_string(i), links);
     }
@@ -275,7 +275,7 @@ TEST_CASE("DoS: Cache flooding with unique URLs", "[dos][cache]")
 
   SECTION("make_key strips query strings to reduce cache key diversity")
   {
-    // Attacker tries /page?rand=1, /page?rand=2 — should all map to same key
+    // Attacker tries /page?rand=1, /page?rand=2  -- should all map to same key
     std::string key1 = HintsCache::make_key("/page?rand=1", 12);
     std::string key2 = HintsCache::make_key("/page?rand=2", 12);
     std::string key3 = HintsCache::make_key("/page?rand=99999", 16);
@@ -296,9 +296,9 @@ TEST_CASE("DoS: Cache flooding with unique URLs", "[dos][cache]")
   }
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// DoS VECTOR 4: Pathological input — O(n²) backtracking
-// ═════════════════════════════════════════════════════════════════════════════
+// -----------------------------------------------------------------------------
+// DoS VECTOR 4: Pathological input  -- O(n²) backtracking
+// -----------------------------------------------------------------------------
 //
 // Attack: Craft input that causes the state machine to repeatedly re-scan
 // the same data (e.g., repeated partial matches that reset).
@@ -310,7 +310,7 @@ TEST_CASE("DoS: Pathological patterns for O(n²) backtracking", "[dos][scanner]"
 {
   SECTION("repeated partial <head matches do not cause backtracking")
   {
-    // "<hea" repeated 100000 times — each time match_buf_ resets
+    // "<hea" repeated 100000 times  -- each time match_buf_ resets
     std::string html;
     for (int i = 0; i < 100000; i++) {
       html += "<hea";
@@ -328,7 +328,7 @@ TEST_CASE("DoS: Pathological patterns for O(n²) backtracking", "[dos][scanner]"
 
   SECTION("repeated <!-- almost-close sequences are O(n)")
   {
-    // "<!-- --X --X --X ... -->" — each --X resets comment_dashes_
+    // "<!-- --X --X --X ... -->"  -- each --X resets comment_dashes_
     std::string html = "<head><!-- ";
     for (int i = 0; i < 50000; i++) {
       html += "--X";
@@ -362,7 +362,7 @@ TEST_CASE("DoS: Pathological patterns for O(n²) backtracking", "[dos][scanner]"
 
   SECTION("alternating < characters do not cause quadratic scan")
   {
-    // "<" interspersed with random text — each '<' starts match_buf_
+    // "<" interspersed with random text  -- each '<' starts match_buf_
     // then next char kills it immediately
     std::string html = "<head>";
     for (int i = 0; i < 100000; i++) {
@@ -378,9 +378,9 @@ TEST_CASE("DoS: Pathological patterns for O(n²) backtracking", "[dos][scanner]"
   }
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// DoS VECTOR 5: Comment bomb — unclosed <!-- followed by megabytes
-// ═════════════════════════════════════════════════════════════════════════════
+// -----------------------------------------------------------------------------
+// DoS VECTOR 5: Comment bomb  -- unclosed <!-- followed by megabytes
+// -----------------------------------------------------------------------------
 //
 // Attack: Send "<!-- " followed by megabytes of padding with no "-->" close.
 // The scanner stays in IN_COMMENT state consuming bytes until scan_limit.
@@ -405,7 +405,7 @@ TEST_CASE("DoS: Comment bomb (unclosed comment with large payload)", "[dos][scan
 
     CHECK(scanner.is_done());
     CHECK(scanner.get_links().empty());
-    // Must stop quickly — not process all 1MB
+    // Must stop quickly  -- not process all 1MB
     CHECK(elapsed_ms < 500);
   }
 
@@ -423,13 +423,13 @@ TEST_CASE("DoS: Comment bomb (unclosed comment with large payload)", "[dos][scan
     HtmlScanner scanner(scan_limit, 100, &config);
     scanner.feed(html.c_str(), static_cast<int64_t>(html.size()));
 
-    // No links should be extracted — they're all inside a comment
+    // No links should be extracted  -- they're all inside a comment
     CHECK(scanner.get_links().empty());
   }
 
   SECTION("comment bomb with near-close patterns")
   {
-    // "<!-- --!--!--!..." — exercises comment end bang states repeatedly
+    // "<!-- --!--!--!..."  -- exercises comment end bang states repeatedly
     const int scan_limit = 4096;
     std::string html     = "<head><!-- ";
     for (int i = 0; i < 10000; i++) {
@@ -448,9 +448,9 @@ TEST_CASE("DoS: Comment bomb (unclosed comment with large payload)", "[dos][scan
   }
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// DoS VECTOR 6: Attribute bomb — tag with thousands of attributes
-// ═════════════════════════════════════════════════════════════════════════════
+// -----------------------------------------------------------------------------
+// DoS VECTOR 6: Attribute bomb  -- tag with thousands of attributes
+// -----------------------------------------------------------------------------
 //
 // Attack: <link attr1="..." attr2="..." ... attr10000="..." href="..." rel="preload" as="script">
 // Each attribute causes finish_attr() to run, and attr_value_ could grow large.
@@ -496,7 +496,7 @@ TEST_CASE("DoS: Attribute bomb (thousands of attributes per tag)", "[dos][scanne
     CHECK(links[0].find("/ok.js") != std::string::npos);
   }
 
-  SECTION("R6: unquoted oversized href causes tag rejection")
+  SECTION("unquoted oversized href causes tag rejection")
   {
     // Unquoted oversized values also cause rejection.
     std::string long_path = "/";
@@ -528,12 +528,12 @@ TEST_CASE("DoS: Attribute bomb (thousands of attributes per tag)", "[dos][scanne
   }
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// DoS VECTOR 7: Deeply nested HTML — repeated <head> tags
-// ═════════════════════════════════════════════════════════════════════════════
+// -----------------------------------------------------------------------------
+// DoS VECTOR 7: Deeply nested HTML  -- repeated <head> tags
+// -----------------------------------------------------------------------------
 //
-// Attack: <head><head><head>... — hundreds of nested opening tags.
-// The scanner is not a full parser — it doesn't track nesting depth.
+// Attack: <head><head><head>...  -- hundreds of nested opening tags.
+// The scanner is not a full parser  -- it doesn't track nesting depth.
 //
 // Defense: The state machine treats the first <head> as entering IN_HEAD
 // state. Subsequent <head> tags are treated as unknown tags inside <head>
@@ -596,9 +596,9 @@ TEST_CASE("DoS: Deeply nested HTML tags", "[dos][scanner]")
   }
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// DoS VECTOR 8: Slow loris — single-byte chunk feeding
-// ═════════════════════════════════════════════════════════════════════════════
+// -----------------------------------------------------------------------------
+// DoS VECTOR 8: Slow loris  -- single-byte chunk feeding
+// -----------------------------------------------------------------------------
 //
 // Attack: Feed the scanner one byte at a time to maximize per-call overhead.
 //
@@ -669,9 +669,9 @@ TEST_CASE("DoS: Slow loris (byte-at-a-time feeding)", "[dos][scanner]")
   }
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
+// -----------------------------------------------------------------------------
 // Combined stress tests
-// ═════════════════════════════════════════════════════════════════════════════
+// -----------------------------------------------------------------------------
 
 TEST_CASE("DoS: Combined stress scenarios", "[dos][combined]")
 {
@@ -759,7 +759,7 @@ TEST_CASE("DoS: Combined stress scenarios", "[dos][combined]")
 
   SECTION("script with escaped comments bomb")
   {
-    // <script> with <!-- ... --> cycling — exercises script_escaped_ toggling
+    // <script> with <!-- ... --> cycling  -- exercises script_escaped_ toggling
     std::string html = "<head><script>";
     for (int i = 0; i < 1000; i++) {
       html += "<!-- escaped -->";
@@ -773,9 +773,9 @@ TEST_CASE("DoS: Combined stress scenarios", "[dos][combined]")
   }
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
+// -----------------------------------------------------------------------------
 // Regression: ensure scan_limit and max_links edge values work
-// ═════════════════════════════════════════════════════════════════════════════
+// -----------------------------------------------------------------------------
 
 TEST_CASE("DoS: Edge values for limits", "[dos][edge]")
 {

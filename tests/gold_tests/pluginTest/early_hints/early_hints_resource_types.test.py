@@ -1,5 +1,5 @@
 '''
-Test 103 Early Hints plugin — HTML resource type handling
+Test 103 Early Hints plugin  -- HTML resource type handling
 '''
 #  Licensed to the Apache Software Foundation (ASF) under one
 #  or more contributor license agreements.  See the NOTICE file

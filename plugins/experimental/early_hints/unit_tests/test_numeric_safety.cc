@@ -42,15 +42,15 @@ parse_config_ns(EarlyHintsConfig &config, std::initializer_list<const char *> ar
   return config.init(argc, argv.data());
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // 1. scan_limit decrement: feed() with len > remaining scan budget
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 TEST_CASE("Numeric: scan_limit boundary in feed()", "[numeric][scanner]")
 {
   SECTION("feed chunk larger than scan_limit stops at limit")
   {
-    // scan_limit=50, feed 200 bytes — scanner must stop after 50 bytes
+    // scan_limit=50, feed 200 bytes  -- scanner must stop after 50 bytes
     EarlyHintsConfig config;
     HtmlScanner scanner(50, 10, &config);
 
@@ -137,29 +137,9 @@ TEST_CASE("Numeric: scan_limit boundary in feed()", "[numeric][scanner]")
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// 2. bytes_written overflow check (int64_t)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-TEST_CASE("Numeric: bytes_written is int64_t and safe for large values", "[numeric]")
-{
-  // This is a design verification test: bytes_written is int64_t (8 bytes),
-  // so it can hold values up to ~9.2 exabytes. We verify the type is correct.
-  SECTION("bytes_written type is int64_t (verified by compilation)")
-  {
-    // TransformData is internal to early_hints.cc, so we verify the principle:
-    // int64_t can accumulate up to INT64_MAX without overflow
-    int64_t bytes = 0;
-    bytes += INT64_MAX / 2;
-    bytes += INT64_MAX / 2;
-    // This should be INT64_MAX - 1 (no overflow)
-    CHECK(bytes == INT64_MAX - 1);
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // 3. safe_parse_int edge cases
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 TEST_CASE("Numeric: safe_parse_int boundary values", "[numeric][config]")
 {
@@ -238,9 +218,9 @@ TEST_CASE("Numeric: safe_parse_int boundary values", "[numeric][config]")
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // 4 & 5. avail - fed calculation safety (design verification)
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 TEST_CASE("Numeric: avail-fed subtraction safety in transform feed loop", "[numeric]")
 {
@@ -289,9 +269,9 @@ TEST_CASE("Numeric: avail-fed subtraction safety in transform feed loop", "[nume
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // 6. TSVIONDoneGet/Set int64_t arithmetic (design verification)
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 TEST_CASE("Numeric: VIO NDone accumulation overflow check", "[numeric]")
 {
@@ -310,9 +290,9 @@ TEST_CASE("Numeric: VIO NDone accumulation overflow check", "[numeric]")
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // 7. Cache entry count vs max_entries: signed/unsigned comparison
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 TEST_CASE("Numeric: HintsCache max_entries enforcement", "[numeric][cache]")
 {
@@ -388,9 +368,9 @@ TEST_CASE("Numeric: HintsCache max_entries enforcement", "[numeric][cache]")
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // 8. Entries persist without TTL
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 TEST_CASE("Numeric: Cache entries persist indefinitely", "[numeric][cache]")
 {
@@ -401,7 +381,7 @@ TEST_CASE("Numeric: Cache entries persist indefinitely", "[numeric][cache]")
 
     cache.put("/page", links);
 
-    // Multiple gets should always return the entry — no expiry
+    // Multiple gets should always return the entry  -- no expiry
     for (int i = 0; i < 100; i++) {
       std::vector<std::string> result;
       bool found = cache.get("/page", result, 1);
@@ -428,9 +408,9 @@ TEST_CASE("Numeric: Cache entries persist indefinitely", "[numeric][cache]")
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // 9. string::size_type vs int comparisons
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 TEST_CASE("Numeric: size_type to int casts in scanner", "[numeric][scanner]")
 {
@@ -477,23 +457,16 @@ TEST_CASE("Numeric: size_type to int casts in scanner", "[numeric][scanner]")
     std::string html = "<head><link rel=\"preload\" href=\"/" + long_href + "\" as=\"script\"></head>";
     scanner.feed(html.c_str(), static_cast<int64_t>(html.size()));
 
-    // The href is truncated to 4096 chars but still produces a link
-    // (it won't match any dangerous scheme, and is_safe_url allows long URLs)
+    // A 5000-char href exceeds MAX_ATTR_VALUE_LEN (4096), setting attr_overflowed_.
+    // The tag is rejected entirely  -- no link is emitted.
     auto links = scanner.get_links();
-    if (!links.empty()) {
-      // Verify the URL in the link header is at most 4096+1 chars (/ prefix + truncated)
-      size_t url_start = links[0].find('<');
-      size_t url_end   = links[0].find('>');
-      REQUIRE(url_start != std::string::npos);
-      REQUIRE(url_end != std::string::npos);
-      CHECK((url_end - url_start - 1) <= 4097); // </ + up to 4096 chars
-    }
+    CHECK(links.empty());
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // 10. comment_dashes_ range: can it go outside 0-6?
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 TEST_CASE("Numeric: comment_dashes_ stays in valid range 0-6", "[numeric][scanner]")
 {
@@ -572,9 +545,9 @@ TEST_CASE("Numeric: comment_dashes_ stays in valid range 0-6", "[numeric][scanne
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // Additional: HintsCache::make_key signed int edge cases
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 TEST_CASE("Numeric: HintsCache::make_key with edge-case path_len", "[numeric][cache]")
 {
@@ -591,9 +564,9 @@ TEST_CASE("Numeric: HintsCache::make_key with edge-case path_len", "[numeric][ca
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // Additional: request_count gate with many puts
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 TEST_CASE("Numeric: HintsCache request_count gates serving threshold independently of put() count", "[numeric][cache]")
 {
@@ -615,149 +588,11 @@ TEST_CASE("Numeric: HintsCache request_count gates serving threshold independent
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// Additional: config range boundary values (exact boundaries)
-// ═══════════════════════════════════════════════════════════════════════════════
+// Config range boundary values are covered in test_config.cc.
 
-TEST_CASE("Numeric: config exact boundary values", "[numeric][config]")
-{
-  SECTION("max-links=1 (minimum) accepted")
-  {
-    EarlyHintsConfig config;
-    CHECK(parse_config_ns(config, {"--max-links", "1"}));
-    CHECK(config.max_links() == 1);
-  }
-
-  SECTION("max-links=50 (maximum) accepted")
-  {
-    EarlyHintsConfig config;
-    CHECK(parse_config_ns(config, {"--max-links", "50"}));
-    CHECK(config.max_links() == 50);
-  }
-
-  SECTION("persist-dir accepted")
-  {
-    EarlyHintsConfig config;
-    CHECK(parse_config_ns(config, {"--persist-dir", "/tmp/hints/"}));
-    CHECK(config.persist_dir() == "/tmp/hints/");
-    CHECK(config.persist_enabled() == true);
-  }
-
-  SECTION("no-persist accepted")
-  {
-    EarlyHintsConfig config;
-    CHECK(parse_config_ns(config, {"--no-persist"}));
-    CHECK(config.persist_enabled() == false);
-  }
-
-  SECTION("header-size-limit=256 (minimum) accepted")
-  {
-    EarlyHintsConfig config;
-    CHECK(parse_config_ns(config, {"--header-size-limit", "256"}));
-    CHECK(config.header_size_limit() == 256);
-  }
-
-  SECTION("header-size-limit=16384 (maximum) accepted")
-  {
-    EarlyHintsConfig config;
-    CHECK(parse_config_ns(config, {"--header-size-limit", "16384"}));
-    CHECK(config.header_size_limit() == 16384);
-  }
-
-  SECTION("header-size-limit=255 (below minimum) rejected")
-  {
-    EarlyHintsConfig config;
-    CHECK_FALSE(parse_config_ns(config, {"--header-size-limit", "255"}));
-  }
-
-  SECTION("header-size-limit=16385 (above maximum) rejected")
-  {
-    EarlyHintsConfig config;
-    CHECK_FALSE(parse_config_ns(config, {"--header-size-limit", "16385"}));
-  }
-
-  SECTION("scan-limit=1024 (minimum) accepted")
-  {
-    EarlyHintsConfig config;
-    CHECK(parse_config_ns(config, {"--scan-limit", "1024"}));
-    CHECK(config.scan_limit() == 1024);
-  }
-
-  SECTION("scan-limit=1048576 (maximum) accepted")
-  {
-    EarlyHintsConfig config;
-    CHECK(parse_config_ns(config, {"--scan-limit", "1048576"}));
-    CHECK(config.scan_limit() == 1048576);
-  }
-
-  SECTION("scan-limit=1023 (below minimum) rejected")
-  {
-    EarlyHintsConfig config;
-    CHECK_FALSE(parse_config_ns(config, {"--scan-limit", "1023"}));
-  }
-
-  SECTION("scan-limit=1048577 (above maximum) rejected")
-  {
-    EarlyHintsConfig config;
-    CHECK_FALSE(parse_config_ns(config, {"--scan-limit", "1048577"}));
-  }
-
-  SECTION("min-hit-count=1 (minimum) accepted")
-  {
-    EarlyHintsConfig config;
-    CHECK(parse_config_ns(config, {"--min-hit-count", "1"}));
-    CHECK(config.min_hit_count() == 1);
-  }
-
-  SECTION("min-hit-count=1000 (maximum) accepted")
-  {
-    EarlyHintsConfig config;
-    CHECK(parse_config_ns(config, {"--min-hit-count", "1000"}));
-    CHECK(config.min_hit_count() == 1000);
-  }
-
-  SECTION("min-hit-count=0 (below minimum) rejected")
-  {
-    EarlyHintsConfig config;
-    CHECK_FALSE(parse_config_ns(config, {"--min-hit-count", "0"}));
-  }
-
-  SECTION("min-hit-count=1001 (above maximum) rejected")
-  {
-    EarlyHintsConfig config;
-    CHECK_FALSE(parse_config_ns(config, {"--min-hit-count", "1001"}));
-  }
-
-  SECTION("max-cache-entries=100 (minimum) accepted")
-  {
-    EarlyHintsConfig config;
-    CHECK(parse_config_ns(config, {"--max-cache-entries", "100"}));
-    CHECK(config.max_cache_entries() == 100);
-  }
-
-  SECTION("max-cache-entries=1000000 (maximum) accepted")
-  {
-    EarlyHintsConfig config;
-    CHECK(parse_config_ns(config, {"--max-cache-entries", "1000000"}));
-    CHECK(config.max_cache_entries() == 1000000);
-  }
-
-  SECTION("max-cache-entries=0 (below minimum) rejected")
-  {
-    EarlyHintsConfig config;
-    CHECK_FALSE(parse_config_ns(config, {"--max-cache-entries", "0"}));
-  }
-
-  SECTION("max-cache-entries=1000001 (above maximum) rejected")
-  {
-    EarlyHintsConfig config;
-    CHECK_FALSE(parse_config_ns(config, {"--max-cache-entries", "1000001"}));
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // Additional: HintsCache shared_ptr get() returns ref-counted ptr safely
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 TEST_CASE("Numeric: HintsCache hit_count increments on get()", "[numeric][cache]")
 {
@@ -774,9 +609,9 @@ TEST_CASE("Numeric: HintsCache hit_count increments on get()", "[numeric][cache]
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // Additional: scanner reset clears numeric state
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 TEST_CASE("Numeric: scanner reset clears scanned counter", "[numeric][scanner]")
 {

@@ -1,5 +1,5 @@
 '''
-Test 103 Early Hints plugin — advanced scanning scenarios
+Test 103 Early Hints plugin  -- advanced scanning scenarios
 '''
 #  Licensed to the Apache Software Foundation (ASF) under one
 #  or more contributor license agreements.  See the NOTICE file
@@ -87,7 +87,7 @@ microserver.addResponse(
             '</head><body>Charset test</body></html>\r\n'
     })
 
-# Content-Encoding: identity test (scanner should still run — identity = uncompressed)
+# Content-Encoding: identity test (scanner should still run  -- identity = uncompressed)
 microserver.addResponse(
     "sessionfile.log", {
         "headers": "GET /identity.html HTTP/1.1\r\nHost: www.example.com\r\n\r\n",
@@ -135,7 +135,7 @@ ts.Disk.remap_config.AddLines([
     ' @pparam=--no-navigate-only'
     ' @pparam=--debug-header @pparam=X-Early-Hints-Status',
 
-    # Cross-origin: no whitelist — external URLs become preconnect
+    # Cross-origin: no whitelist  -- external URLs become preconnect
     'map /crossorigin.html http://127.0.0.1:{0}/crossorigin.html'.format(microserver.Variables.Port) +
     ' @plugin=early_hints.so'
     ' @pparam=--mode @pparam=auto-learn'

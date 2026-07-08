@@ -2,7 +2,7 @@
  * Streaming HTML <head> scanner for auto-learning preloadable resources.
  *
  * Extracts preloadable resources from HTML <head> via a byte-by-byte state machine.
- * NOT a full HTML parser — optimized for speed and safety.
+ * NOT a full HTML parser  -- optimized for speed and safety.
  *
  * What it extracts:
  * - <link rel="preload" href="..." as="...">
@@ -111,12 +111,12 @@ HtmlScanner::is_safe_url(const std::string &url)
   for (char c : url) {
     unsigned char uc = static_cast<unsigned char>(c);
     // Reject control characters (CRLF injection, null bytes) and space (0x20).
-    // Space breaks HTTP header framing — the Link header value is whitespace-delimited
+    // Space breaks HTTP header framing  -- the Link header value is whitespace-delimited
     // in many parsers, and RFC 3986 §2 disallows unencoded spaces in URIs.
     if (uc <= 0x20 || uc == 0x7F) {
       return false;
     }
-    // Reject Link header delimiters — '>' terminates the URI-Reference in
+    // Reject Link header delimiters  -- '>' terminates the URI-Reference in
     // RFC 8288 and '<' could start a nested link-value.  Allowing either
     // character lets an attacker break out of the URL portion and inject
     // arbitrary Link header parameters or additional link-values.
@@ -126,7 +126,7 @@ HtmlScanner::is_safe_url(const std::string &url)
   }
 
   // Allowlist approach: only permit http:, https:, and relative URLs.
-  // A denylist (blocking javascript:, data:, etc.) is fragile — any new or
+  // A denylist (blocking javascript:, data:, etc.) is fragile  -- any new or
   // exotic scheme (file:, ftp:, feed:javascript:, jar:, view-source:, etc.)
   // bypasses the filter.  An allowlist is inherently safe against unknown schemes.
   //
@@ -158,12 +158,12 @@ HtmlScanner::is_safe_url(const std::string &url)
       }
       // Valid scheme chars: ALPHA / DIGIT / "+" / "-" / "."
       if (!std::isalnum(static_cast<unsigned char>(c)) && c != '+' && c != '-' && c != '.') {
-        break; // Not a valid scheme char — URL has no scheme (relative URL)
+        break; // Not a valid scheme char  -- URL has no scheme (relative URL)
       }
     }
   }
 
-  // No scheme found — relative URL (e.g., "/app.js", "images/foo.png").
+  // No scheme found  -- relative URL (e.g., "/app.js", "images/foo.png").
   // However, reject backslash-based authority references: browsers with "special"
   // schemes (http/https) treat '\' as '/' per WHATWG URL spec §4.2, so
   // \\evil.com, \/evil.com, and /\evil.com all resolve as cross-origin.
@@ -172,7 +172,7 @@ HtmlScanner::is_safe_url(const std::string &url)
     char c0 = s[0];
     char c1 = s[1];
     if ((c0 == '\\' && (c1 == '\\' || c1 == '/')) || (c0 == '/' && c1 == '\\')) {
-      return false; // backslash authority reference — cross-origin evasion
+      return false; // backslash authority reference  -- cross-origin evasion
     }
   }
 
@@ -198,24 +198,24 @@ HtmlScanner::is_crossorigin(const std::string &href)
   //   scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ) ":"
   // We require the scheme to start from the beginning of the URL.
   // This prevents false positives when "://" appears inside a query string,
-  // e.g. /proxy?url=https://cdn.example.com — that is a same-origin URL.
+  // e.g. /proxy?url=https://cdn.example.com  -- that is a same-origin URL.
   const char *s = href.c_str();
   size_t n      = href.size();
   if (n > 0 && std::isalpha(static_cast<unsigned char>(s[0]))) {
     for (size_t i = 1; i < n; i++) {
       char c = s[i];
       if (c == ':' && i + 2 < n && s[i + 1] == '/' && s[i + 2] == '/') {
-        // Found scheme:// starting from position 0 — this is cross-origin.
+        // Found scheme:// starting from position 0  -- this is cross-origin.
         return true;
       }
       // Valid scheme chars: ALPHA / DIGIT / "+" / "-" / "."
       if (!std::isalnum(static_cast<unsigned char>(c)) && c != '+' && c != '-' && c != '.') {
-        break; // Not a scheme char — no scheme at start, relative URL
+        break; // Not a scheme char  -- no scheme at start, relative URL
       }
     }
   }
 
-  // Relative URL (path starts with /, relative path, or :// only in query) — same-origin
+  // Relative URL (path starts with /, relative path, or :// only in query)  -- same-origin
   return false;
 }
 
@@ -236,7 +236,7 @@ HtmlScanner::extract_origin(const std::string &url)
   // RFC 3986 §3.1 scheme detection: scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ) "://"
   // Only recognize scheme:// when it starts from position 0 of the URL (ALPHA at pos 0).
   // This prevents false positives when :// appears inside a query string or path,
-  // e.g. /proxy?url=https://cdn.example.com — that is a relative (same-origin) URL,
+  // e.g. /proxy?url=https://cdn.example.com  -- that is a relative (same-origin) URL,
   // NOT an absolute URL with scheme "proxy?url=https".
   //
   // Naive url.find("://") would return 16 for /proxy?url=https://... and incorrectly
@@ -246,13 +246,13 @@ HtmlScanner::extract_origin(const std::string &url)
     for (size_t i = 1; i < url.size(); i++) {
       char c = url[i];
       if (c == ':' && i + 2 < url.size() && url[i + 1] == '/' && url[i + 2] == '/') {
-        // Found scheme:// starting at position 0 — valid absolute URL
+        // Found scheme:// starting at position 0  -- valid absolute URL
         scheme_end = i;
         break;
       }
       // Valid scheme chars per RFC 3986 §3.1: ALPHA / DIGIT / "+" / "-" / "."
       if (!std::isalnum(static_cast<unsigned char>(c)) && c != '+' && c != '-' && c != '.') {
-        break; // Not a valid scheme char — no scheme at start, relative URL
+        break; // Not a valid scheme char  -- no scheme at start, relative URL
       }
     }
   }
@@ -270,7 +270,7 @@ HtmlScanner::extract_origin(const std::string &url)
       }
       return "https:" + normalized.substr(0, auth_end);
     }
-    // Relative URL (path, query-only, etc.) — return as-is.
+    // Relative URL (path, query-only, etc.)  -- return as-is.
     // Callers must NOT call extract_origin for relative URLs; is_crossorigin()
     // guards this. If called anyway (defensive), return url unchanged.
     return url;
@@ -312,7 +312,7 @@ HtmlScanner::finish_attr()
           val == "video" || val == "worker" || val == "sharedworker") {
         as_ = val;
       }
-      // Unknown/malicious value — leave as_ empty (dropped).
+      // Unknown/malicious value  -- leave as_ empty (dropped).
     }
   } else if (name == "type") {
     if (type_.empty()) {
@@ -332,7 +332,7 @@ HtmlScanner::finish_attr()
     if (crossorigin_value_.empty()) {
       // Per HTML spec §2.5.3 only two enumerated states are valid:
       // "anonymous" (the default, including empty-string) and "use-credentials".
-      // Any other value — including misspellings — maps to "anonymous".
+      // Any other value  -- including misspellings  -- maps to "anonymous".
       std::string cv     = attr_value_.empty() ? "anonymous" : tolower_str(attr_value_);
       crossorigin_value_ = (cv == "use-credentials") ? "use-credentials" : "anonymous";
     }
@@ -341,9 +341,9 @@ HtmlScanner::finish_attr()
       fetchpriority_ = tolower_str(attr_value_);
     }
   } else if (name == "async") {
-    has_async_ = true; // boolean presence attr — no first-wins guard needed
+    has_async_ = true; // boolean presence attr  -- no first-wins guard needed
   } else if (name == "defer") {
-    has_defer_ = true; // boolean presence attr — no first-wins guard needed
+    has_defer_ = true; // boolean presence attr  -- no first-wins guard needed
   }
 
   attr_name_.clear();
@@ -396,7 +396,7 @@ HtmlScanner::build_link_header(const std::string &tag)
           // so we omit crossorigin to avoid establishing the wrong connection pool.
           result = "<" + origin + ">; rel=preconnect";
           if (as_ == "font") {
-            // Font: always CORS — preconnect must carry crossorigin so the browser reuses
+            // Font: always CORS  -- preconnect must carry crossorigin so the browser reuses
             // this connection for the subsequent CORS font fetch instead of opening a new one.
             crossorigin_value_ = "anonymous";
           } else {
@@ -434,7 +434,7 @@ HtmlScanner::build_link_header(const std::string &tag)
           as_    = "style";
           crossorigin_value_.clear();
         } else {
-          // Non-whitelisted: preconnect only — crossorigin not valid on preconnect
+          // Non-whitelisted: preconnect only  -- crossorigin not valid on preconnect
           result = "<" + origin + ">; rel=preconnect";
           crossorigin_value_.clear();
         }
@@ -464,7 +464,7 @@ HtmlScanner::build_link_header(const std::string &tag)
           result = "<" + href_ + ">; rel=modulepreload";
           crossorigin_value_.clear();
         } else {
-          // Non-whitelisted: preconnect only — module scripts are always CORS-fetched
+          // Non-whitelisted: preconnect only  -- module scripts are always CORS-fetched
           // (HTML spec §8.1.4.2), so the preconnect MUST carry crossorigin=anonymous
           // to establish a CORS-capable connection (same requirement as rel=preload as=font).
           result             = "<" + origin + ">; rel=preconnect";
@@ -557,7 +557,7 @@ HtmlScanner::build_link_header(const std::string &tag)
   const bool is_preload_hint =
     (result.find("rel=preload") != std::string::npos || result.find("rel=modulepreload") != std::string::npos);
 
-  // Append type attribute — validate as "type/subtype" MIME structure before
+  // Append type attribute  -- validate as "type/subtype" MIME structure before
   // emitting. A MIME type without a "/" separator (e.g. type="font") is invalid
   // and must not be forwarded as a Link hint. Also reject empty, leading-slash,
   // and trailing-slash values.
@@ -570,7 +570,7 @@ HtmlScanner::build_link_header(const std::string &tag)
     }
   }
 
-  // Append crossorigin — RFC 8288 §3 requires all link-params to use
+  // Append crossorigin  -- RFC 8288 §3 requires all link-params to use
   // token "=" (token / quoted-string) form; bare "; crossorigin" without
   // a value is not valid.
   if (!crossorigin_value_.empty()) {
@@ -582,7 +582,7 @@ HtmlScanner::build_link_header(const std::string &tag)
   }
 
   // Append fetchpriority (Chrome 101+ Fetch Priority API).
-  // This attribute is only meaningful on preload hints — omit it from preconnect.
+  // This attribute is only meaningful on preload hints  -- omit it from preconnect.
   if (!fetchpriority_.empty() && is_preload_hint &&
       (fetchpriority_ == "high" || fetchpriority_ == "low" || fetchpriority_ == "auto")) {
     result += "; fetchpriority=" + fetchpriority_;
@@ -645,7 +645,7 @@ HtmlScanner::process_tag()
 }
 
 // Determine next state after processing an opening tag.
-// <script> and <style> are raw text elements per HTML spec §13.1.2.6 —
+// <script> and <style> are raw text elements per HTML spec §13.1.2.6  --
 // skip body until the matching closing tag.
 HtmlScanner::State
 HtmlScanner::state_after_open_tag()
@@ -674,7 +674,7 @@ HtmlScanner::state_after_open_tag()
     script_comment_pos_ = 0;
     return State::IN_SCRIPT;
   }
-  // <template> contains inert DOM — it is never rendered or fetched on page load.
+  // <template> contains inert DOM  -- it is never rendered or fetched on page load.
   // Resources referenced inside it must not be pre-fetched via Early Hints.
   if (tag_name_.size() == 8 && strncasecmp(tag_name_.c_str(), "template", 8) == 0) {
     raw_close_pos_      = 0;
@@ -742,7 +742,7 @@ HtmlScanner::feed(const char *data, int64_t length)
           match_buf_ += c;
         }
         if (match_buf_.size() <= 5) {
-          // Building up: <head or <HEAD etc. — compare without allocation
+          // Building up: <head or <HEAD etc.  -- compare without allocation
           static const char head_tag[] = "<head";
           if (std::tolower(static_cast<unsigned char>(c)) != head_tag[match_buf_.size() - 1]) {
             match_buf_.clear();
@@ -755,9 +755,9 @@ HtmlScanner::feed(const char *data, int64_t length)
             state_ = State::IN_HEAD;
             match_buf_.clear();
           } else if (std::isspace(static_cast<unsigned char>(c))) {
-            // <head ...> with attributes — keep scanning for >
+            // <head ...> with attributes  -- keep scanning for >
           } else {
-            // <header> or other — not a <head> tag
+            // <header> or other  -- not a <head> tag
             match_buf_.clear();
           }
         } else {
@@ -790,7 +790,7 @@ HtmlScanner::feed(const char *data, int64_t length)
           match_buf_ += c;
         } else if (match_buf_ == "<!" && c != '-') {
           // Per HTML spec §13.2.5.42: <![CDATA[, <!DOCTYPE, etc. in HTML
-          // context are "bogus comments" — skip everything until next '>'.
+          // context are "bogus comments"  -- skip everything until next '>'.
           if (c == '>') {
             // Immediately closed: <!x>
             match_buf_.clear();
@@ -833,7 +833,7 @@ HtmlScanner::feed(const char *data, int64_t length)
             in_closing_tag_ = false;
           }
         } else {
-          // Unexpected sequence (e.g., <!D for doctype inside head) — skip
+          // Unexpected sequence (e.g., <!D for doctype inside head)  -- skip
           match_buf_.clear();
           in_closing_tag_ = false;
         }
@@ -957,7 +957,7 @@ HtmlScanner::feed(const char *data, int64_t length)
             raw_close_pos_ = (c == '<') ? 1 : 0;
           }
         } else if (raw_close_pos_ == tag_len) {
-          // Matched full close-tag name in escaped mode — check for valid separator.
+          // Matched full close-tag name in escaped mode  -- check for valid separator.
           if (c == '>') {
             state_              = State::IN_HEAD;
             script_escaped_     = false;
@@ -984,7 +984,7 @@ HtmlScanner::feed(const char *data, int64_t length)
         break;
       }
 
-      // Not escaped — track both <!-- (comment open) and </script> (close tag).
+      // Not escaped  -- track both <!-- (comment open) and </script> (close tag).
       // Per HTML spec §13.2.6.4: '<' branches to either path:
       //   '<' + '/' → close-tag matching
       //   '<' + '!' → comment-open matching (then need --)
@@ -1010,7 +1010,7 @@ HtmlScanner::feed(const char *data, int64_t length)
         if (script_comment_pos_ == 1 && c == '-') {
           script_comment_pos_ = 2; // "<!-"
         } else if (script_comment_pos_ == 2 && c == '-') {
-          // "<!--" complete — enter escaped mode
+          // "<!--" complete  -- enter escaped mode
           script_escaped_     = true;
           script_comment_pos_ = 0;
         } else {
@@ -1027,7 +1027,7 @@ HtmlScanner::feed(const char *data, int64_t length)
           raw_close_pos_ = (c == '<') ? 1 : 0;
         }
       } else if (raw_close_pos_ == tag_len) {
-        // Matched full close tag name — next char determines if valid end tag.
+        // Matched full close tag name  -- next char determines if valid end tag.
         // Per HTML spec §13.2.6.3: tab/LF/FF/space, '/', '>' are valid.
         if (c == '>') {
           state_              = State::IN_HEAD;
@@ -1060,7 +1060,7 @@ HtmlScanner::feed(const char *data, int64_t length)
           tag_name_ += c;
         }
       } else if (c == '>') {
-        // Tag closed — check if it's </head>
+        // Tag closed  -- check if it's </head>
         if (in_closing_tag_) {
           if (tag_name_.size() == 4 && strncasecmp(tag_name_.c_str(), "head", 4) == 0) {
             state_ = State::DONE;
@@ -1121,7 +1121,7 @@ HtmlScanner::feed(const char *data, int64_t length)
         }
       } else if (std::isspace(static_cast<unsigned char>(c))) {
         if (!attr_name_.empty()) {
-          // Space after attr name — could be boolean attr OR space before '='
+          // Space after attr name  -- could be boolean attr OR space before '='
           // Transition to IN_ATTR_SEP to disambiguate
           state_ = State::IN_ATTR_SEP;
         }
@@ -1162,9 +1162,9 @@ HtmlScanner::feed(const char *data, int64_t length)
           state_ = next;
         }
       } else if (std::isspace(static_cast<unsigned char>(c))) {
-        // More whitespace — keep waiting
+        // More whitespace  -- keep waiting
       } else {
-        // New attribute name started — previous was boolean
+        // New attribute name started  -- previous was boolean
         attr_value_.clear();
         finish_attr();
         attr_name_.clear();
@@ -1180,7 +1180,7 @@ HtmlScanner::feed(const char *data, int64_t length)
           quote_char_ = c;
         } else if (std::isspace(static_cast<unsigned char>(c))) {
           if (attr_value_.empty()) {
-            // Leading whitespace after '=' — skip (HTML spec §13.1.2.3)
+            // Leading whitespace after '='  -- skip (HTML spec §13.1.2.3)
           } else {
             // Unquoted attribute value ended
             finish_attr();
@@ -1211,7 +1211,7 @@ HtmlScanner::feed(const char *data, int64_t length)
           if (static_cast<int>(attr_value_.size()) < MAX_ATTR_VALUE_LEN) {
             attr_value_ += c;
           } else {
-            // Value exceeds limit — mark tag as tainted so the whole tag is rejected.
+            // Value exceeds limit  -- mark tag as tainted so the whole tag is rejected.
             // Silently truncating would emit a corrupt URL in the Link header.
             attr_overflowed_ = true;
           }
@@ -1228,7 +1228,7 @@ HtmlScanner::feed(const char *data, int64_t length)
           if (static_cast<int>(attr_value_.size()) < MAX_ATTR_VALUE_LEN) {
             attr_value_ += c;
           } else {
-            // Value exceeds limit — mark tag as tainted.
+            // Value exceeds limit  -- mark tag as tainted.
             attr_overflowed_ = true;
           }
         }

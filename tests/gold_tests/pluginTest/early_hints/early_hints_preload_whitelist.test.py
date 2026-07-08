@@ -1,5 +1,5 @@
 '''
-Test 103 Early Hints plugin — --preload-whitelist (no-CORS cross-origin preload)
+Test 103 Early Hints plugin  -- --preload-whitelist (no-CORS cross-origin preload)
 '''
 #  Licensed to the Apache Software Foundation (ASF) under one
 #  or more contributor license agreements.  See the NOTICE file
@@ -80,7 +80,7 @@ microserver.addResponse(
             '</head><body>Both whitelists test</body></html>\r\n'
     })
 
-# Test 4: HTML with unwhitelisted cross-origin (should still be preconnect — no regression)
+# Test 4: HTML with unwhitelisted cross-origin (should still be preconnect  -- no regression)
 microserver.addResponse(
     "sessionfile.log", {
         "headers": "GET /no-wl.html HTTP/1.1\r\nHost: www.example.com\r\n\r\n",
@@ -180,7 +180,7 @@ tr1.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
 tr1.StillRunningAfter = microserver
 
 # ====================================================================
-# TR2: Preload whitelist — H2 103 from cache with correct preloads
+# TR2: Preload whitelist  -- H2 103 from cache with correct preloads
 # ====================================================================
 tr2 = Test.AddTestRun("Preload whitelist H2: 103 sent with no-CORS preloads from cache")
 tr2.Processes.Default.Command = (

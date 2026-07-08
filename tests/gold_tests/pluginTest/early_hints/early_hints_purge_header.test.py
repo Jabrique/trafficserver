@@ -1,5 +1,5 @@
 '''
-Test 103 Early Hints plugin — purge header invalidation
+Test 103 Early Hints plugin  -- purge header invalidation
 '''
 #  Licensed to the Apache Software Foundation (ASF) under one
 #  or more contributor license agreements.  See the NOTICE file
@@ -49,7 +49,7 @@ microserver.addResponse(
     })
 
 # ----
-# Setup ATS (cache disabled — every request hits origin so scanner always runs)
+# Setup ATS (cache disabled  -- every request hits origin so scanner always runs)
 # ----
 ts = Test.MakeATSProcess("ts", select_ports=True, enable_tls=True, enable_cache=False)
 
@@ -81,9 +81,9 @@ ts.Disk.records_config.update({
 })
 
 # ----
-# TR1: H1 request — scanner learns /style.css (first learn, request_count = 0→1)
+# TR1: H1 request  -- scanner learns /style.css (first learn, request_count = 0→1)
 # ----
-tr1 = Test.AddTestRun("Purge: H1 request 1 — scanner learns /style.css")
+tr1 = Test.AddTestRun("Purge: H1 request 1  -- scanner learns /style.css")
 tr1.Processes.Default.Command = (
     "curl -s -D - -o /dev/null"
     " --http1.1"
@@ -99,9 +99,9 @@ tr1.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr1.StillRunningAfter = microserver
 
 # ----
-# TR2: H2 request — no purge header → entry intact → 103 sent (rc=1 >= 1)
+# TR2: H2 request  -- no purge header → entry intact → 103 sent (rc=1 >= 1)
 # ----
-tr2 = Test.AddTestRun("Purge: H2 request without purge header — 103 sent (intact)")
+tr2 = Test.AddTestRun("Purge: H2 request without purge header  -- 103 sent (intact)")
 tr2.Processes.Default.Command = (
     "sleep 1 && curl -s -D - -o /dev/null"
     " --http2"
@@ -115,9 +115,9 @@ tr2.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr2.StillRunningAfter = microserver
 
 # ----
-# TR3: H2 request with WRONG token — entry intact → 103 still sent
+# TR3: H2 request with WRONG token  -- entry intact → 103 still sent
 # ----
-tr3 = Test.AddTestRun("Purge: H2 request with wrong token — hints intact → 103 still sent")
+tr3 = Test.AddTestRun("Purge: H2 request with wrong token  -- hints intact → 103 still sent")
 tr3.Processes.Default.Command = (
     "sleep 1 && curl -s -D - -o /dev/null"
     " --http2"
@@ -133,9 +133,9 @@ tr3.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr3.StillRunningAfter = microserver
 
 # ----
-# TR4: H2 request with CORRECT token — entry removed → no 103, scanner re-learns
+# TR4: H2 request with CORRECT token  -- entry removed → no 103, scanner re-learns
 # ----
-tr4 = Test.AddTestRun("Purge: H2 request with correct token — entry removed → no 103 this request")
+tr4 = Test.AddTestRun("Purge: H2 request with correct token  -- entry removed → no 103 this request")
 tr4.Processes.Default.Command = (
     "sleep 1 && curl -s -D - -o /dev/null"
     " --http2"
@@ -152,9 +152,9 @@ tr4.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr4.StillRunningAfter = microserver
 
 # ----
-# TR5: H2 request after purge — scanner re-learned on TR4 → 103 served again
+# TR5: H2 request after purge  -- scanner re-learned on TR4 → 103 served again
 # ----
-tr5 = Test.AddTestRun("Purge: H2 request after re-learn — 103 served again")
+tr5 = Test.AddTestRun("Purge: H2 request after re-learn  -- 103 served again")
 tr5.Processes.Default.Command = (
     "sleep 1 && curl -s -D - -o /dev/null"
     " --http2"

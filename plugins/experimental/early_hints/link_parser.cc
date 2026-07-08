@@ -38,7 +38,7 @@ split_link_header_value(const std::string &header_value, int max_links)
         // Even (incl. 0) = real delimiter.  consecutive_backslashes was tracked
         // forward as we scanned, so this check is O(1).
         if (in_quotes && (consecutive_backslashes % 2) != 0) {
-          // Escaped quote — do not toggle
+          // Escaped quote  -- do not toggle
         } else {
           in_quotes = !in_quotes;
         }

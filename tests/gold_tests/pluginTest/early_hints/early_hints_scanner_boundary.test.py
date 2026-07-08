@@ -1,5 +1,5 @@
 '''
-Test 103 Early Hints plugin — HTML scanner boundary correctness.
+Test 103 Early Hints plugin  -- HTML scanner boundary correctness.
 
 Covers:
   - An href of exactly "//" (degenerate protocol-relative URL, no host)
@@ -34,11 +34,11 @@ Test.SkipUnless(
 Test.testName = "early_hints_scanner_boundary"
 Test.ContinueOnFail = True
 
-# ─── Origin server ────────────────────────────────────────────────────────────
+# --- Origin server ------------------------------------------------------------
 
 ms = Test.MakeOriginServer("ms")
 
-# Page with href="//" — a degenerate protocol-relative URL with no host.
+# Page with href="//"  -- a degenerate protocol-relative URL with no host.
 # The scanner must detect this as cross-origin (size >= 2 fix) and
 # not emit a preload hint since no CDN whitelist is configured.
 ms.addResponse(
@@ -50,14 +50,14 @@ ms.addResponse(
         "body": '<html><head><link rel="preload" href="//" as="script"></head></html>\r\n'
     })
 
-# ─── ATS setup ────────────────────────────────────────────────────────────────
+# --- ATS setup ----------------------------------------------------------------
 
 ts = Test.MakeATSProcess("ts", select_ports=True, enable_tls=True, enable_cache=False)
 
 ts.addDefaultSSLFiles()
 ts.Disk.ssl_multicert_config.AddLine('dest_ip=* ssl_cert_name=server.pem ssl_key_name=server.key')
 
-# auto-learn mode, no crossorigin whitelist — "//" should produce no hint
+# auto-learn mode, no crossorigin whitelist  -- "//" should produce no hint
 ts.Disk.remap_config.AddLine(
     'map / http://127.0.0.1:{0}/'.format(ms.Variables.Port) +
     ' @plugin=early_hints.so'
@@ -75,9 +75,9 @@ ts.Disk.records_config.update({
     'proxy.config.http2.active_timeout_in': 3,
 })
 
-# ─── TC-1: First request — learn page (scanner runs) ─────────────────────────
+# --- Learn phase: First request  -- scanner runs ---------------------------------
 
-tr1 = Test.AddTestRun("Slash-slash href: first request — scanner runs, learns page")
+tr1 = Test.AddTestRun("Slash-slash href: first request  -- scanner runs, learns page")
 tr1.Processes.Default.Command = (
     "curl -s -D - -o /dev/null"
     " --http1.1 --insecure"
@@ -89,9 +89,9 @@ tr1.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "200", "Should receive 200 OK")
 tr1.StillRunningAfter = ms
 
-# ─── TC-2: Second H2 request — must NOT emit broken <//>  preload hint ────────
+# --- Verify phase: Second H2 request  -- must NOT emit broken <//> preload hint --
 
-tr2 = Test.AddTestRun('Slash-slash href: second H2 request — no broken <//>  hint emitted')
+tr2 = Test.AddTestRun('Slash-slash href: second H2 request  -- no broken <//>  hint emitted')
 tr2.Processes.Default.Command = (
     "curl -s -D - -o /dev/null"
     " --http2 --insecure"

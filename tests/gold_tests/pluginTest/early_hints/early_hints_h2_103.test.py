@@ -1,5 +1,5 @@
 '''
-Test 103 Early Hints plugin — HTTP/2 103 response verification
+Test 103 Early Hints plugin  -- HTTP/2 103 response verification
 '''
 #  Licensed to the Apache Software Foundation (ASF) under one
 #  or more contributor license agreements.  See the NOTICE file
@@ -118,7 +118,7 @@ ts.Disk.records_config.update({
 })
 
 # ----
-# Test Case 0: H2 manual hints — nghttp sees 103 HEADERS frame
+# Test Case 0: H2 manual hints  -- nghttp sees 103 HEADERS frame
 # nghttp -v shows all H2 frames including informational 103 responses.
 # ----
 tr1 = Test.AddTestRun("H2 manual hints - 103 HEADERS frame via nghttp")
@@ -176,7 +176,7 @@ tr3.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr3.StillRunningAfter = microserver
 
 # ----
-# Test Case 3: Auto-learn over H2 — first request learns, no 103 (no cached hints yet)
+# Test Case 3: Auto-learn over H2  -- first request learns, no 103 (no cached hints yet)
 # ----
 tr4 = Test.AddTestRun("H2 auto-learn first request - no 103 yet")
 tr4.Processes.Default.Command = (
@@ -193,7 +193,7 @@ tr4.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr4.StillRunningAfter = microserver
 
 # ----
-# Test Case 4: Auto-learn over H2 — second request gets 103 with learned hints
+# Test Case 4: Auto-learn over H2  -- second request gets 103 with learned hints
 # ----
 tr5 = Test.AddTestRun("H2 auto-learn second request - 103 with learned hints")
 tr5.Processes.Default.Command = (
@@ -232,7 +232,7 @@ tr6.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
 tr6.StillRunningAfter = microserver
 
 # ----
-# Test Case 6: Origin-forward dedup — origin sends duplicate Link headers
+# Test Case 6: Origin-forward dedup  -- origin sends duplicate Link headers
 #
 # When origin returns the same Link header field twice (e.g. a mis-configured
 # origin or middleware that appends headers idempotently), the plugin must store
@@ -240,11 +240,11 @@ tr6.StillRunningAfter = microserver
 # contains only what the plugin injected from cache, so counting "link:" lines
 # in the 103 frame shows whether dedup worked.
 #
-# Step 1 — H1 warm-up: learn the (duplicate) origin headers and populate cache.
-# Step 2 — H2 verify:  nghttp output filtered to the 103 frame must show
+# Step 1  -- H1 warm-up: learn the (duplicate) origin headers and populate cache.
+# Step 2  -- H2 verify:  nghttp output filtered to the 103 frame must show
 #           exactly 1 "link:" entry for </cdn/app.js> (not 2).
 # ----
-tr_dedup_learn = Test.AddTestRun("Origin-forward dedup: warm-up request — learn duplicate origin Link headers")
+tr_dedup_learn = Test.AddTestRun("Origin-forward dedup: warm-up request  -- learn duplicate origin Link headers")
 tr_dedup_learn.Processes.Default.Command = (
     "curl -s -D /dev/null -o /dev/null --http1.1 --insecure"
     " 'https://127.0.0.1:{0}/dup-link.html'".format(ts.Variables.ssl_port))

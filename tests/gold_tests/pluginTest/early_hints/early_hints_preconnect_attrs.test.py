@@ -1,5 +1,5 @@
 '''
-Test 103 Early Hints plugin — preconnect attribute correctness
+Test 103 Early Hints plugin  -- preconnect attribute correctness
 '''
 #  Licensed to the Apache Software Foundation (ASF) under one
 #  or more contributor license agreements.  See the NOTICE file
@@ -45,14 +45,14 @@ Test.ContinueOnFail = True
 # ----
 microserver = Test.MakeOriginServer("microserver")
 
-# Page with a cross-origin stylesheet — downgraded to preconnect
+# Page with a cross-origin stylesheet  -- downgraded to preconnect
 STYLESHEET_PAGE = (
     "<html><head>"
     '<link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto">'
     "</head><body>Fonts page</body></html>\r\n"
 )
 
-# Page with a cross-origin script — downgraded to preconnect
+# Page with a cross-origin script  -- downgraded to preconnect
 SCRIPT_PAGE = (
     "<html><head>"
     '<script src="https://cdn.example.com/analytics.js"></script>'
@@ -144,7 +144,7 @@ tr0b.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression("200"
 tr0b.StillRunningAfter = microserver
 
 # ----
-# TC1: Serve stylesheet page — 103 must include preconnect WITHOUT crossorigin
+# TC1: Serve stylesheet page  -- 103 must include preconnect WITHOUT crossorigin
 # ----
 tr1 = Test.AddTestRun("Preconnect-attrs: Stylesheet preconnect hint must not carry crossorigin")
 tr1.Processes.Default.Command = (

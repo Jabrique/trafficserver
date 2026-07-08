@@ -1,5 +1,5 @@
 '''
-Test 103 Early Hints plugin — security tests
+Test 103 Early Hints plugin  -- security tests
 '''
 #  Licensed to the Apache Software Foundation (ASF) under one
 #  or more contributor license agreements.  See the NOTICE file
@@ -61,7 +61,7 @@ microserver.addResponse(
     })
 
 # ----
-# Setup ATS — skip_bots enabled (default), navigate_only disabled for simpler testing
+# Setup ATS  -- skip_bots enabled (default), navigate_only disabled for simpler testing
 # ----
 ts = Test.MakeATSProcess("ts", select_ports=True, enable_tls=True, enable_cache=False)
 
@@ -86,7 +86,7 @@ ts.Disk.records_config.update({
 })
 
 # ----
-# Test Case 0: Bot User-Agent skipped — Googlebot detected
+# Test Case 0: Bot User-Agent skipped  -- Googlebot detected
 # NOTE: H1 check fires before bot check, so debug header shows skipped-h1.
 # Bot detection still fires (verified by stat counters), but for a proper
 # isolated bot test we'd need an H2 client. This test verifies the plugin
@@ -102,7 +102,7 @@ tr1.Processes.Default.Command = (
 tr1.Processes.Default.ReturnCode = 0
 tr1.Processes.Default.StartBefore(microserver, ready=When.PortOpen(microserver.Variables.Port))
 tr1.Processes.Default.StartBefore(Test.Processes.ts)
-# H1 check fires first — debug header shows skipped-h1, not skipped-bot
+# H1 check fires first  -- debug header shows skipped-h1, not skipped-bot
 tr1.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "X-Early-Hints-Status: skipped-h1", "H1 skip fires before bot check")
 tr1.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
@@ -110,10 +110,10 @@ tr1.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr1.StillRunningAfter = microserver
 
 # ----
-# Test Case 1: H2 Bot User-Agent — REAL bot detection test
+# Test Case 1: H2 Bot User-Agent  -- REAL bot detection test
 # Over H2, the H1 check passes (is H2), navigate-only is disabled, and the bot check
 # at plugin line 918-924 fires. This is the isolated test that actually verifies
-# bot detection works correctly — unlike TR0 which only tests the H1 skip path.
+# bot detection works correctly  -- unlike TR0 which only tests the H1 skip path.
 # ----
 tr_bot_h2 = Test.AddTestRun("H2 bot detection - Googlebot skipped for 103")
 tr_bot_h2.Processes.Default.Command = (
@@ -134,7 +134,112 @@ tr_bot_h2.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression
 tr_bot_h2.StillRunningAfter = microserver
 
 # ----
-# Test Case 2: Origin 500 — hints NOT learned even when HTML has resources
+# Test Case 1b: H2 bingbot  -- second distinct bot signature verified
+# ----
+tr_bingbot = Test.AddTestRun("H2 bingbot detection - bingbot skipped for 103")
+tr_bingbot.Processes.Default.Command = (
+    "curl -s -D - -o /dev/null"
+    " --http2"
+    " --insecure"
+    " -H 'User-Agent: Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)'"
+    " 'https://127.0.0.1:{0}/normal.html'".format(ts.Variables.ssl_port))
+tr_bingbot.Processes.Default.ReturnCode = 0
+tr_bingbot.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
+    "x-early-hints-status: skipped-bot", "bingbot must be detected and skipped")
+tr_bingbot.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
+    "x-early-hints-status: sent", "bingbot must NOT trigger 103")
+tr_bingbot.StillRunningAfter = microserver
+
+# ----
+# Test Case 1c: H2 python-requests  -- automated client signature verified
+# ----
+tr_python = Test.AddTestRun("H2 python-requests detection - skipped for 103")
+tr_python.Processes.Default.Command = (
+    "curl -s -D - -o /dev/null"
+    " --http2"
+    " --insecure"
+    " -H 'User-Agent: python-requests/2.28.2'"
+    " 'https://127.0.0.1:{0}/normal.html'".format(ts.Variables.ssl_port))
+tr_python.Processes.Default.ReturnCode = 0
+tr_python.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
+    "x-early-hints-status: skipped-bot", "python-requests must be detected and skipped")
+tr_python.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
+    "x-early-hints-status: sent", "python-requests must NOT trigger 103")
+tr_python.StillRunningAfter = microserver
+
+# ----
+# Test Case 1d: H2 oversized UA (600 chars)  -- evasion attempt blocked
+# UA > 512 bytes is unconditionally classified as bot regardless of content.
+# ----
+oversized_ua = "A" * 600
+tr_oversized = Test.AddTestRun("H2 oversized UA (600 chars)  -- skipped as bot")
+tr_oversized.Processes.Default.Command = (
+    "curl -s -D - -o /dev/null"
+    " --http2"
+    " --insecure"
+    " -H 'User-Agent: {0}'".format(oversized_ua) +
+    " 'https://127.0.0.1:{0}/normal.html'".format(ts.Variables.ssl_port))
+tr_oversized.Processes.Default.ReturnCode = 0
+tr_oversized.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
+    "x-early-hints-status: skipped-bot", "Oversized UA must be classified as bot")
+tr_oversized.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
+    "x-early-hints-status: sent", "Oversized UA must NOT trigger 103")
+tr_oversized.StillRunningAfter = microserver
+
+# ----
+# Test Case 1e: --no-skip-bots + Googlebot → 103 SENT (bypass confirmed)
+# Requires a separate ATS instance with --no-skip-bots configured.
+# ----
+ms_noskipbots = Test.MakeOriginServer("ms_noskipbots")
+ms_noskipbots.addResponse(
+    "sessionfile.log", {
+        "headers": "GET /normal.html HTTP/1.1\r\nHost: www.example.com\r\n\r\n",
+        "body": ""
+    }, {
+        "headers": "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/html\r\n\r\n",
+        "body": "<html><head></head><body>No skip bots</body></html>\r\n"
+    })
+
+ts_noskipbots = Test.MakeATSProcess("ts_noskipbots", select_ports=True, enable_tls=True, enable_cache=False)
+ts_noskipbots.addDefaultSSLFiles()
+ts_noskipbots.Disk.ssl_multicert_config.AddLine('dest_ip=* ssl_cert_name=server.pem ssl_key_name=server.key')
+
+ts_noskipbots.Disk.remap_config.AddLine(
+    'map / http://127.0.0.1:{0}/'.format(ms_noskipbots.Variables.Port) +
+    ' @plugin=early_hints.so'
+    ' @pparam=--mode @pparam=manual'
+    ' @pparam=--link @pparam=</style.css>;rel=preload;as=style'
+    ' @pparam=--no-skip-bots'
+    ' @pparam=--no-navigate-only'
+    ' @pparam=--debug-header @pparam=X-Early-Hints-Status')
+
+ts_noskipbots.Disk.records_config.update({
+    'proxy.config.diags.debug.enabled': 1,
+    'proxy.config.diags.debug.tags': 'early_hints',
+    'proxy.config.ssl.server.cert.path': '{0}'.format(ts_noskipbots.Variables.SSLDir),
+    'proxy.config.ssl.server.private_key.path': '{0}'.format(ts_noskipbots.Variables.SSLDir),
+    'proxy.config.http2.active_timeout_in': 3,
+})
+
+tr_noskipbots = Test.AddTestRun("H2 Googlebot + --no-skip-bots → 103 sent (bypass)")
+tr_noskipbots.Processes.Default.Command = (
+    "curl -s -D - -o /dev/null"
+    " --http2"
+    " --insecure"
+    " -H 'User-Agent: Googlebot/2.1'"
+    " 'https://127.0.0.1:{0}/normal.html'".format(ts_noskipbots.Variables.ssl_port))
+tr_noskipbots.Processes.Default.ReturnCode = 0
+tr_noskipbots.Processes.Default.StartBefore(ms_noskipbots, ready=When.PortOpen(ms_noskipbots.Variables.Port))
+tr_noskipbots.Processes.Default.StartBefore(ts_noskipbots)
+# --no-skip-bots: Googlebot must receive 103 same as any other client
+tr_noskipbots.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
+    "x-early-hints-status: sent", "--no-skip-bots must bypass bot detection")
+tr_noskipbots.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
+    "x-early-hints-status: skipped-bot", "Bot skip must not fire when --no-skip-bots is set")
+tr_noskipbots.StillRunningAfter = ms_noskipbots
+
+# ----
+# Test Case 2: Origin 500  -- hints NOT learned even when HTML has resources
 # First request returns 500 with preloadable resources in HTML,
 # second request should have no cached hints.
 # ----
@@ -147,7 +252,7 @@ tr2.Processes.Default.Command = (
 tr2.Processes.Default.ReturnCode = 0
 tr2.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "500", "Should receive 500 from origin")
-# Plugin must engage — debug header proves plugin loaded and running on error pages too
+# Plugin must engage  -- debug header proves plugin loaded and running on error pages too
 tr2.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
     "X-Early-Hints-Status: skipped-h1", "Plugin debug header must show status on 500 responses too")
 tr2.StillRunningAfter = microserver
@@ -164,7 +269,7 @@ tr3.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "500", "Should still receive 500 from origin")
 tr3.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
     "X-Early-Hints-Status: skipped-h1", "Plugin debug header must show status on 500 responses too")
-# Should not have Link headers — 500 responses must not have hints learned
+# Should not have Link headers  -- 500 responses must not have hints learned
 # even though the HTML contained <link rel=preload> and <link rel=stylesheet>
 tr3.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
     "Link:", "Error page should not have cached hints")

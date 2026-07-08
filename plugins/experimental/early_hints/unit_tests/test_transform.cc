@@ -28,7 +28,7 @@
 // Include the implementation to access static functions (TransformData, early_hints_transform, etc.)
 #include "early_hints.cc"
 
-// ─── Mock control state (defined in test_transform_mocks.cc) ────────────────
+// --- Mock control state (defined in test_transform_mocks.cc) ----------------
 
 // These extern globals control mock behavior for the tests.
 extern void *mock_cont_data;
@@ -105,7 +105,7 @@ reset_mocks()
   mock_stat_create_fails               = false;
 }
 
-// ─── Tests ──────────────────────────────────────────────────────────────────
+// --- Tests ------------------------------------------------------------------
 
 TEST_CASE("Transform: error flag prevents subsequent processing", "[transform][error]")
 {
@@ -151,7 +151,7 @@ TEST_CASE("Transform: error flag prevents subsequent processing", "[transform][e
     mock_transform_do_vio_reenable_count = 0;
     mock_cont_call_count                 = 0;
 
-    // Simulate TS_EVENT_VCONN_WRITE_READY — should be a no-op due to errored flag
+    // Simulate TS_EVENT_VCONN_WRITE_READY  -- should be a no-op due to errored flag
     TSCont fake_contp = reinterpret_cast<TSCont>(0x1234);
     early_hints_transform(fake_contp, TS_EVENT_VCONN_WRITE_READY, nullptr);
 
@@ -200,7 +200,7 @@ TEST_CASE("Transform: null output VConn in WRITE_COMPLETE does not crash", "[tra
   }
 }
 
-// ─── T1/T2: VConn closed cleanup paths ─────────────────────────────────────
+// --- T1/T2: VConn closed cleanup paths -------------------------------------
 
 TEST_CASE("Transform: VConn closed with data cleans up and destroys cont", "[transform][vconn-closed]")
 {
@@ -243,7 +243,7 @@ TEST_CASE("Transform: VConn closed with null data just destroys cont", "[transfo
   CHECK(mock_cont_destroy_count == 1);
 }
 
-// ─── ERROR event edge cases ─────────────────────────────────────────
+// --- ERROR event edge cases -----------------------------------------
 
 TEST_CASE("Transform: ERROR event with null data does not crash", "[transform][error]")
 {
@@ -282,7 +282,7 @@ TEST_CASE("Transform: ERROR event with null input_vio skips TSContCall", "[trans
   CHECK(mock_cont_call_count == 0); // no TSContCall since input_vio is null
 }
 
-// ─── T9: Default/unknown event delegates to _do ────────────────────────────
+// --- T9: Default/unknown event delegates to _do ----------------------------
 
 TEST_CASE("Transform: unknown event delegates to transform_do", "[transform][default-event]")
 {
@@ -303,11 +303,11 @@ TEST_CASE("Transform: unknown event delegates to transform_do", "[transform][def
   int ret = early_hints_transform(fake_contp, static_cast<TSEvent>(99999), nullptr);
 
   CHECK(ret == 0);
-  // _do was entered but returned early at null output_conn — no crash
+  // _do was entered but returned early at null output_conn  -- no crash
   CHECK(data.initialized == false);
 }
 
-// ─── _do with null data ────────────────────────────────────────────────
+// --- _do with null data ------------------------------------------------
 
 TEST_CASE("Transform_do: null data is safe early return", "[transform_do]")
 {
@@ -324,7 +324,7 @@ TEST_CASE("Transform_do: null data is safe early return", "[transform_do]")
   CHECK(mock_cont_call_count == 0);
 }
 
-// ─── _do with uninitialized + null output_conn ─────────────────────────
+// --- _do with uninitialized + null output_conn -------------------------
 
 TEST_CASE("Transform_do: uninitialized with null output_conn returns early", "[transform_do]")
 {
@@ -348,7 +348,7 @@ TEST_CASE("Transform_do: uninitialized with null output_conn returns early", "[t
   CHECK(mock_transform_do_vio_reenable_count == 0);
 }
 
-// ─── D4: _do init path with valid output_conn ──────────────────────────────
+// --- D4: _do init path with valid output_conn ------------------------------
 
 TEST_CASE("Transform_do: initializes output buffers on first call", "[transform_do]")
 {
@@ -378,7 +378,7 @@ TEST_CASE("Transform_do: initializes output buffers on first call", "[transform_
   TSIOBufferDestroy(data.output_buffer);
 }
 
-// ─── D5/D6: EOS path ──────────────────────────────────────────────────────
+// --- D5/D6: EOS path ------------------------------------------------------
 
 TEST_CASE("Transform_do: EOS finalizes and sets nbytes", "[transform_do][eos]")
 {
@@ -409,7 +409,7 @@ TEST_CASE("Transform_do: EOS finalizes and sets nbytes", "[transform_do][eos]")
   TSIOBufferDestroy(data.output_buffer);
 }
 
-// ─── D7: toread <= 0 → complete ────────────────────────────────────────────
+// --- D7: toread <= 0 → complete --------------------------------------------
 
 TEST_CASE("Transform_do: toread zero sends WRITE_COMPLETE", "[transform_do]")
 {
@@ -441,7 +441,7 @@ TEST_CASE("Transform_do: toread zero sends WRITE_COMPLETE", "[transform_do]")
   TSIOBufferDestroy(data.output_buffer);
 }
 
-// ─── D8: null input_reader → reenable only ─────────────────────────────────
+// --- D8: null input_reader → reenable only ---------------------------------
 
 TEST_CASE("Transform_do: null input_reader reenables and returns", "[transform_do]")
 {
@@ -468,13 +468,13 @@ TEST_CASE("Transform_do: null input_reader reenables and returns", "[transform_d
   early_hints_transform_do(fake_contp);
 
   CHECK(mock_transform_do_vio_reenable_count == 1);
-  CHECK(mock_cont_call_count == 0); // no TSContCall — just reenable
+  CHECK(mock_cont_call_count == 0); // no TSContCall  -- just reenable
   CHECK(data.bytes_written == 0);   // no data processed
 
   TSIOBufferDestroy(data.output_buffer);
 }
 
-// ─── D9/D10/D11: Data processing with avail > 0, more data pending ────────
+// --- D9/D10/D11: Data processing with avail > 0, more data pending --------
 
 TEST_CASE("Transform_do: data passthrough with more data pending", "[transform_do][data]")
 {
@@ -483,7 +483,7 @@ TEST_CASE("Transform_do: data passthrough with more data pending", "[transform_d
   TransformData data;
   data.errored       = false;
   data.initialized   = true;
-  data.scanner       = nullptr; // no scanner — pure passthrough
+  data.scanner       = nullptr; // no scanner  -- pure passthrough
   data.cache         = nullptr;
   data.output_buffer = TSIOBufferCreate();
   data.output_reader = reinterpret_cast<TSIOBufferReader>(0xBBBB);
@@ -510,7 +510,7 @@ TEST_CASE("Transform_do: data passthrough with more data pending", "[transform_d
   TSIOBufferDestroy(data.output_buffer);
 }
 
-// ─── D12: Data processing, final chunk (toread goes to 0 after copy) ──────
+// --- D12: Data processing, final chunk (toread goes to 0 after copy) ------
 
 TEST_CASE("Transform_do: avail clamped to toread when avail exceeds remaining", "[transform_do][data]")
 {
@@ -536,8 +536,8 @@ TEST_CASE("Transform_do: avail clamped to toread when avail exceeds remaining", 
   // NTodoGet doesn't decrement, we need the second call to return 0.
   // The mock always returns mock_vio_ntodo, so after consuming data, NTodoGet still returns
   // whatever we set. We set it to 50 initially; after avail=50 is consumed, the second
-  // NTodoGet call should return 0. Since our mock is static, set ntodo = 0 — the first check
-  // (toread <= 0) is bypassed by the avail > 0 path. Wait — the first NTodoGet call happens
+  // NTodoGet call should return 0. Since our mock is static, set ntodo = 0  -- the first check
+  // (toread <= 0) is bypassed by the avail > 0 path. Wait  -- the first NTodoGet call happens
   // BEFORE the avail path. So we need ntodo > 0 for the first call and 0 for the second.
   //
   // Workaround: Set avail to match toread exactly. The mock returns the same value for both
@@ -564,7 +564,7 @@ TEST_CASE("Transform_do: avail clamped to toread when avail exceeds remaining", 
   TSIOBufferDestroy(data.output_buffer);
 }
 
-// ─── D9: Scanner feed with block data ──────────────────────────────────────
+// --- D9: Scanner feed with block data --------------------------------------
 
 TEST_CASE("Transform_do: scanner feed processes block data", "[transform_do][scanner]")
 {
@@ -607,12 +607,12 @@ TEST_CASE("Transform_do: scanner feed processes block data", "[transform_do][sca
   // After </head>, scanner should be done
   CHECK(scanner.is_done() == true);
 
-  // Don't delete scanner — it's stack-allocated
+  // Don't delete scanner  -- it's stack-allocated
   data.scanner = nullptr;
   TSIOBufferDestroy(data.output_buffer);
 }
 
-// ─── Sequence: ERROR then WRITE_READY ──────────────────────────────────────
+// --- Sequence: ERROR then WRITE_READY --------------------------------------
 
 TEST_CASE("Transform: ERROR then WRITE_READY sequence", "[transform][sequence]")
 {
@@ -637,19 +637,19 @@ TEST_CASE("Transform: ERROR then WRITE_READY sequence", "[transform][sequence]")
   CHECK(data.errored == true);
   CHECK(mock_cont_call_count == 1);
 
-  // Second: WRITE_READY — should be no-op due to errored flag
+  // Second: WRITE_READY  -- should be no-op due to errored flag
   mock_cont_call_count                 = 0;
   mock_transform_do_vio_reenable_count = 0;
   early_hints_transform(fake_contp, TS_EVENT_VCONN_WRITE_READY, nullptr);
 
-  // _do returned immediately — no reenable, no TSContCall
+  // _do returned immediately  -- no reenable, no TSContCall
   CHECK(mock_transform_do_vio_reenable_count == 0);
   CHECK(mock_cont_call_count == 0);
   // Output was never initialized (errored before init)
   CHECK(data.initialized == false);
 }
 
-// ─── Sequence: WRITE_COMPLETE then WRITE_READY ─────────────────────────────
+// --- Sequence: WRITE_COMPLETE then WRITE_READY -----------------------------
 
 TEST_CASE("Transform: WRITE_COMPLETE then WRITE_READY sequence", "[transform][sequence]")
 {
@@ -668,11 +668,11 @@ TEST_CASE("Transform: WRITE_COMPLETE then WRITE_READY sequence", "[transform][se
 
   TSCont fake_contp = reinterpret_cast<TSCont>(0x1234);
 
-  // WRITE_COMPLETE first — shuts down output
+  // WRITE_COMPLETE first  -- shuts down output
   early_hints_transform(fake_contp, TS_EVENT_VCONN_WRITE_COMPLETE, nullptr);
   CHECK(mock_vconn_shutdown_called == 1);
 
-  // WRITE_READY after — _do runs but output_conn is still "valid" in mock,
+  // WRITE_READY after  -- _do runs but output_conn is still "valid" in mock,
   // so it initializes. This tests that the handler doesn't crash.
   mock_output_vconn = reinterpret_cast<void *>(0xBEEF);
   mock_vio_buffer   = nullptr; // EOS
@@ -684,7 +684,7 @@ TEST_CASE("Transform: WRITE_COMPLETE then WRITE_READY sequence", "[transform][se
   TSIOBufferDestroy(data.output_buffer);
 }
 
-// ─── D2: _do with errored data (direct call) ──────────────────────────────
+// --- D2: _do with errored data (direct call) ------------------------------
 
 TEST_CASE("Transform_do: errored data is safe early return", "[transform_do][error]")
 {
@@ -709,13 +709,13 @@ TEST_CASE("Transform_do: errored data is safe early return", "[transform_do][err
   TSCont fake_contp = reinterpret_cast<TSCont>(0x1234);
   early_hints_transform_do(fake_contp);
 
-  // Should return immediately — no reenable, no cont call, no bytes
+  // Should return immediately  -- no reenable, no cont call, no bytes
   CHECK(mock_transform_do_vio_reenable_count == 0);
   CHECK(mock_cont_call_count == 0);
   CHECK(data.bytes_written == 0);
 }
 
-// ─── D6: EOS with scanner links writes to cache ───────────────────────────
+// --- D6: EOS with scanner links writes to cache ---------------------------
 
 TEST_CASE("Transform_do: EOS with scanner links writes to cache", "[transform_do][eos][cache]")
 {
@@ -767,7 +767,7 @@ TEST_CASE("Transform_do: EOS with scanner links writes to cache", "[transform_do
   TSIOBufferDestroy(data.output_buffer);
 }
 
-// ─── D15: EOS with cache_written=true skips double write ──────────────────
+// --- D15: EOS with cache_written=true skips double write ------------------
 
 TEST_CASE("Transform_do: EOS with cache_written skips double write", "[transform_do][eos][cache]")
 {
@@ -806,7 +806,7 @@ TEST_CASE("Transform_do: EOS with cache_written skips double write", "[transform
   CHECK(mock_vio_nbytes_set == 50);
   CHECK(mock_transform_do_vio_reenable_count == 1);
 
-  // Verify cache has no entry (put was never called — it was "already written" by prior logic)
+  // Verify cache has no entry (put was never called  -- it was "already written" by prior logic)
   std::vector<std::string> cached_links;
   bool found = cache.get("/already-cached", cached_links, 1);
   CHECK(found == false);
@@ -816,7 +816,7 @@ TEST_CASE("Transform_do: EOS with cache_written skips double write", "[transform
   TSIOBufferDestroy(data.output_buffer);
 }
 
-// ─── D14: avail == 0 skips processing, falls through to pending check ─────
+// --- D14: avail == 0 skips processing, falls through to pending check -----
 
 TEST_CASE("Transform_do: avail zero skips processing block", "[transform_do][data]")
 {
@@ -852,7 +852,7 @@ TEST_CASE("Transform_do: avail zero skips processing block", "[transform_do][dat
   TSIOBufferDestroy(data.output_buffer);
 }
 
-// ─── T16: VConn closed with scanner properly deletes scanner ──────────────
+// --- T16: VConn closed with scanner properly deletes scanner --------------
 
 TEST_CASE("Transform: VConn closed with scanner cleans up scanner", "[transform][vconn-closed]")
 {
@@ -880,10 +880,10 @@ TEST_CASE("Transform: VConn closed with scanner cleans up scanner", "[transform]
   CHECK(ret == 0);
   CHECK(mock_cont_destroy_count == 1);
   CHECK(mock_iobuffer_destroy_count == 1);
-  // Scanner was deleted (no leak) — if delete crashed, we wouldn't reach here
+  // Scanner was deleted (no leak)  -- if delete crashed, we wouldn't reach here
 }
 
-// ─── T17: VConn closed with data but no output_buffer ─────────────────────
+// --- T17: VConn closed with data but no output_buffer ---------------------
 
 TEST_CASE("Transform: VConn closed with data but no output_buffer", "[transform][vconn-closed]")
 {
@@ -907,10 +907,10 @@ TEST_CASE("Transform: VConn closed with data but no output_buffer", "[transform]
 
   CHECK(ret == 0);
   CHECK(mock_cont_destroy_count == 1);
-  CHECK(mock_iobuffer_destroy_count == 0); // output_buffer was null — no destroy
+  CHECK(mock_iobuffer_destroy_count == 0); // output_buffer was null  -- no destroy
 }
 
-// ─── D17: Scanner is_done skips feed ──────────────────────────────────────
+// --- D17: Scanner is_done skips feed --------------------------------------
 
 TEST_CASE("Transform_do: scanner is_done skips feed", "[transform_do][scanner]")
 {
@@ -954,14 +954,14 @@ TEST_CASE("Transform_do: scanner is_done skips feed", "[transform_do][scanner]")
 
   // Data was copied through (passthrough works)
   CHECK(data.bytes_written == body_len);
-  // Scanner links unchanged — feed was skipped because is_done() == true
+  // Scanner links unchanged  -- feed was skipped because is_done() == true
   CHECK(scanner.get_links().size() == links_before);
 
   data.scanner = nullptr;
   TSIOBufferDestroy(data.output_buffer);
 }
 
-// ─── T7: ERROR with null data and null input_vio ──────────────────────────
+// --- T7: ERROR with null data and null input_vio --------------------------
 
 TEST_CASE("Transform: ERROR with null data and null input_vio", "[transform][error]")
 {
@@ -975,10 +975,10 @@ TEST_CASE("Transform: ERROR with null data and null input_vio", "[transform][err
   int ret           = early_hints_transform(fake_contp, TS_EVENT_ERROR, nullptr);
 
   CHECK(ret == 0);
-  CHECK(mock_cont_call_count == 0); // no TSContCall — both null
+  CHECK(mock_cont_call_count == 0); // no TSContCall  -- both null
 }
 
-// ─── D7b: Negative toread sends WRITE_COMPLETE ───────────────────────────
+// --- D7b: Negative toread sends WRITE_COMPLETE ---------------------------
 
 TEST_CASE("Transform_do: negative toread sends WRITE_COMPLETE", "[transform_do]")
 {
@@ -1010,7 +1010,7 @@ TEST_CASE("Transform_do: negative toread sends WRITE_COMPLETE", "[transform_do]"
   TSIOBufferDestroy(data.output_buffer);
 }
 
-// ─── D13: Final chunk with computed toread→0, cache write + COMPLETE ──────
+// --- D13: Final chunk with computed toread→0, cache write + COMPLETE ------
 
 TEST_CASE("Transform_do: final chunk completes with cache write (computed ntodo)", "[transform_do][data][cache]")
 {
@@ -1050,7 +1050,7 @@ TEST_CASE("Transform_do: final chunk completes with cache write (computed ntodo)
   mock_vio_reader             = reinterpret_cast<void *>(0xCCCC);
   mock_reader_avail           = 50;
 
-  // No block data for scanner — scanner already has links from pre-feed
+  // No block data for scanner  -- scanner already has links from pre-feed
   mock_block_data     = nullptr;
   mock_block_data_len = 0;
 
@@ -1075,7 +1075,7 @@ TEST_CASE("Transform_do: final chunk completes with cache write (computed ntodo)
   TSIOBufferDestroy(data.output_buffer);
 }
 
-// ─── D19: Final chunk with cache_written prevents double write ────────────
+// --- D19: Final chunk with cache_written prevents double write ------------
 
 TEST_CASE("Transform_do: final chunk with cache_written prevents double write", "[transform_do][data][cache]")
 {
@@ -1130,7 +1130,7 @@ TEST_CASE("Transform_do: final chunk with cache_written prevents double write", 
   TSIOBufferDestroy(data.output_buffer);
 }
 
-// ─── D20: Scanner feed with data and computed final chunk ─────────────────
+// --- D20: Scanner feed with data and computed final chunk -----------------
 
 TEST_CASE("Transform_do: scanner feed during final chunk (computed ntodo)", "[transform_do][scanner][data]")
 {
@@ -1186,7 +1186,7 @@ TEST_CASE("Transform_do: scanner feed during final chunk (computed ntodo)", "[tr
   TSIOBufferDestroy(data.output_buffer);
 }
 
-// ─── EOS: scanner with no links does NOT write cache ──────────────────────
+// --- EOS: scanner with no links does NOT write cache ----------------------
 
 TEST_CASE("Transform_do: EOS with scanner but no links skips cache write", "[transform_do][eos][cache]")
 {
@@ -1231,7 +1231,7 @@ TEST_CASE("Transform_do: EOS with scanner but no links skips cache write", "[tra
   TSIOBufferDestroy(data.output_buffer);
 }
 
-// ─── EOS: null scanner does NOT write cache ───────────────────────────────
+// --- EOS: null scanner does NOT write cache -------------------------------
 
 TEST_CASE("Transform_do: EOS with null scanner skips cache write", "[transform_do][eos]")
 {
@@ -1263,7 +1263,7 @@ TEST_CASE("Transform_do: EOS with null scanner skips cache write", "[transform_d
   TSIOBufferDestroy(data.output_buffer);
 }
 
-// ─── Bug fix: TSIOBufferCopy partial copy must not cause VIO accounting divergence ───
+// --- Bug fix: TSIOBufferCopy partial copy must not cause VIO accounting divergence ---
 
 TEST_CASE("Transform: partial TSIOBufferCopy uses actual copied bytes for accounting", "[transform][partial-copy][regression]")
 {
@@ -1319,21 +1319,21 @@ TEST_CASE("Transform: partial TSIOBufferCopy uses actual copied bytes for accoun
     TSCont fake_contp = reinterpret_cast<TSCont>(0x1234);
     early_hints_transform_do(fake_contp);
 
-    // R9-11 fix: zero copy now sets errored=true and consumes input
+    // After fix: zero copy sets errored=true and consumes input
     CHECK(data.errored == true);
     CHECK(mock_reader_consumed == 1000);
-    // ndone is NOT updated — error path returns before VIO update
+    // ndone is NOT updated  -- error path returns before VIO update
     CHECK(mock_vio_ndone == 0);
   }
 
   TSIOBufferDestroy(data.output_buffer);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // Error Recovery Path Audit Tests
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
-// ─── EP1: ERROR event with initialized output buffers → cleanup on VConn close ─
+// --- EP1: ERROR event with initialized output buffers → cleanup on VConn close -
 
 TEST_CASE("Error path: ERROR with initialized output cleaned up on VConn close", "[error-path][lifecycle]")
 {
@@ -1357,12 +1357,12 @@ TEST_CASE("Error path: ERROR with initialized output cleaned up on VConn close",
 
   TSCont fake_contp = reinterpret_cast<TSCont>(0x1234);
 
-  // Step 1: ERROR event — sets flag, propagates
+  // Step 1: ERROR event  -- sets flag, propagates
   early_hints_transform(fake_contp, TS_EVENT_ERROR, nullptr);
   CHECK(data->errored == true);
   CHECK(mock_cont_call_count == 1);
 
-  // Step 2: VConn closes — full cleanup must happen
+  // Step 2: VConn closes  -- full cleanup must happen
   mock_vconn_closed           = 1;
   mock_cont_destroy_count     = 0;
   mock_iobuffer_destroy_count = 0;
@@ -1371,10 +1371,10 @@ TEST_CASE("Error path: ERROR with initialized output cleaned up on VConn close",
   CHECK(ret == 0);
   CHECK(mock_cont_destroy_count == 1);
   CHECK(mock_iobuffer_destroy_count == 1);
-  // data and scanner freed — no leak (would crash if double-freed)
+  // data and scanner freed  -- no leak (would crash if double-freed)
 }
 
-// ─── EP2: Double ERROR events are idempotent ────────────────────────────────
+// --- EP2: Double ERROR events are idempotent --------------------------------
 
 TEST_CASE("Error path: double ERROR events are idempotent", "[error-path][idempotent]")
 {
@@ -1397,14 +1397,14 @@ TEST_CASE("Error path: double ERROR events are idempotent", "[error-path][idempo
   CHECK(data.errored == true);
   CHECK(mock_cont_call_count == 1);
 
-  // Second ERROR — should still propagate but not crash
+  // Second ERROR  -- should still propagate but not crash
   mock_cont_call_count = 0;
   early_hints_transform(fake_contp, TS_EVENT_ERROR, nullptr);
   CHECK(data.errored == true);      // still true
   CHECK(mock_cont_call_count == 1); // propagated again (idempotent)
 }
 
-// ─── EP3: Null input_vio in transform_do → safe early return ────────────────
+// --- EP3: Null input_vio in transform_do → safe early return ----------------
 
 TEST_CASE("Error path: null input_vio in transform_do returns safely", "[error-path][null-vio]")
 {
@@ -1430,7 +1430,7 @@ TEST_CASE("Error path: null input_vio in transform_do returns safely", "[error-p
   TSCont fake_contp = reinterpret_cast<TSCont>(0x1234);
   early_hints_transform_do(fake_contp);
 
-  // Should return early — no crash, no processing
+  // Should return early  -- no crash, no processing
   CHECK(data.bytes_written == 0);
   CHECK(mock_transform_do_vio_reenable_count == 0);
   CHECK(mock_cont_call_count == 0);
@@ -1456,12 +1456,12 @@ TEST_CASE("Error path: null input_vio during uninitialized state", "[error-path]
   TSCont fake_contp = reinterpret_cast<TSCont>(0x1234);
   early_hints_transform_do(fake_contp);
 
-  // Should return early before init — not even attempt to initialize
+  // Should return early before init  -- not even attempt to initialize
   CHECK(data.initialized == false);
   CHECK(mock_transform_do_vio_reenable_count == 0);
 }
 
-// ─── EP4: VConn close when errored with fully initialized output ────────────
+// --- EP4: VConn close when errored with fully initialized output ------------
 
 TEST_CASE("Error path: VConn close with errored + initialized state", "[error-path][vconn-closed]")
 {
@@ -1491,7 +1491,7 @@ TEST_CASE("Error path: VConn close with errored + initialized state", "[error-pa
   CHECK(mock_iobuffer_destroy_count == 1);
 }
 
-// ─── EP5: Scanner feed with zero-length and negative-length data ────────────
+// --- EP5: Scanner feed with zero-length and negative-length data ------------
 
 TEST_CASE("Error path: scanner feed with zero-length data", "[error-path][scanner]")
 {
@@ -1520,14 +1520,14 @@ TEST_CASE("Error path: scanner feed with null data pointer", "[error-path][scann
   EarlyHintsConfig config;
   HtmlScanner scanner(64 * 1024, 20, &config);
 
-  // Null data with positive length — should not crash
+  // Null data with positive length  -- should not crash
   // (In practice, length 0 prevents any access)
   scanner.feed(nullptr, 0);
   CHECK(scanner.is_done() == false);
   CHECK(scanner.get_links().empty());
 }
 
-// ─── EP6: TSIOBufferCopy returns negative → fallback path ───────────────────
+// --- EP6: TSIOBufferCopy returns negative → fallback path -------------------
 
 TEST_CASE("Error path: TSIOBufferCopy returns negative uses fallback", "[error-path][copy-fail]")
 {
@@ -1571,7 +1571,7 @@ TEST_CASE("Error path: TSIOBufferCopy returns negative uses fallback", "[error-p
   TSIOBufferDestroy(data.output_buffer);
 }
 
-// ─── EP7: Full lifecycle: ERROR → WRITE_READY → WRITE_COMPLETE → close ─────
+// --- EP7: Full lifecycle: ERROR → WRITE_READY → WRITE_COMPLETE → close -----
 
 TEST_CASE("Error path: full lifecycle ERROR → blocked → close", "[error-path][lifecycle]")
 {
@@ -1595,7 +1595,7 @@ TEST_CASE("Error path: full lifecycle ERROR → blocked → close", "[error-path
   early_hints_transform(fake_contp, TS_EVENT_ERROR, nullptr);
   CHECK(data->errored == true);
 
-  // 2. WRITE_READY arrives (stale event) — blocked by errored flag
+  // 2. WRITE_READY arrives (stale event)  -- blocked by errored flag
   mock_cont_call_count                 = 0;
   mock_transform_do_vio_reenable_count = 0;
   early_hints_transform(fake_contp, TS_EVENT_VCONN_WRITE_READY, nullptr);
@@ -1606,7 +1606,7 @@ TEST_CASE("Error path: full lifecycle ERROR → blocked → close", "[error-path
   early_hints_transform(fake_contp, TS_EVENT_VCONN_WRITE_COMPLETE, nullptr);
   CHECK(mock_vconn_shutdown_called == 1);
 
-  // 4. VConn closes — cleanup
+  // 4. VConn closes  -- cleanup
   mock_vconn_closed           = 1;
   mock_cont_destroy_count     = 0;
   mock_iobuffer_destroy_count = 0;
@@ -1614,11 +1614,11 @@ TEST_CASE("Error path: full lifecycle ERROR → blocked → close", "[error-path
   int ret = early_hints_transform(fake_contp, TS_EVENT_VCONN_WRITE_READY, nullptr);
   CHECK(ret == 0);
   CHECK(mock_cont_destroy_count == 1);
-  // output_buffer was never created (errored before init) — no destroy
+  // output_buffer was never created (errored before init)  -- no destroy
   CHECK(mock_iobuffer_destroy_count == 0);
 }
 
-// ─── EP8: VConn close mid-stream with partial data ──────────────────────────
+// --- EP8: VConn close mid-stream with partial data --------------------------
 
 TEST_CASE("Error path: VConn close mid-stream with bytes_written", "[error-path][vconn-closed]")
 {
@@ -1657,14 +1657,14 @@ TEST_CASE("Error path: VConn close mid-stream with bytes_written", "[error-path]
   CHECK(mock_cont_destroy_count == 1);
   CHECK(mock_iobuffer_destroy_count == 1);
 
-  // Cache was NOT written (incomplete stream — scanner had links but VConn closed)
-  // The cache_written flag stays false — learned links are properly discarded
+  // Cache was NOT written (incomplete stream  -- scanner had links but VConn closed)
+  // The cache_written flag stays false  -- learned links are properly discarded
   std::vector<std::string> cached_links;
   bool found = cache.get("/mid-stream", cached_links, 1);
   CHECK(found == false);
 }
 
-// ─── EP9: Config init failure leaves object in safe-to-destruct state ───────
+// --- EP9: Config init failure leaves object in safe-to-destruct state -------
 
 TEST_CASE("Error path: config init failure is safe to destruct", "[error-path][config]")
 {
@@ -1674,7 +1674,7 @@ TEST_CASE("Error path: config init failure is safe to destruct", "[error-path][c
     const char *argv[] = {"from_url", "to_url", "--mode", "invalid_mode"};
     bool ok            = config.init(4, argv);
     CHECK(ok == false);
-    // config destructor runs here — must not crash
+    // config destructor runs here  -- must not crash
   }
 
   SECTION("invalid numeric option")
@@ -1683,7 +1683,7 @@ TEST_CASE("Error path: config init failure is safe to destruct", "[error-path][c
     const char *argv[] = {"from_url", "to_url", "--max-links", "not_a_number"};
     bool ok            = config.init(4, argv);
     CHECK(ok == false);
-    // Partially parsed — mode_ still at default, max_links_ unchanged
+    // Partially parsed  -- mode_ still at default, max_links_ unchanged
     // Destructor safe
   }
 
@@ -1714,11 +1714,11 @@ TEST_CASE("Error path: config init failure is safe to destruct", "[error-path][c
     CHECK(ok == false);
     // max_links_ was set to 5, header-size-limit parse failed
     CHECK(config.max_links() == 5);
-    // Destructor runs — no leak
+    // Destructor runs  -- no leak
   }
 }
 
-// ─── EP10: ERROR event with null input_vio skips downstream signal ──────────
+// --- EP10: ERROR event with null input_vio skips downstream signal ----------
 
 TEST_CASE("Error path: ERROR with null input_vio does not hang transaction", "[error-path][error]")
 {
@@ -1739,14 +1739,14 @@ TEST_CASE("Error path: ERROR with null input_vio does not hang transaction", "[e
 
   CHECK(ret == 0);
   CHECK(data.errored == true);
-  // No TSContCall since input_vio is null — can't propagate, but flag is set
+  // No TSContCall since input_vio is null  -- can't propagate, but flag is set
   CHECK(mock_cont_call_count == 0);
   // Subsequent WRITE_READY should be blocked by errored flag
   early_hints_transform(fake_contp, TS_EVENT_VCONN_WRITE_READY, nullptr);
   CHECK(mock_transform_do_vio_reenable_count == 0);
 }
 
-// ─── EP11: transform_do called with errored=true and valid data paths ───────
+// --- EP11: transform_do called with errored=true and valid data paths -------
 
 TEST_CASE("Error path: transform_do with errored skips all processing paths", "[error-path][errored]")
 {
@@ -1794,7 +1794,7 @@ TEST_CASE("Error path: transform_do with errored skips all processing paths", "[
   TSIOBufferDestroy(data.output_buffer);
 }
 
-// ─── EP12: VConn close with output_reader but null output_buffer ────────────
+// --- EP12: VConn close with output_reader but null output_buffer ------------
 
 TEST_CASE("Error path: VConn close output_reader set but output_buffer null", "[error-path][vconn-closed]")
 {
@@ -1823,7 +1823,7 @@ TEST_CASE("Error path: VConn close output_reader set but output_buffer null", "[
   CHECK(mock_iobuffer_destroy_count == 0); // null buffer → no destroy call
 }
 
-// ─── EP13: WRITE_COMPLETE with null output_conn then VConn close ────────────
+// --- EP13: WRITE_COMPLETE with null output_conn then VConn close ------------
 
 TEST_CASE("Error path: WRITE_COMPLETE null output then VConn close", "[error-path][lifecycle]")
 {
@@ -1843,12 +1843,12 @@ TEST_CASE("Error path: WRITE_COMPLETE null output then VConn close", "[error-pat
 
   TSCont fake_contp = reinterpret_cast<TSCont>(0x1234);
 
-  // WRITE_COMPLETE with null output_conn — skips shutdown, no crash
+  // WRITE_COMPLETE with null output_conn  -- skips shutdown, no crash
   mock_vconn_shutdown_called = 0;
   early_hints_transform(fake_contp, TS_EVENT_VCONN_WRITE_COMPLETE, nullptr);
   CHECK(mock_vconn_shutdown_called == 0);
 
-  // Then VConn closes — full cleanup
+  // Then VConn closes  -- full cleanup
   mock_vconn_closed           = 1;
   mock_cont_destroy_count     = 0;
   mock_iobuffer_destroy_count = 0;
@@ -1859,7 +1859,7 @@ TEST_CASE("Error path: WRITE_COMPLETE null output then VConn close", "[error-pat
   CHECK(mock_iobuffer_destroy_count == 1);
 }
 
-// ─── EP14: Scanner feed after reset — verifies no stale state ───────────────
+// --- EP14: Scanner feed after reset  -- verifies no stale state ---------------
 
 TEST_CASE("Error path: scanner feed after reset has no stale state", "[error-path][scanner]")
 {
@@ -1872,7 +1872,7 @@ TEST_CASE("Error path: scanner feed after reset has no stale state", "[error-pat
   CHECK(scanner.get_links().size() == 1);
   CHECK(scanner.is_done() == true);
 
-  // Reset and scan again — no stale links from first scan
+  // Reset and scan again  -- no stale links from first scan
   scanner.reset();
   CHECK(scanner.get_links().empty());
   CHECK(scanner.is_done() == false);
@@ -1884,7 +1884,7 @@ TEST_CASE("Error path: scanner feed after reset has no stale state", "[error-pat
   CHECK(scanner.get_links()[0].find("/b.css") != std::string::npos);
 }
 
-// ─── EP15: Multiple VConn close events (idempotency) ────────────────────────
+// --- EP15: Multiple VConn close events (idempotency) ------------------------
 
 TEST_CASE("Error path: second VConn close event after cleanup", "[error-path][vconn-closed]")
 {
@@ -1905,7 +1905,7 @@ TEST_CASE("Error path: second VConn close event after cleanup", "[error-path][vc
 
   TSCont fake_contp = reinterpret_cast<TSCont>(0x1234);
 
-  // First close — cleans up
+  // First close  -- cleans up
   early_hints_transform(fake_contp, TS_EVENT_VCONN_WRITE_READY, nullptr);
   CHECK(mock_cont_destroy_count == 1);
   CHECK(mock_iobuffer_destroy_count == 1);
@@ -1923,7 +1923,7 @@ TEST_CASE("Error path: second VConn close event after cleanup", "[error-path][vc
   CHECK(mock_iobuffer_destroy_count == 0); // no buffer to destroy
 }
 
-// ─── EP16: Cache put with empty key ─────────────────────────────────────────
+// --- EP16: Cache put with empty key -----------------------------------------
 
 TEST_CASE("Error path: cache put with empty key is safe", "[error-path][cache]")
 {
@@ -1957,7 +1957,7 @@ TEST_CASE("Error path: cache put with empty links is safe", "[error-path][cache]
   CHECK(out.empty());
 }
 
-// ─── EP17: transform_do with null input_vio via full event handler ──────────
+// --- EP17: transform_do with null input_vio via full event handler ----------
 
 TEST_CASE("Error path: WRITE_READY with null input_vio via event handler", "[error-path][null-vio]")
 {
@@ -1987,7 +1987,7 @@ TEST_CASE("Error path: WRITE_READY with null input_vio via event handler", "[err
   TSIOBufferDestroy(data.output_buffer);
 }
 
-// ─── EP18: HintsCache make_key edge cases ───────────────────────────────────
+// --- EP18: HintsCache make_key edge cases -----------------------------------
 
 TEST_CASE("Error path: HintsCache make_key null and edge inputs", "[error-path][cache]")
 {
@@ -2005,7 +2005,7 @@ TEST_CASE("Error path: HintsCache make_key null and edge inputs", "[error-path][
   CHECK(HintsCache::make_key("/page?q=1", 9) == "/page");
 }
 
-// ─── Bug: scanner re-feed on partial TSIOBufferCopy ─────────────────────────
+// --- Bug: scanner re-feed on partial TSIOBufferCopy -------------------------
 //
 // When TSIOBufferCopy returns fewer bytes than avail, the scanner must only
 // be fed the bytes that are actually consumed. Otherwise, next iteration
@@ -2030,7 +2030,7 @@ TEST_CASE("Transform: partial copy must limit scanner feed to copied bytes", "[t
   data.bytes_written = 0;
   data.cache_written = false;
 
-  // HTML with a complete link tag — 56 bytes total
+  // HTML with a complete link tag  -- 56 bytes total
   const char *html = "<html><head><link rel=\"stylesheet\" href=\"/a.css\"></head>";
   int64_t html_len = static_cast<int64_t>(strlen(html));
 
@@ -2052,7 +2052,7 @@ TEST_CASE("Transform: partial copy must limit scanner feed to copied bytes", "[t
   TSCont fake_contp = reinterpret_cast<TSCont>(0x1234);
   early_hints_transform_do(fake_contp);
 
-  // Only 20 bytes were consumed — scanner must NOT have seen the full HTML.
+  // Only 20 bytes were consumed  -- scanner must NOT have seen the full HTML.
   // With 20 bytes ("<html><head><link re"), the link tag is incomplete,
   // so no links should be found and scanner should NOT be done.
   CHECK(data.bytes_written == 20);
@@ -2063,11 +2063,11 @@ TEST_CASE("Transform: partial copy must limit scanner feed to copied bytes", "[t
   TSIOBufferDestroy(data.output_buffer);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // Lifetime audit TDD tests
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
-// ─── LIFETIME BUG #1: Stale cont-data pointer after cleanup ─────────────────
+// --- LIFETIME BUG #1: Stale cont-data pointer after cleanup -----------------
 //
 // After the VConn-closed cleanup path frees TransformData, TSContDataSet(contp,
 // nullptr) is never called. If ATS delivers a queued event to the continuation
@@ -2099,7 +2099,7 @@ TEST_CASE("Lifetime: cont-data is nulled after VConn-closed cleanup", "[lifetime
   CHECK(mock_cont_data == nullptr);
 }
 
-// ─── LIFETIME BUG #1b: Double VConn-closed must not crash ───────────────────
+// --- LIFETIME BUG #1b: Double VConn-closed must not crash -------------------
 //
 // If two events arrive after VConn close (race), the second call must see
 // null data and skip cleanup. This depends on bug #1 being fixed.
@@ -2123,19 +2123,19 @@ TEST_CASE("Lifetime: double VConn-closed does not double-free", "[lifetime][doub
 
   TSCont fake_contp = reinterpret_cast<TSCont>(0x1234);
 
-  // First close — should clean up everything
+  // First close  -- should clean up everything
   early_hints_transform(fake_contp, TS_EVENT_VCONN_WRITE_READY, nullptr);
   CHECK(mock_cont_destroy_count == 1);
   CHECK(mock_iobuffer_destroy_count == 1);
 
-  // Second close — data must be null, so cleanup is skipped (no double-free)
+  // Second close  -- data must be null, so cleanup is skipped (no double-free)
   // This will crash or fail if bug #1 is not fixed.
   early_hints_transform(fake_contp, TS_EVENT_VCONN_WRITE_READY, nullptr);
   CHECK(mock_cont_destroy_count == 2);     // cont destroyed again (idempotent)
   CHECK(mock_iobuffer_destroy_count == 1); // buffer NOT destroyed again
 }
 
-// ─── LIFETIME BUG #2: scanner not nulled after delete ───────────────────────
+// --- LIFETIME BUG #2: scanner not nulled after delete -----------------------
 //
 // In the cleanup path, `delete data->scanner` frees the scanner but the
 // pointer remains non-null. If anything accesses data->scanner between
@@ -2162,11 +2162,11 @@ TEST_CASE("Lifetime: scanner pointer is safe after VConn-closed cleanup", "[life
   early_hints_transform(fake_contp, TS_EVENT_VCONN_WRITE_READY, nullptr);
 
   // After cleanup, cont data must be null (scanner is inside freed memory,
-  // so we can't inspect it — but the null data check prevents access).
+  // so we can't inspect it  -- but the null data check prevents access).
   CHECK(mock_cont_data == nullptr);
 }
 
-// ─── LIFETIME: uninitialized TransformData cleanup (never triggered) ────────
+// --- LIFETIME: uninitialized TransformData cleanup (never triggered) --------
 //
 // If the transform VConn closes before any event triggers initialization,
 // output_buffer is still nullptr. Cleanup must handle this gracefully.
@@ -2192,7 +2192,7 @@ TEST_CASE("Lifetime: cleanup of never-initialized TransformData", "[lifetime][ne
   CHECK(mock_cont_data == nullptr);        // data pointer nulled
 }
 
-// ─── LIFETIME: ERROR then VConn-close must not leak ─────────────────────────
+// --- LIFETIME: ERROR then VConn-close must not leak -------------------------
 //
 // ERROR sets errored=true but does not free anything. The subsequent
 // VConn-close must still perform full cleanup.
@@ -2218,12 +2218,12 @@ TEST_CASE("Lifetime: ERROR followed by VConn-close cleans up fully", "[lifetime]
 
   TSCont fake_contp = reinterpret_cast<TSCont>(0x1234);
 
-  // Step 1: ERROR event — sets errored flag, does NOT free
+  // Step 1: ERROR event  -- sets errored flag, does NOT free
   early_hints_transform(fake_contp, TS_EVENT_ERROR, nullptr);
   CHECK(mock_cont_destroy_count == 0);     // not destroyed yet
   CHECK(mock_iobuffer_destroy_count == 0); // not freed yet
 
-  // Step 2: VConn closes — must perform full cleanup despite errored=true
+  // Step 2: VConn closes  -- must perform full cleanup despite errored=true
   mock_vconn_closed = 1;
   early_hints_transform(fake_contp, TS_EVENT_VCONN_WRITE_READY, nullptr);
 
@@ -2232,21 +2232,21 @@ TEST_CASE("Lifetime: ERROR followed by VConn-close cleans up fully", "[lifetime]
   CHECK(mock_cont_data == nullptr); // data pointer nulled
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// R10 TDD RED Tests — Phase 4
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
+// R10 TDD RED Tests  -- Phase 4
+// -------------------------------------------------------------------------------
 
-// ─── R10-01: TSIOBufferCopy error path must finalize output VIO ─────────────
+// --- R10-01: TSIOBufferCopy error path must finalize output VIO -------------
 //
 // BUG: When TSIOBufferCopy returns 0 for non-zero avail, the code sets
-// errored=true and consumes input (R9-11 fix), but does NOT finalize the output
+// errored=true and consumes input, but does NOT finalize the output
 // VIO. The output VIO still expects INT64_MAX bytes, so the downstream
 // transform/HttpSM stalls until transaction timeout.
 //
 // The normal completion paths (EOS at line 397 and toread<=0 at line 405) both
 // call TSVIONBytesSet + TSVIOReenable. The error path must do the same.
 
-TEST_CASE("R10-01: copy error path must finalize output VIO to prevent downstream stall", "[r10][error-path]")
+TEST_CASE("Transform: copy error path must finalize output VIO to prevent downstream stall", "[transform][error-path]")
 {
   reset_mocks();
 
@@ -2283,7 +2283,7 @@ TEST_CASE("R10-01: copy error path must finalize output VIO to prevent downstrea
   TSCont fake_contp = reinterpret_cast<TSCont>(0x1234);
   early_hints_transform_do(fake_contp);
 
-  // R9-11 assertions still hold:
+  // All assertions still hold:
   CHECK(data.errored == true);
   CHECK(mock_reader_consumed == 500);
 
@@ -2297,15 +2297,15 @@ TEST_CASE("R10-01: copy error path must finalize output VIO to prevent downstrea
   TSIOBufferDestroy(data.output_buffer);
 }
 
-// ─── R10-03: Transform init failure must set errored to prevent retry loop ──
+// --- R10-03: Transform init failure must set errored to prevent retry loop --
 //
 // BUG: When transform initialization fails (e.g., null output_conn from
 // TSTransformOutputVConnGet), the function returns without setting errored=true.
 // On the next callback, !data->errored passes, !data->initialized passes, and
-// init is retried — creating a futile retry loop on every callback until the
+// init is retried  -- creating a futile retry loop on every callback until the
 // transaction times out.
 
-TEST_CASE("R10-03: init failure with null output_conn must set errored flag", "[r10][init-fail]")
+TEST_CASE("Transform: init failure with null output_conn must set errored flag", "[transform][init-fail]")
 {
   reset_mocks();
 
@@ -2324,7 +2324,7 @@ TEST_CASE("R10-03: init failure with null output_conn must set errored flag", "[
 
   // First call: init fails because output_conn is null
   early_hints_transform_do(fake_contp);
-  CHECK(data.initialized == false); // init didn't succeed — expected
+  CHECK(data.initialized == false); // init didn't succeed  -- expected
 
   // BUG: errored should be true to prevent futile retry loop.
   // Current code returns without setting errored, so this WILL FAIL (RED).
@@ -2335,11 +2335,11 @@ TEST_CASE("R10-03: init failure with null output_conn must set errored flag", "[
 // R11 Tests
 // =============================================================================
 
-TEST_CASE("R11-02: add_link_headers_to_response should skip oversized links like send_103", "[r11]")
+TEST_CASE("Transform: add_link_headers_to_response should skip oversized links like send_103", "[transform][link-headers]")
 {
   // Setup: 3 links where the 2nd exceeds size limit but the 3rd fits.
-  // send_103_response uses `continue` (skips oversized, tries rest) — correct.
-  // add_link_headers_to_response uses `break` (stops entirely) — inconsistent BUG.
+  // send_103_response uses `continue` (skips oversized, tries rest)  -- correct.
+  // add_link_headers_to_response uses `break` (stops entirely)  -- inconsistent BUG.
   std::vector<std::string> links;
   links.push_back("<https://a.com/s.js>; rel=preload; as=script"); // ~47 chars → entry_len = 55
   // Construct a link that pushes total over limit (150+ chars)
@@ -2365,7 +2365,7 @@ TEST_CASE("R11-02: add_link_headers_to_response should skip oversized links like
   REQUIRE(mock_field_append_count == 2);
 }
 
-TEST_CASE("R11-02: send_103 and add_link_headers produce same link count for mixed sizes", "[r11]")
+TEST_CASE("Transform: send_103 and add_link_headers produce same link count for mixed sizes", "[transform][link-headers]")
 {
   // Verify that both functions produce the same count when given identical inputs.
   std::vector<std::string> links;
@@ -2377,7 +2377,7 @@ TEST_CASE("R11-02: send_103 and add_link_headers produce same link count for mix
   int header_size_limit = 130;
   int max_links         = 50;
 
-  // Count links from send_103_response (uses continue — correct)
+  // Count links from send_103_response (uses continue  -- correct)
   mock_send_early_hints_rc          = TS_SUCCESS;
   mock_send_early_hints_count       = 0;
   mock_send_early_hints_last_nlinks = 0;
@@ -2385,18 +2385,18 @@ TEST_CASE("R11-02: send_103 and add_link_headers produce same link count for mix
   send_103_response(fake_txn, links, max_links, header_size_limit);
   int send_103_count = mock_send_early_hints_last_nlinks;
 
-  // Count links from add_link_headers_to_response (uses break — BUG)
+  // Count links from add_link_headers_to_response (uses break  -- BUG)
   mock_field_append_count = 0;
   TSMBuffer bufp          = reinterpret_cast<TSMBuffer>(0x1234);
   TSMLoc hdr_loc          = reinterpret_cast<TSMLoc>(0x5678);
   add_link_headers_to_response(bufp, hdr_loc, links, max_links, header_size_limit);
   int add_headers_count = mock_field_append_count;
 
-  // Both should produce the same number of links — this WILL FAIL (RED)
+  // Both should produce the same number of links  -- this WILL FAIL (RED)
   REQUIRE(send_103_count == add_headers_count);
 }
 
-// ─── ATS Cache Interception (Read-Cache Hook) & Redundant Transform Skip ──
+// --- ATS Cache Interception (Read-Cache Hook) & Redundant Transform Skip --
 
 TEST_CASE("Cache Interception: hook handles CACHE_HDR and prevents double learning", "[cache_intercept]")
 {
@@ -2477,15 +2477,15 @@ TEST_CASE("Stats Reload: TSRemapInit idempotency", "[stats_reload]")
   // First initialization
   TSReturnCode rc1 = TSRemapInit(&api_info, errbuf, sizeof(errbuf));
   REQUIRE(rc1 == TS_SUCCESS);
-  CHECK(mock_stat_create_call_count == 6);
+  CHECK(mock_stat_create_call_count == 8); // 8 stats registered in TSRemapInit
 
   // Second initialization (simulates reload)
   TSReturnCode rc2 = TSRemapInit(&api_info, errbuf, sizeof(errbuf));
   REQUIRE(rc2 == TS_SUCCESS);
 
   // If fixed, we should NOT call TSStatCreate again!
-  // It will fail (RED) before our fix, since TSRemapInit will try to call TSStatCreate 6 more times.
-  CHECK(mock_stat_create_call_count == 6);
+  // It will fail (RED) before our fix, since TSRemapInit will try to call TSStatCreate 8 more times.
+  CHECK(mock_stat_create_call_count == 8); // stat count must stay at 8  -- no double-create on reload
 }
 
 extern "C" TSReturnCode TSRemapNewInstance(int argc, char *argv[], void **ih, char *errbuf, int errbuf_size);
@@ -2527,7 +2527,7 @@ TEST_CASE("New Instance: Dir creation and cleanup", "[instance_init]")
   system("rm -rf ./early_hints_test_dir");
 }
 
-TEST_CASE("Stats Safety: increment_stat safely guards against negative IDs (H-2)", "[stats_safety]")
+TEST_CASE("Stats Safety: increment_stat safely guards against negative stat IDs", "[stats_safety]")
 {
   reset_mocks();
 

@@ -1,5 +1,5 @@
 '''
-Test 103 Early Hints plugin — extract_origin() RFC 3986 compliance
+Test 103 Early Hints plugin  -- extract_origin() RFC 3986 compliance
 '''
 #  Licensed to the Apache Software Foundation (ASF) under one
 #  or more contributor license agreements.  See the NOTICE file
@@ -21,8 +21,8 @@ Test.Summary = '''
 extract_origin() must use RFC 3986 §3.1 scheme detection.
 
 Bug: extract_origin() uses url.find("://") naively. For a URL like
-/loader?url=https://cdn.example.com/app.js — a same-origin endpoint that
-proxies external resources — is_crossorigin() correctly returns false (fixed
+/loader?url=https://cdn.example.com/app.js  -- a same-origin endpoint that
+proxies external resources  -- is_crossorigin() correctly returns false (fixed
 in the crossorigin fix), BUT if extract_origin() were ever called for this URL it would
 produce "/loader?url=https://cdn.example.com" (wrong) instead of returning
 the URL as-is.
@@ -63,7 +63,7 @@ microserver.addResponse(
         "body": PROXY_PAGE_BODY
     })
 
-# Second request — serves cached hints
+# Second request  -- serves cached hints
 microserver.addResponse(
     "sessionfile.log", {
         "headers": "GET /proxy-app.html HTTP/1.1\r\nHost: www.example.com\r\n\r\n",
@@ -124,7 +124,7 @@ ts.Disk.records_config.update({
 })
 
 # ----
-# TC0: Learn phase — proxy app page
+# TC0: Learn phase  -- proxy app page
 # ----
 tr0 = Test.AddTestRun("RFC3986-origin: Learn proxy app page")
 tr0.Processes.Default.Command = (
@@ -139,7 +139,7 @@ tr0.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression("200",
 tr0.StillRunningAfter = microserver
 
 # ----
-# TC1: Serve — verify proxy URL script produces same-origin rel=preload hint
+# TC1: Serve  -- verify proxy URL script produces same-origin rel=preload hint
 #
 # BUG (before fix): is_crossorigin() was already fixed, but if
 # extract_origin() were invoked defensively, it would corrupt the hint to
@@ -175,7 +175,7 @@ tr1.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
 tr1.StillRunningAfter = microserver
 
 # ----
-# TC2+3: Regression guard — genuine cross-origin still produces correct preconnect
+# TC2+3: Regression guard  -- genuine cross-origin still produces correct preconnect
 # ----
 tr2 = Test.AddTestRun("RFC3986-origin: Learn genuine cross-origin (regression guard)")
 tr2.Processes.Default.Command = (
@@ -198,5 +198,5 @@ tr3.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "x-early-hints-status: sent", "Genuine cross-origin must produce preconnect")
 tr3.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
     "fonts.gstatic.com>; rel=preconnect",
-    "Font CDN origin must appear as preconnect — regression guard")
+    "Font CDN origin must appear as preconnect  -- regression guard")
 tr3.StillRunningAfter = microserver

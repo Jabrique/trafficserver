@@ -1,5 +1,5 @@
 '''
-Test 103 Early Hints plugin — config limit enforcement
+Test 103 Early Hints plugin  -- config limit enforcement
 '''
 #  Licensed to the Apache Software Foundation (ASF) under one
 #  or more contributor license agreements.  See the NOTICE file
@@ -40,7 +40,7 @@ Test.ContinueOnFail = True
 # ----
 microserver = Test.MakeOriginServer("microserver")
 
-# Simple HTML page (for manual mode tests — plugin doesn't scan body in manual mode)
+# Simple HTML page (for manual mode tests  -- plugin doesn't scan body in manual mode)
 microserver.addResponse(
     "sessionfile.log", {
         "headers": "GET /page.html HTTP/1.1\r\nHost: www.example.com\r\n\r\n",
@@ -52,7 +52,7 @@ microserver.addResponse(
 
 # Page with Content-Encoding: gzip header but UNCOMPRESSED HTML body.
 # Plugin should detect Content-Encoding and skip scanning entirely.
-# If scanner ran, it would find /gzip-resource.js — but it must NOT.
+# If scanner ran, it would find /gzip-resource.js  -- but it must NOT.
 microserver.addResponse(
     "sessionfile.log", {
         "headers": "GET /gzip.html HTTP/1.1\r\nHost: www.example.com\r\n\r\n",
@@ -81,7 +81,7 @@ microserver.addResponse(
             "</head><body>Malformed</body></html>\r\n"
     })
 
-# Page with Content-Encoding: br (brotli) — should skip scanning
+# Page with Content-Encoding: br (brotli)  -- should skip scanning
 microserver.addResponse(
     "sessionfile.log", {
         "headers": "GET /brotli.html HTTP/1.1\r\nHost: www.example.com\r\n\r\n",
@@ -96,7 +96,7 @@ microserver.addResponse(
             "</head><body>Brotli test</body></html>\r\n"
     })
 
-# Non-HTML response (JSON) — scanner should not engage
+# Non-HTML response (JSON)  -- scanner should not engage
 microserver.addResponse(
     "sessionfile.log", {
         "headers": "GET /api/data.json HTTP/1.1\r\nHost: www.example.com\r\n\r\n",
@@ -116,7 +116,7 @@ microserver.addResponse(
         "body": ""
     })
 
-# Page for as= validation test (response body irrelevant — manual mode)
+# Page for as= validation test (response body irrelevant  -- manual mode)
 microserver.addResponse(
     "sessionfile.log", {
         "headers": "GET /as-warn.html HTTP/1.1\r\nHost: www.example.com\r\n\r\n",
@@ -177,7 +177,7 @@ ts.Disk.remap_config.AddLines([
     ' @pparam=--no-navigate-only'
     ' @pparam=--debug-header @pparam=X-Early-Hints-Status',
 
-    # Content-Encoding: br (brotli) — auto-learn should skip scanning
+    # Content-Encoding: br (brotli)  -- auto-learn should skip scanning
     'map /brotli.html http://127.0.0.1:{0}/brotli.html'.format(microserver.Variables.Port) +
     ' @plugin=early_hints.so'
     ' @pparam=--mode @pparam=auto-learn'
@@ -186,7 +186,7 @@ ts.Disk.remap_config.AddLines([
     ' @pparam=--no-navigate-only'
     ' @pparam=--debug-header @pparam=X-Early-Hints-Status',
 
-    # Non-HTML Content-Type — scanner should not engage
+    # Non-HTML Content-Type  -- scanner should not engage
     'map /api/data.json http://127.0.0.1:{0}/api/data.json'.format(microserver.Variables.Port) +
     ' @plugin=early_hints.so'
     ' @pparam=--mode @pparam=auto-learn'
@@ -230,7 +230,7 @@ ts.Disk.diags_log.Content += Testers.ExcludesExpression(
     "FATAL:", "Diags log should not contain FATAL errors")
 
 # ----
-# Test Case 0: max-links=1 — only first link appears
+# Test Case 0: max-links=1  -- only first link appears
 # ----
 tr1 = Test.AddTestRun("max-links=1 limits to first link only")
 tr1.Processes.Default.Command = (
@@ -252,7 +252,7 @@ tr1.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
 tr1.StillRunningAfter = microserver
 
 # ----
-# Test Case 1: header-size-limit=256 — first 2 links fit, 3rd skipped
+# Test Case 1: header-size-limit=256  -- first 2 links fit, 3rd skipped
 # ----
 tr2 = Test.AddTestRun("header-size-limit=256 skips oversized third link")
 tr2.Processes.Default.Command = (
@@ -272,7 +272,7 @@ tr2.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
 tr2.StillRunningAfter = microserver
 
 # ----
-# Test Case 2: Content-Encoding gzip — first request (learn phase skipped)
+# Test Case 2: Content-Encoding gzip  -- first request (learn phase skipped)
 # ----
 tr3 = Test.AddTestRun("Content-Encoding gzip - learn phase")
 tr3.Processes.Default.Command = (
@@ -288,7 +288,7 @@ tr3.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr3.StillRunningAfter = microserver
 
 # ----
-# Test Case 3: Content-Encoding gzip — second request verifies nothing learned
+# Test Case 3: Content-Encoding gzip  -- second request verifies nothing learned
 # ----
 tr4 = Test.AddTestRun("Content-Encoding gzip - verify no links learned")
 tr4.Processes.Default.Command = (
@@ -308,7 +308,7 @@ tr4.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
 tr4.StillRunningAfter = microserver
 
 # ----
-# Test Case 4: Malformed HTML — plugin doesn't crash, returns 200
+# Test Case 4: Malformed HTML  -- plugin doesn't crash, returns 200
 # ----
 tr5 = Test.AddTestRun("Malformed HTML - plugin handles gracefully")
 tr5.Processes.Default.Command = (
@@ -318,13 +318,13 @@ tr5.Processes.Default.Command = (
     " 'https://127.0.0.1:{0}/malformed.html'".format(ts.Variables.ssl_port))
 tr5.Processes.Default.ReturnCode = 0
 tr5.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
-    "200 OK", "Malformed HTML should not crash plugin — 200 returned")
+    "200 OK", "Malformed HTML should not crash plugin  -- 200 returned")
 tr5.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
     "X-Early-Hints-Status:", "Plugin should engage even with malformed HTML")
 tr5.StillRunningAfter = microserver
 
 # ----
-# Test Case 5: Content-Encoding: br (brotli) — learn phase skipped
+# Test Case 5: Content-Encoding: br (brotli)  -- learn phase skipped
 # ----
 tr6 = Test.AddTestRun("Content-Encoding brotli - learn phase")
 tr6.Processes.Default.Command = (
@@ -338,7 +338,7 @@ tr6.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
 tr6.StillRunningAfter = microserver
 
 # ----
-# Test Case 6: Content-Encoding: br — second request verifies nothing learned
+# Test Case 6: Content-Encoding: br  -- second request verifies nothing learned
 # ----
 tr7 = Test.AddTestRun("Content-Encoding brotli - verify no links learned")
 tr7.Processes.Default.Command = (
@@ -354,7 +354,7 @@ tr7.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
 tr7.StillRunningAfter = microserver
 
 # ----
-# Test Case 7: Non-HTML Content-Type (JSON) — first request
+# Test Case 7: Non-HTML Content-Type (JSON)  -- first request
 # ----
 tr8 = Test.AddTestRun("Non-HTML JSON - learn phase")
 tr8.Processes.Default.Command = (
@@ -368,7 +368,7 @@ tr8.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
 tr8.StillRunningAfter = microserver
 
 # ----
-# Test Case 8: Non-HTML — second request verifies nothing learned
+# Test Case 8: Non-HTML  -- second request verifies nothing learned
 # ----
 tr9 = Test.AddTestRun("Non-HTML JSON - verify no links learned")
 tr9.Processes.Default.Command = (
@@ -384,7 +384,7 @@ tr9.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
 tr9.StillRunningAfter = microserver
 
 # ----
-# Test Case 9: HEAD request — manual mode, should not crash
+# Test Case 9: HEAD request  -- manual mode, should not crash
 # ----
 tr10 = Test.AddTestRun("HEAD request - plugin handles without crash")
 tr10.Processes.Default.Command = (
@@ -399,7 +399,7 @@ tr10.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
 tr10.StillRunningAfter = microserver
 
 # ----
-# Test Case 10: as= validation — rel=preload without as= still accepted (soft-warn)
+# Test Case 10: as= validation  -- rel=preload without as= still accepted (soft-warn)
 # Link appears in 200 response because soft-warn does not reject the link.
 # ----
 tr11 = Test.AddTestRun("as= validation - rel=preload without as= still works")

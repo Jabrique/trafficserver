@@ -1,5 +1,5 @@
 '''
-Test 103 Early Hints plugin — combined mode (auto-learn + origin-forward)
+Test 103 Early Hints plugin  -- combined mode (auto-learn + origin-forward)
 '''
 #  Licensed to the Apache Software Foundation (ASF) under one
 #  or more contributor license agreements.  See the NOTICE file
@@ -171,7 +171,7 @@ ts.Disk.records_config.update({
 })
 
 # ----
-# Test Case 0: Combined mode — first request learns from both sources
+# Test Case 0: Combined mode  -- first request learns from both sources
 # Origin sends Link header for origin-style.css; HTML body has html-app.js.
 # Both should appear as Link headers in the 200 response.
 # ----
@@ -194,7 +194,7 @@ tr1.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr1.StillRunningAfter = microserver
 
 # ----
-# Test Case 1: Combined mode — H2 second request gets 103 from cache
+# Test Case 1: Combined mode  -- H2 second request gets 103 from cache
 # After learning from first request, H2 should receive 103 with cached hints.
 # ----
 tr2 = Test.AddTestRun("Combined mode - H2 second request gets 103")
@@ -212,7 +212,7 @@ tr2.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr2.StillRunningAfter = microserver
 
 # ----
-# Test Case 2: HTML-only — auto-learn works even when origin has no Link headers
+# Test Case 2: HTML-only  -- auto-learn works even when origin has no Link headers
 # ----
 tr3 = Test.AddTestRun("Combined mode HTML-only - auto-learn works without origin Link")
 tr3.Processes.Default.Command = (
@@ -228,7 +228,7 @@ tr3.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr3.StillRunningAfter = microserver
 
 # ----
-# Test Case 3: HTML-only — second request proves auto-learn populated cache
+# Test Case 3: HTML-only  -- second request proves auto-learn populated cache
 # ----
 tr4 = Test.AddTestRun("Combined mode HTML-only - H2 gets 103 from auto-learn cache")
 tr4.Processes.Default.Command = (
@@ -247,7 +247,7 @@ tr4.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr4.StillRunningAfter = microserver
 
 # ----
-# Test Case 4: Three-mode (manual+auto-learn+origin-forward) — first request
+# Test Case 4: Three-mode (manual+auto-learn+origin-forward)  -- first request
 # Manual links appear immediately, auto-learn + origin-forward learn from response.
 # ----
 tr5 = Test.AddTestRun("Three-mode - first request gets manual link + learns")
@@ -265,7 +265,7 @@ tr5.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr5.StillRunningAfter = microserver
 
 # ----
-# Test Case 5: Three-mode — H2 second request gets 103 with ALL sources
+# Test Case 5: Three-mode  -- H2 second request gets 103 with ALL sources
 # Cache should now contain: manual link + auto-learned + origin-forwarded
 # ----
 tr6 = Test.AddTestRun("Three-mode - H2 second request gets 103 from all sources")
@@ -287,7 +287,7 @@ tr6.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr6.StillRunningAfter = microserver
 
 # ----
-# Test Case 6: Compact pparam format — @pparam=--mode=manual works
+# Test Case 6: Compact pparam format  -- @pparam=--mode=manual works
 # ----
 tr7 = Test.AddTestRun("Compact pparam - --mode=manual --link=value")
 tr7.Processes.Default.Command = (
@@ -305,7 +305,7 @@ tr7.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr7.StillRunningAfter = microserver
 
 # ----
-# Test Case 7: Dedup — first request learns same URL that manual already has
+# Test Case 7: Dedup  -- first request learns same URL that manual already has
 # ----
 tr8 = Test.AddTestRun("Dedup - first request learns duplicate URL from origin + HTML")
 tr8.Processes.Default.Command = (
@@ -321,7 +321,7 @@ tr8.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr8.StillRunningAfter = microserver
 
 # ----
-# Test Case 8: Dedup — second H2 request: merged output deduplicates same URL
+# Test Case 8: Dedup  -- second H2 request: merged output deduplicates same URL
 # ----
 tr9 = Test.AddTestRun("Dedup - H2 merged output deduplicates shared URL")
 tr9.Processes.Default.Command = (

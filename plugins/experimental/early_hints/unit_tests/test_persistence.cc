@@ -49,7 +49,7 @@ file_exists(const std::string &path)
   return stat(path.c_str(), &st) == 0;
 }
 
-// ─── Basic persistence ─────────────────────────────────────────────────────
+// --- Basic persistence -----------------------------------------------------
 
 TEST_CASE("Persistence: persist creates file at specified path", "[persistence]")
 {
@@ -142,7 +142,7 @@ TEST_CASE("Persistence: round-trip preserves data across restart", "[persistence
   cleanup(path);
 }
 
-// ─── Atomic rename ──────────────────────────────────────────────────────────
+// --- Atomic rename ----------------------------------------------------------
 
 TEST_CASE("Persistence: persist uses atomic rename (no .tmp left)", "[persistence]")
 {
@@ -162,7 +162,7 @@ TEST_CASE("Persistence: persist uses atomic rename (no .tmp left)", "[persistenc
   cleanup(path);
 }
 
-// ─── Error handling ─────────────────────────────────────────────────────────
+// --- Error handling ---------------------------------------------------------
 
 TEST_CASE("Persistence: load nonexistent file returns false, cache empty", "[persistence]")
 {
@@ -230,7 +230,7 @@ TEST_CASE("Persistence: load corrupt file (truncated entry) returns false", "[pe
     uint32_t count = 1;
     f.write(reinterpret_cast<char *>(&magic), sizeof(magic));
     f.write(reinterpret_cast<char *>(&count), sizeof(count));
-    // No entry data — truncated
+    // No entry data  -- truncated
   }
 
   HintsCache cache;
@@ -240,7 +240,7 @@ TEST_CASE("Persistence: load corrupt file (truncated entry) returns false", "[pe
   cleanup(path);
 }
 
-// ─── Empty cache ────────────────────────────────────────────────────────────
+// --- Empty cache ------------------------------------------------------------
 
 TEST_CASE("Persistence: persist with empty cache creates valid file", "[persistence]")
 {
@@ -266,7 +266,7 @@ TEST_CASE("Persistence: persist with empty cache creates valid file", "[persiste
   cleanup(path);
 }
 
-// ─── Overwrite ──────────────────────────────────────────────────────────────
+// --- Overwrite --------------------------------------------------------------
 
 TEST_CASE("Persistence: persist overwrites previous file (no duplicates)", "[persistence]")
 {
@@ -298,7 +298,7 @@ TEST_CASE("Persistence: persist overwrites previous file (no duplicates)", "[per
   cleanup(path);
 }
 
-// ─── Capacity eviction after load ───────────────────────────────────────────
+// --- Capacity eviction after load -------------------------------------------
 
 TEST_CASE("Persistence: capacity eviction still works after load", "[persistence]")
 {
@@ -328,7 +328,7 @@ TEST_CASE("Persistence: capacity eviction still works after load", "[persistence
   cleanup(path);
 }
 
-// ─── No persist path ────────────────────────────────────────────────────────
+// --- No persist path --------------------------------------------------------
 
 TEST_CASE("Persistence: no persist path = persist_to_disk is no-op", "[persistence]")
 {
@@ -339,7 +339,7 @@ TEST_CASE("Persistence: no persist path = persist_to_disk is no-op", "[persisten
   CHECK_FALSE(cache.load_from_disk());
 }
 
-// ─── Large cache round-trip ─────────────────────────────────────────────────
+// --- Large cache round-trip -------------------------------------------------
 
 TEST_CASE("Persistence: large cache round-trip (500 entries)", "[persistence]")
 {
@@ -385,7 +385,7 @@ TEST_CASE("Persistence: large cache round-trip (500 entries)", "[persistence]")
   cleanup(path);
 }
 
-// ─── Auto-persist on put ────────────────────────────────────────────────────
+// --- Auto-persist on put ----------------------------------------------------
 
 TEST_CASE("Persistence: put triggers auto-persist when path set", "[persistence]")
 {
@@ -420,9 +420,9 @@ TEST_CASE("Persistence: put triggers auto-persist when path set", "[persistence]
   cleanup(path);
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
+// -----------------------------------------------------------------------------
 // Audit V2: Missing persistence scenarios
-// ═════════════════════════════════════════════════════════════════════════════
+// -----------------------------------------------------------------------------
 
 // cache-02: Corrupt file with extra trailing data
 TEST_CASE("Persistence audit v2: file with extra trailing data loads OK", "[persistence][audit-v2]")
@@ -476,7 +476,7 @@ TEST_CASE("Persistence audit v2: truncated key data returns false", "[persistenc
     uint16_t key_len = 100;
     f.write(reinterpret_cast<char *>(&key_len), sizeof(key_len));
     f.write("short", 5); // only 5 bytes, not 100
-    // File ends here — truncated
+    // File ends here  -- truncated
   }
 
   HintsCache cache;
@@ -623,7 +623,7 @@ TEST_CASE("Persistence audit v2: very long link value round-trips", "[persistenc
   cleanup(path);
 }
 
-// ─── miss-01: fnv1a_hash unit test ──────────────────────────────────────────
+// --- miss-01: fnv1a_hash unit test ------------------------------------------
 // The hash function is static in early_hints.cc; we replicate it here for
 // direct verification against known FNV-1a test vectors.
 
@@ -673,7 +673,7 @@ TEST_CASE("fnv1a_hash: correctness and collision resistance", "[persistence][has
   }
 }
 
-// ─── miss-02: load_from_disk entry_count at max_entries*2+1 boundary ────────
+// --- miss-02: load_from_disk entry_count at max_entries*2+1 boundary --------
 
 TEST_CASE("Persistence: entry_count at exactly max_entries*2+1 is rejected", "[persistence][boundary][audit]")
 {
@@ -714,7 +714,7 @@ TEST_CASE("Persistence: entry_count at exactly max_entries*2 is accepted", "[per
     uint32_t entry_count = 200; // exactly 100 * 2
     fwrite(&magic, sizeof(magic), 1, fp);
     fwrite(&entry_count, sizeof(entry_count), 1, fp);
-    // Don't write any actual entries — load will fail reading first key_len
+    // Don't write any actual entries  -- load will fail reading first key_len
     fclose(fp);
   }
 
@@ -727,7 +727,7 @@ TEST_CASE("Persistence: entry_count at exactly max_entries*2 is accepted", "[per
   cleanup(path);
 }
 
-// ─── Dirty flag integrity ────────────────────────────────────────────────────
+// --- Dirty flag integrity ----------------------------------------------------
 //
 // If persist_to_disk() fails (e.g. unwritable path, disk full), is_dirty_
 // must remain true so the destructor can retry on shutdown.
@@ -774,10 +774,10 @@ TEST_CASE("Persistence: destructor flushes data even after a prior failed persis
     cache.set_persist_path("/nonexistent/dir/hints.bin");
     std::vector<std::string> links = {"</app.js>; rel=preload; as=script"};
     cache.put("/page", links);
-    cache.persist_to_disk(); // fails — dirty flag must NOT be cleared
+    cache.persist_to_disk(); // fails  -- dirty flag must NOT be cleared
 
     cache.set_persist_path(valid_path);
-    // Destructor runs here — must flush because data is still dirty
+    // Destructor runs here  -- must flush because data is still dirty
   }
 
   // If dirty flag was cleared on failure, the destructor skips the flush
@@ -792,7 +792,7 @@ TEST_CASE("Persistence: destructor flushes data even after a prior failed persis
   cleanup(valid_path);
 }
 
-// ─── Write error safety ──────────────────────────────────────────────────────
+// --- Write error safety ------------------------------------------------------
 //
 // A failed persist (bad path, disk full) must not corrupt or overwrite
 // an existing valid persist file. The atomic rename must only happen
@@ -838,7 +838,7 @@ TEST_CASE("Persistence: failed persist leaves the existing good file intact", "[
   cleanup(path);
 }
 
-// ─── Concurrent persist safety ───────────────────────────────────────────────
+// --- Concurrent persist safety -----------------------------------------------
 //
 // Concurrent put()-triggered persists must not race against an explicit
 // persist_to_disk() call (e.g. from shutdown code). Both paths must
@@ -869,7 +869,7 @@ TEST_CASE("Persistence: concurrent persist calls produce a valid final file", "[
       t.join();
     }
 
-    // Explicit flush while destructor may also flush — must not corrupt
+    // Explicit flush while destructor may also flush  -- must not corrupt
     cache.persist_to_disk();
 
     if (file_exists(path)) {
@@ -882,7 +882,7 @@ TEST_CASE("Persistence: concurrent persist calls produce a valid final file", "[
   cleanup(path);
 }
 
-// ─── Link validation on load ─────────────────────────────────────────────────
+// --- Link validation on load -------------------------------------------------
 //
 // Links loaded from a persist file must be re-validated before serving.
 // An older plugin version or a tampered file may contain unsupported rel types
@@ -969,7 +969,7 @@ TEST_CASE("Persistence: preload link missing as= is rejected on load", "[persist
     uint16_t link_count = 1;
     fwrite(&link_count, sizeof(link_count), 1, fp);
 
-    // rel=preload without as= — invalid: preload requires the as= attribute
+    // rel=preload without as=  -- invalid: preload requires the as= attribute
     const char *bad_link = "</app.js>; rel=preload";
     uint16_t ll          = static_cast<uint16_t>(strlen(bad_link));
     fwrite(&ll, sizeof(ll), 1, fp);
@@ -991,7 +991,7 @@ TEST_CASE("Persistence: preload link missing as= is rejected on load", "[persist
   cleanup(path);
 }
 
-// ─── persist_count atomicity ─────────────────────────────────────────────────
+// --- persist_count atomicity -------------------------------------------------
 //
 // persist_count_ is incremented inside a nested lock (persist_mutex_ held,
 // then mutex_ acquired). Making it std::atomic removes this nested dependency.
@@ -1135,7 +1135,7 @@ TEST_CASE("Persistence: destructor flushes dirty data even when throttled", "[pe
 }
 
 // =============================================================================
-// Commit 3 persist hardening tests
+// persist hardening tests
 // =============================================================================
 
 // Helper: write a minimal binary header (magic + entry_count)

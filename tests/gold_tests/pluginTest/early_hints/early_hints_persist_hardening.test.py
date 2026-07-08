@@ -58,20 +58,20 @@ def fnv1a_64(s):
         h = (h * 1099511628211) & 0xFFFFFFFFFFFFFFFF
     return h
 
-# ─── Origin servers ────────────────────────────────────────────────────────────
+# --- Origin servers ------------------------------------------------------------
 ms = Test.MakeOriginServer("ms")
 
-# Page for A-25 oversized link test: no <link> tags — all hints from persist file
+# Page for oversized link test: no <link> tags  -- all hints from persist file
 ms.addResponse(
     "sessionfile.log", {
         "headers": "GET /a25-oversize.html HTTP/1.1\r\nHost: www.example.com\r\n\r\n",
         "body": ""
     }, {
         "headers": "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/html\r\n\r\n",
-        "body": "<html><body>A-25 persist hardening test</body></html>\r\n"
+        "body": "<html><body>persist hardening test</body></html>\r\n"
     })
 
-# Page for A-09 future timestamp test
+# Page for future timestamp clamp test
 ms.addResponse(
     "sessionfile.log", {
         "headers": "GET /a09-future-ts.html HTTP/1.1\r\nHost: www.example.com\r\n\r\n",
@@ -81,7 +81,7 @@ ms.addResponse(
         "body": "<html><body>A-09 future timestamp clamp test</body></html>\r\n"
     })
 
-# ─── ATS setup ────────────────────────────────────────────────────────────────
+# --- ATS setup ----------------------------------------------------------------
 ts = Test.MakeATSProcess("ts", select_ports=True, enable_tls=True, enable_cache=False)
 ts.addDefaultSSLFiles()
 ts.Disk.ssl_multicert_config.AddLine('dest_ip=* ssl_cert_name=server.pem ssl_key_name=server.key')
@@ -116,7 +116,7 @@ ts.Disk.records_config.update({
     'proxy.config.http2.active_timeout_in': 3,
 })
 
-# ─── Build A-25 binary persist file (oversized link + valid link) ──────────────
+# --- Build binary persist file (oversized link + valid link) --------------
 # Entry: /a25-oversize.html
 #   link 1: 9000-byte garbage (link_len=9000 > 8192 limit)
 #   link 2: </valid.js>; rel=preload; as=script  (valid, must survive)
@@ -135,13 +135,13 @@ a25_bytes += struct.pack('<H', 2)           # 2 links
 a25_bytes += struct.pack('<H', 9000) + a25_oversize    # link 1: oversized
 a25_bytes += struct.pack('<H', len(a25_valid_link)) + a25_valid_link  # link 2: valid
 
-# ─── Build A-09 binary persist file (future timestamp) ────────────────────────
+# --- Build future-timestamp-clamp binary persist file --------------------------
 # Entry: /a09-future-ts.html
 #   ts = now + 31 years (far future)
 #   link: valid
 #
 # Before fix: ts stored as-is (potential TTL/ordering issues).
-# After fix:  ts clamped to now — entry still loaded and served.
+# After fix:  ts clamped to now  -- entry still loaded and served.
 
 a09_key   = b"/a09-future-ts.html"
 a09_link  = b"</module.js>; rel=preload; as=script"
@@ -153,7 +153,7 @@ a09_bytes += struct.pack('<Q', future_ts)    # far-future last_updated (v3 field
 a09_bytes += struct.pack('<H', 1)            # 1 link
 a09_bytes += struct.pack('<H', len(a09_link)) + a09_link
 
-# ─── Combined persist file (both entries in one file requires separate hashes) ─
+# --- Combined persist file (both entries in one file requires separate hashes) -
 # Each remap rule uses the from-URL as the key. Write two separate files.
 from_url_a25  = "http:///a25-oversize.html"
 from_url_a09  = "http:///a09-future-ts.html"
@@ -167,7 +167,7 @@ filepath_a09  = os.path.join(persist_dir, filename_a09)
 b64_a25 = base64.b64encode(a25_bytes).decode('ascii')
 b64_a09 = base64.b64encode(a09_bytes).decode('ascii')
 
-# ─── Setup: write both persist files before ATS starts ────────────────────────
+# --- Setup: write both persist files before ATS starts ------------------------
 tr_setup = Test.AddTestRun("Setup: write oversized-link and future-ts persist files")
 tr_setup.Setup.MakeDir(persist_dir)
 tr_setup.Processes.Default.Command = (
@@ -187,11 +187,11 @@ tr_setup.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
 tr_setup.StillRunningAfter = ms
 
 # ==============================================================================
-# A-25: oversized link skip — valid link in same file must be served
+# oversized link skip  -- valid link in same file must be served
 # ==============================================================================
 
 tr_a25 = Test.AddTestRun(
-    "A-25: oversized link skipped; valid link still served as 103 hint")
+    "oversized link skipped; valid link still served as 103 hint")
 tr_a25.Processes.Default.Command = (
     "sleep 2 && curl -s -D - -o /dev/null --http2 --insecure"
     " 'https://127.0.0.1:{0}/a25-oversize.html'".format(ts.Variables.ssl_port))
@@ -201,26 +201,26 @@ tr_a25.Processes.Default.StartBefore(Test.Processes.ts)
 # Before fix: load fails (return false) → no 103, debug header = no-hints.
 tr_a25.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "x-early-hints-status: sent",
-    "A-25: valid link must survive oversized-link skip and be served as 103")
+    "valid link must survive oversized-link skip and be served as 103")
 tr_a25.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
     "/valid.js",
-    "A-25: the valid link /valid.js must appear in the 103 Link header")
+    "the valid link /valid.js must appear in the 103 Link header")
 tr_a25.StillRunningAfter = ms
 
 # ==============================================================================
-# A-09: future timestamp clamp — entry still loaded and served
+# future-timestamp-clamp: future timestamp clamp  -- entry still loaded and served
 # ==============================================================================
 
 tr_a09 = Test.AddTestRun(
-    "A-09: future ts_on_disk clamped; entry still served as 103 hint")
+    "future-timestamp-clamp: future ts_on_disk clamped; entry still served as 103 hint")
 tr_a09.Processes.Default.Command = (
     "sleep 1 && curl -s -D - -o /dev/null --http2 --insecure"
     " 'https://127.0.0.1:{0}/a09-future-ts.html'".format(ts.Variables.ssl_port))
 tr_a09.Processes.Default.ReturnCode = 0
 tr_a09.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "x-early-hints-status: sent",
-    "A-09: future ts clamped to now; entry must still be loaded and served as 103")
+    "future-timestamp-clamp: future ts clamped to now; entry must still be loaded and served as 103")
 tr_a09.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
     "/module.js",
-    "A-09: /module.js must appear in the 103 Link header")
+    "future-timestamp-clamp: /module.js must appear in the 103 Link header")
 tr_a09.StillRunningAfter = ms

@@ -125,7 +125,7 @@ HintsCache::peek(const std::string &key) const
 void
 HintsCache::put(const std::string &key, const std::vector<std::string> &links)
 {
-  // Key length cap — reject keys longer than MAX_KEY_LEN.
+  // Key length cap  -- reject keys longer than MAX_KEY_LEN.
   // Oversized keys cannot be URL paths in practice and risk O(n) memory bloat
   // in the persist file. Silently drop and count as a drop.
   if (key.size() > static_cast<size_t>(MAX_KEY_LEN)) {
@@ -154,7 +154,7 @@ HintsCache::put(const std::string &key, const std::vector<std::string> &links)
       // Move key to front of LRU list since it was updated
       lru_list_.splice(lru_list_.begin(), lru_list_, entry.lru_iterator);
     } else {
-      // Enforce max entries limit — evict oldest if at capacity
+      // Enforce max entries limit  -- evict oldest if at capacity
       if (static_cast<int>(entries_.size()) >= max_entries_) {
         evict_oldest();
         if (static_cast<int>(entries_.size()) >= max_entries_) {
@@ -356,7 +356,7 @@ HintsCache::persist_to_disk()
 
   {
     TSMutexGuard guard(mutex_);
-    // Do NOT clear is_dirty_ here — clear it only after the rename succeeds.
+    // Do NOT clear is_dirty_ here  -- clear it only after the rename succeeds.
     // Clearing before I/O means a crash or disk-full during fwrite/rename
     // would leave is_dirty_=false, causing the destructor to skip the final
     // flush and permanently lose the unsaved data.
@@ -365,10 +365,10 @@ HintsCache::persist_to_disk()
     for (const auto &pair : entries_) {
       snapshot.push_back({pair.first, pair.second.links, pair.second.last_updated});
     }
-  } // mutex released — disk I/O happens without blocking readers
+  } // mutex released  -- disk I/O happens without blocking readers
 
   // Step 2: Serialize to temp file.
-  // O_EXCL ensures we never follow a symlink or overwrite an existing file —
+  // O_EXCL ensures we never follow a symlink or overwrite an existing file  --
   // a pre-existing .tmp is always either a crash remnant (cleaned by load_from_disk)
   // or a symlink planted by an attacker; either way we refuse to write.
   std::string tmp_path = persist_path_ + ".tmp";
@@ -420,7 +420,7 @@ HintsCache::persist_to_disk()
       return false;
     }
 
-    // Links — count excludes any oversized entries (> UINT16_MAX bytes)
+    // Links  -- count excludes any oversized entries (> UINT16_MAX bytes)
     uint16_t link_count = 0;
     if (entry.links) {
       for (const auto &link : *entry.links) {
@@ -459,7 +459,7 @@ HintsCache::persist_to_disk()
   // preventing a post-rename crash from leaving a zero-length or partial file.
   int sync_fd = fileno(fp);
   if (sync_fd >= 0 && fdatasync(sync_fd) != 0) {
-    // fdatasync failure (EIO, ENOSPC, etc.) — data may not be on stable storage.
+    // fdatasync failure (EIO, ENOSPC, etc.)  -- data may not be on stable storage.
     // Abort the persist: don't rename a potentially incomplete file.
     fclose(fp);
     if (std::remove(tmp_path.c_str()) != 0 && errno != ENOENT) {
@@ -484,7 +484,7 @@ HintsCache::persist_to_disk()
     return false;
   }
 
-  // Step 3: Atomic rename — only reached when all bytes are confirmed flushed.
+  // Step 3: Atomic rename  -- only reached when all bytes are confirmed flushed.
   if (rename(tmp_path.c_str(), persist_path_.c_str()) != 0) {
     TSDebug("early_hints", "persist: rename failed");
     if (std::remove(tmp_path.c_str()) != 0 && errno != ENOENT) {
@@ -493,10 +493,10 @@ HintsCache::persist_to_disk()
     return false;
   }
 
-  // Rename succeeded — data is safely on disk.
+  // Rename succeeded  -- data is safely on disk.
   // Only clear the dirty flag if no put() occurred between our snapshot and now.
   // If dirty_generation_ advanced, a concurrent put() wrote new data that our
-  // snapshot does not include — the flag must remain true so the destructor
+  // snapshot does not include  -- the flag must remain true so the destructor
   // or the next throttled persist will flush the unsaved data.
   {
     TSMutexGuard guard(mutex_);
@@ -560,7 +560,7 @@ HintsCache::load_from_disk()
     return false;
   }
 
-  // Atomic swap — build new_entries OUTSIDE the lock, then swap in.
+  // Atomic swap  -- build new_entries OUTSIDE the lock, then swap in.
   // This guarantees: if parsing fails mid-way, the existing cache is unaffected.
   // The swap is atomic (hold mutex only for the pointer swap, not for I/O).
   std::unordered_map<std::string, HintEntry> new_entries;
@@ -598,7 +598,7 @@ HintsCache::load_from_disk()
     for (uint16_t j = 0; j < link_count; j++) {
       uint16_t link_len = 0;
       if (fread(&link_len, sizeof(link_len), 1, fp) != 1) {
-        // Unrecoverable: can't determine link offset — abort entire load.
+        // Unrecoverable: can't determine link offset  -- abort entire load.
         fclose(fp);
         return false;
       }
@@ -660,7 +660,7 @@ HintsCache::load_from_disk()
 
   fclose(fp);
 
-  // Atomic swap — hold mutex only for the map swap (not for file I/O).
+  // Atomic swap  -- hold mutex only for the map swap (not for file I/O).
   // All parsing done above. Now swap new_entries into entries_ atomically.
   // Sort by last_updated ascending before building LRU so oldest entries
   // are at the back of the list (evicted first under LRU policy).

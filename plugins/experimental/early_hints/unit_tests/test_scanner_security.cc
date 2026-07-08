@@ -68,7 +68,7 @@ TEST_CASE("HtmlScanner rejects dangerous URL schemes", "[html_scanner][security]
   {
     std::string html = R"(<html><head><link rel="preload" href="/foo>; rel=preload, </evil" as="script"></head></html>)";
     auto links       = scan_html(html);
-    // href contains > which would break Link header format — must be rejected
+    // href contains > which would break Link header format  -- must be rejected
     CHECK(links.empty());
   }
 
@@ -95,7 +95,7 @@ TEST_CASE("HtmlScanner rejects dangerous URL schemes", "[html_scanner][security]
   }
 }
 
-// ─── Allowlist bypass: schemes that pass the denylist but shouldn't ──────────
+// --- Allowlist bypass: schemes that pass the denylist but shouldn't ----------
 
 TEST_CASE("HtmlScanner rejects non-http/https URL schemes (allowlist)", "[html_scanner][security][allowlist]")
 {
@@ -220,11 +220,11 @@ TEST_CASE("HtmlScanner rejects non-http/https URL schemes (allowlist)", "[html_s
   }
 }
 
-// ─── Additional edge cases ───────────────────────────────────────────────────
+// --- Additional edge cases ---------------------------------------------------
 
 TEST_CASE("HtmlScanner: CDATA bogus comment handling", "[html_scanner][security][edge]")
 {
-  SECTION("CDATA section treated as bogus comment — inner link ignored")
+  SECTION("CDATA section treated as bogus comment  -- inner link ignored")
   {
     // Per HTML spec §13.2.5.42, <![CDATA[ in HTML context is a bogus comment.
     // Everything until the first > is consumed. Links inside should NOT be extracted.
@@ -239,11 +239,11 @@ TEST_CASE("HtmlScanner: CDATA bogus comment handling", "[html_scanner][security]
 
 TEST_CASE("HtmlScanner: script data escaped state", "[html_scanner][security][edge]")
 {
-  SECTION("</script> in escaped mode closes the script (B-06 fix)")
+  SECTION("</script> in escaped mode closes the script")
   {
     // Per HTML spec §13.2.6.4 ("script data escaped end tag name" state),
     // </script> IS a valid end tag in escaped mode and MUST close the script element.
-    // After B-06 fix: the first </script> closes the script — /evil.css is exposed.
+    // After fix: the first </script> closes the script  -- /evil.css is exposed.
     // --> and the second </script> are stray in IN_HEAD and ignored.
     // /real.css is then also extracted after the second </script>.
     std::string html = R"(<html><head><script><!--</script>)"
@@ -263,7 +263,7 @@ TEST_CASE("HtmlScanner: script data escaped state", "[html_scanner][security][ed
   }
 }
 
-// ─── Edge cases: duplicate attributes (first-vs-last wins) ──────────────────
+// --- Edge cases: duplicate attributes (first-vs-last wins) ------------------
 
 TEST_CASE("HtmlScanner: extract_origin authority terminators", "[html_scanner][security]")
 {
@@ -343,7 +343,7 @@ TEST_CASE("html_scanner script injection via digit after close tag name", "[html
   }
 }
 
-// ─── Exhaustive chunk-boundary splitting tests ──────────────────────────────
+// --- Exhaustive chunk-boundary splitting tests ------------------------------
 //
 // These tests verify that the state machine produces identical results
 // regardless of where the input is split across feed() calls.
@@ -364,11 +364,11 @@ TEST_CASE("HtmlScanner is_safe_url: tab before data:", "[html_scanner][security]
   CHECK(links.empty());
 }
 
-// ─── BUG REGRESSION: extract_origin must handle backslash-prefixed URLs ─────
+// --- BUG REGRESSION: extract_origin must handle backslash-prefixed URLs -----
 
-// ─── FINDING: extract_origin does NOT normalize backslash URLs ──────────────
+// --- FINDING: extract_origin does NOT normalize backslash URLs --------------
 // is_crossorigin() correctly detects \\, \/, /\ as cross-origin (WHATWG URL spec),
-// but extract_origin() doesn't handle these — it only looks for "://" and "//".
+// but extract_origin() doesn't handle these  -- it only looks for "://" and "//".
 // Result: preconnect Link header contains raw backslashes instead of proper origin.
 // BUG FIX: extract_origin must normalize backslash-prefixed URLs to proper origins.
 // Per WHATWG URL spec §4.2, browsers treat \ as / in special schemes.
@@ -381,7 +381,7 @@ TEST_CASE("HtmlScanner: backslash cross-origin URLs are rejected by URL sanitiza
     // This is a stricter defense: no hint of any kind is emitted for these URLs.
     std::string html = R"(<html><head><link rel="preload" href="\\evil.com/tracker.js" as="script"></head></html>)";
     auto links       = scan_html(html);
-    CHECK(links.empty()); // URL rejected outright — no preconnect emitted
+    CHECK(links.empty()); // URL rejected outright  -- no preconnect emitted
   }
 
   SECTION("slash-backslash URL rejected at URL validation")
@@ -399,7 +399,7 @@ TEST_CASE("HtmlScanner: backslash cross-origin URLs are rejected by URL sanitiza
   }
 }
 
-// ─── QA audit: IN_SCRIPT state gap tests ─────────────────────────────────────
+// --- QA audit: IN_SCRIPT state gap tests -------------------------------------
 
 TEST_CASE("PENTEST: Header Injection via CRLF in href", "[pentest][header_injection]")
 {
@@ -411,7 +411,7 @@ TEST_CASE("PENTEST: Header Injection via CRLF in href", "[pentest][header_inject
     std::string evil_href = "/style.css\r\nX-Evil: injected";
     std::string html      = "<html><head><link rel=\"preload\" href=\"" + evil_href + "\" as=\"style\"></head></html>";
     auto links            = scan_html(html);
-    // MUST be empty — CRLF bytes must be rejected by is_safe_url()
+    // MUST be empty  -- CRLF bytes must be rejected by is_safe_url()
     CHECK(links.empty());
     // Double-check: if any link was emitted, it must NOT contain \r or \n
     for (const auto &link : links) {
@@ -420,7 +420,7 @@ TEST_CASE("PENTEST: Header Injection via CRLF in href", "[pentest][header_inject
     }
   }
 
-  SECTION("URL-encoded CRLF (%0d%0a) in href — literal passthrough")
+  SECTION("URL-encoded CRLF (%0d%0a) in href  -- literal passthrough")
   {
     // Attack: href="/style.css%0d%0aX-Evil: injected"
     // The scanner operates on raw bytes, not URL-decoded values. %0d%0a as
@@ -429,7 +429,7 @@ TEST_CASE("PENTEST: Header Injection via CRLF in href", "[pentest][header_inject
     // This test verifies the scanner does NOT reject valid percent-encoded URLs.
     std::string html = R"(<html><head><link rel="preload" href="/style.css%0d%0aX-Evil:%20injected" as="style"></head></html>)";
     auto links       = scan_html(html);
-    // Percent-encoded sequences are safe — browsers don't decode them in header context.
+    // Percent-encoded sequences are safe  -- browsers don't decode them in header context.
     // The link SHOULD be emitted (it's a valid URL).
     REQUIRE(links.size() == 1);
     // Verify the emitted value does NOT contain actual CRLF bytes
@@ -490,13 +490,13 @@ TEST_CASE("PENTEST: Header Injection via CRLF in href", "[pentest][header_inject
   }
 }
 
-// ─── 2. HTML Parser Confusion ────────────────────────────────────────────────
+// --- 2. HTML Parser Confusion ------------------------------------------------
 //
 // Attempt to confuse the state machine so it extracts attacker-controlled URLs.
 
-TEST_CASE("PENTEST: HTML Parser Confusion — nested/malformed tags", "[pentest][parser_confusion]")
+TEST_CASE("PENTEST: HTML Parser Confusion  -- nested/malformed tags", "[pentest][parser_confusion]")
 {
-  SECTION("nested <link inside <link — attempt to inject via tag nesting")
+  SECTION("nested <link inside <link  -- attempt to inject via tag nesting")
   {
     // Attack: <link <link href="/real" ...> href="/evil" ...>
     // If parser re-enters tag parsing on the inner '<', it might pick up /real
@@ -504,19 +504,19 @@ TEST_CASE("PENTEST: HTML Parser Confusion — nested/malformed tags", "[pentest]
     std::string html =
       R"(<html><head><link <link href="/real.js" rel="preload" as="script"> href="/evil.js" rel="preload" as="script"></head></html>)";
     auto links = scan_html(html);
-    // The '<' inside the tag is unexpected — parser should reset or handle safely.
+    // The '<' inside the tag is unexpected  -- parser should reset or handle safely.
     // /evil.js must NOT appear as a valid link.
     for (const auto &link : links) {
       CHECK(link.find("/evil.js") == std::string::npos);
     }
   }
 
-  SECTION("null byte inside tag name — <link\\0 ...>")
+  SECTION("null byte inside tag name  -- <link\\0 ...>")
   {
     // Attack: null byte to confuse C string processing vs std::string processing
     std::string html = std::string("<html><head><link") + '\0' + " rel=\"preload\" href=\"/null.js\" as=\"script\"></head></html>";
     auto links       = scan_html(html);
-    // Null byte breaks tag name parsing — the tag should not be recognized as <link>.
+    // Null byte breaks tag name parsing  -- the tag should not be recognized as <link>.
     // Any extracted URL must not be /null.js (attacker-influenced content after NUL).
     // Most importantly: no crash.
     for (const auto &link : links) {
@@ -526,7 +526,7 @@ TEST_CASE("PENTEST: HTML Parser Confusion — nested/malformed tags", "[pentest]
 
   SECTION("UTF-8 BOM before <html> does not prevent scanning")
   {
-    // BOM = EF BB BF — should be treated as whitespace/noise before <html>
+    // BOM = EF BB BF  -- should be treated as whitespace/noise before <html>
     std::string bom  = "\xEF\xBB\xBF";
     std::string html = bom + "<html><head><link rel=\"preload\" href=\"/app.js\" as=\"script\"></head></html>";
     auto links       = scan_html(html);
@@ -535,38 +535,36 @@ TEST_CASE("PENTEST: HTML Parser Confusion — nested/malformed tags", "[pentest]
     CHECK(links[0].find("/app.js") != std::string::npos);
   }
 
-  SECTION("extremely long tag name (>64KB) — no crash, no extraction")
+  SECTION("extremely long tag name (>64KB)  -- no crash, no extraction")
   {
     // Attack: huge tag name to trigger buffer overflow or excessive memory use
     std::string huge_tag(70000, 'a');
     std::string html = "<html><head><" + huge_tag + " rel=\"preload\" href=\"/exploit.js\" as=\"script\"></head></html>";
     auto links       = scan_html(html);
-    // Tag name doesn't match "link" or "script" — no link should be extracted.
+    // Tag name doesn't match "link" or "script"  -- no link should be extracted.
     // Must not crash or cause OOM.
     CHECK(links.empty());
   }
 
-  SECTION("HTML entities in attribute values — no entity decoding")
+  SECTION("HTML entities in attribute values  -- no entity decoding")
   {
     // Attack: use HTML entities to sneak past scheme checks
-    // &#60; = '<', &#62; = '>' — if decoded, this becomes <script>
+    // &#60; = '<', &#62; = '>'  -- if decoded, this becomes <script>
     std::string html = R"EH(<html><head><link rel="preload" href="&#106;avascript:alert(1)" as="script"></head></html>)EH";
     auto links       = scan_html(html);
-    // The scanner does NOT decode HTML entities (by design — it's not a full parser).
+    // The scanner does NOT decode HTML entities (by design  -- it's not a full parser).
     // The href value is literally "&#106;avascript:alert(1)".
     // This does NOT start with "javascript:" so it passes scheme check.
     // Browsers will entity-decode attribute values in HTML context, so the actual
-    // URL would be "javascript:alert(1)". However, Link headers are NOT HTML —
+    // URL would be "javascript:alert(1)". However, Link headers are NOT HTML  --
     // they're HTTP headers. Browsers do NOT entity-decode HTTP header values.
     // Therefore the literal "&#106;avascript:..." is harmless in a Link header.
-    // If a link is emitted, verify it contains the literal entity, not decoded form.
-    if (!links.empty()) {
-      CHECK(links[0].find("&#106;") != std::string::npos);
-      CHECK(links[0].find("javascript:") == std::string::npos);
-    }
+    // Must either reject entirely (empty) or contain the literal entity, not decoded form.
+    CHECK((links.empty() || links[0].find("&#106;") != std::string::npos));
+    CHECK((links.empty() || links[0].find("javascript:") == std::string::npos));
   }
 
-  SECTION("tag name with digits — <link2> is not <link>")
+  SECTION("tag name with digits  -- <link2> is not <link>")
   {
     std::string html = R"(<html><head><link2 rel="preload" href="/trick.js" as="script"></head></html>)";
     auto links       = scan_html(html);
@@ -588,27 +586,27 @@ TEST_CASE("PENTEST: HTML Parser Confusion — nested/malformed tags", "[pentest]
   }
 }
 
-// ─── 3. Cache Poisoning ─────────────────────────────────────────────────────
+// --- 3. Cache Poisoning -----------------------------------------------------
 //
 // Test the HintsCache::make_key normalization to verify attackers cannot
 // poison one URL's cache entry to serve different hints for another URL.
 
 TEST_CASE("PENTEST: Cache Key Isolation", "[pentest][cache_poisoning]")
 {
-  SECTION("query string is stripped — different query params share same key")
+  SECTION("query string is stripped  -- different query params share same key")
   {
     // This is expected behavior (documented) but important to verify:
     // /page.html?v=1 and /page.html?v=2 share the same cache key.
     std::string key1 = HintsCache::make_key("/page.html?v=1", 14);
     std::string key2 = HintsCache::make_key("/page.html?v=2", 14);
-    // These SHOULD be equal — query string is intentionally stripped
+    // These SHOULD be equal  -- query string is intentionally stripped
     CHECK(key1 == key2);
     CHECK(key1 == "/page.html");
   }
 
-  SECTION("fragment is NOT stripped — different fragments get different keys")
+  SECTION("fragment is NOT stripped  -- different fragments get different keys")
   {
-    // Fragments (#) are not query strings — verify they're part of the key
+    // Fragments (#) are not query strings  -- verify they're part of the key
     // Note: make_key only strips at '?', not at '#'
     std::string key1 = HintsCache::make_key("/page.html#section1", 19);
     std::string key2 = HintsCache::make_key("/page.html#section2", 19);
@@ -623,9 +621,9 @@ TEST_CASE("PENTEST: Cache Key Isolation", "[pentest][cache_poisoning]")
     CHECK(key1 != key2);
   }
 
-  SECTION("path traversal in key — ../admin vs /admin")
+  SECTION("path traversal in key  -- ../admin vs /admin")
   {
-    // make_key does NOT normalize path traversal — verify they produce different keys
+    // make_key does NOT normalize path traversal  -- verify they produce different keys
     std::string key1 = HintsCache::make_key("/foo/../admin", 13);
     std::string key2 = HintsCache::make_key("/admin", 6);
     // Without path normalization, these should be different keys.
@@ -652,7 +650,7 @@ TEST_CASE("PENTEST: Cache Key Isolation", "[pentest][cache_poisoning]")
     CHECK(key == "/");
   }
 
-  SECTION("cache entry isolation — different paths serve different hints")
+  SECTION("cache entry isolation  -- different paths serve different hints")
   {
     HintsCache cache(100);
     std::vector<std::string> links_page1 = {"</a.js>; rel=preload; as=script"};
@@ -677,13 +675,13 @@ TEST_CASE("PENTEST: Cache Key Isolation", "[pentest][cache_poisoning]")
   }
 }
 
-// ─── 4. XSS via Link Header — dangerous URL schemes ────────────────────────
+// --- 4. XSS via Link Header  -- dangerous URL schemes ------------------------
 //
 // Test that javascript:, data:, vbscript:, blob: URLs are blocked from
 // appearing in Link headers. While browsers shouldn't execute these from Link
 // headers, defense-in-depth requires blocking them.
 
-TEST_CASE("PENTEST: XSS via Link Header — scheme filtering", "[pentest][xss]")
+TEST_CASE("PENTEST: XSS via Link Header  -- scheme filtering", "[pentest][xss]")
 {
   SECTION("javascript: URL blocked from Link header (scanner)")
   {
@@ -702,7 +700,7 @@ TEST_CASE("PENTEST: XSS via Link Header — scheme filtering", "[pentest][xss]")
 
   SECTION("javascript: with leading whitespace bypass attempt")
   {
-    // Browsers strip leading whitespace from URLs — test that we do too
+    // Browsers strip leading whitespace from URLs  -- test that we do too
     std::string html = R"EH(<html><head><link rel="preload" href="   javascript:alert(1)" as="script"></head></html>)EH";
     auto links       = scan_html(html);
     CHECK(links.empty());
@@ -770,7 +768,7 @@ TEST_CASE("PENTEST: XSS via Link Header — scheme filtering", "[pentest][xss]")
   }
 }
 
-// ─── 5. Parameter Injection via as= / type= / crossorigin= ─────────────────
+// --- 5. Parameter Injection via as= / type= / crossorigin= -----------------
 //
 // Verify that crafted attribute values cannot inject extra Link header params.
 
@@ -801,7 +799,7 @@ TEST_CASE("PENTEST: Link Header Parameter Injection", "[pentest][param_injection
     REQUIRE(links.size() == 1);
     // Semicolons and equals must be stripped from type value (prevents header injection)
     CHECK(links[0].find("; evil=injected") == std::string::npos);
-    // The type sanitizer strips semicolons, equals, spaces — only keeps alnum/+/./-
+    // The type sanitizer strips semicolons, equals, spaces  -- only keeps alnum/+/./-
     // So "; evil=injected" won't appear as a separate parameter
     bool no_injected_param = (links[0].find("; evil=injected") == std::string::npos);
     CHECK(no_injected_param);
@@ -813,7 +811,7 @@ TEST_CASE("PENTEST: Link Header Parameter Injection", "[pentest][param_injection
     auto links       = scan_html(html);
     REQUIRE(links.size() == 1);
     CHECK(links[0].find('<') == 0); // only the opening < of the URL
-    // Count angle brackets — should be exactly the Link header framing ones
+    // Count angle brackets  -- should be exactly the Link header framing ones
     int open_count = 0, close_count = 0;
     for (char c : links[0]) {
       if (c == '<')
@@ -827,7 +825,7 @@ TEST_CASE("PENTEST: Link Header Parameter Injection", "[pentest][param_injection
 
   SECTION("crossorigin= with injection attempt")
   {
-    // Only "anonymous" and "use-credentials" are valid — anything else gets lowercased
+    // Only "anonymous" and "use-credentials" are valid  -- anything else gets lowercased
     // but the build_link_header only emits known values
     std::string html =
       R"(<html><head><link rel="preload" href="/x.js" as="script" crossorigin="use-credentials; evil=param"></head></html>)";
@@ -850,7 +848,7 @@ TEST_CASE("PENTEST: Link Header Parameter Injection", "[pentest][param_injection
   }
 }
 
-// ─── 6. Config Validation — manual --link injection ─────────────────────────
+// --- 6. Config Validation  -- manual --link injection -------------------------
 
 TEST_CASE("PENTEST: Config --link validation", "[pentest][config_injection]")
 {
@@ -907,7 +905,7 @@ TEST_CASE("PENTEST: Config --link validation", "[pentest][config_injection]")
   }
 }
 
-// ─── 7. Whitelist Bypass Attempts ───────────────────────────────────────────
+// --- 7. Whitelist Bypass Attempts -------------------------------------------
 
 TEST_CASE("PENTEST: Cross-origin whitelist bypass", "[pentest][whitelist_bypass]")
 {
@@ -936,7 +934,7 @@ TEST_CASE("PENTEST: Cross-origin whitelist bypass", "[pentest][whitelist_bypass]
     EarlyHintsConfig config;
     const char *argv[] = {"from", "to", "--mode", "auto-learn", "--crossorigin-whitelist", "*.example.com"};
     config.init(6, argv);
-    // ".example.com" has empty subdomain — should NOT match (size check: domain must be > suffix)
+    // ".example.com" has empty subdomain  -- should NOT match (size check: domain must be > suffix)
     CHECK(config.is_whitelisted_domain(".example.com") == false);
   }
 
@@ -987,11 +985,11 @@ TEST_CASE("PENTEST: Cross-origin whitelist bypass", "[pentest][whitelist_bypass]
   }
 }
 
-// ─── 8. is_valid_link_value (config parser) robustness ─────────────────────
+// --- 8. is_valid_link_value (config parser) robustness ---------------------
 
 TEST_CASE("PENTEST: is_valid_link_value edge cases", "[pentest][config_validation]")
 {
-  SECTION("rel=preload substring match — 'notrel=preload' should NOT match")
+  SECTION("rel=preload substring match  -- 'notrel=preload' should NOT match")
   {
     // Verify word-boundary checking: "notrel=preload" should NOT be accepted
     EarlyHintsConfig config;
@@ -1028,13 +1026,13 @@ TEST_CASE("PENTEST: is_valid_link_value edge cases", "[pentest][config_validatio
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // QA audit gap tests: process_tag() and build_link_header()
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
-// ─── process_tag: rel values that must be rejected ──────────────────────────
+// --- process_tag: rel values that must be rejected --------------------------
 
-TEST_CASE("R5: body tag implicitly closes head", "[html_scanner][r5]")
+TEST_CASE("HtmlScanner: body tag implicitly closes head", "[html_scanner]")
 {
   SECTION("link before body is extracted, link after body is not")
   {
@@ -1070,7 +1068,7 @@ TEST_CASE("R5: body tag implicitly closes head", "[html_scanner][r5]")
   }
 }
 
-TEST_CASE("R5: unbounded tag_name_ is capped", "[html_scanner][r5]")
+TEST_CASE("HtmlScanner: tag name buffer is capped at max length", "[html_scanner]")
 {
   SECTION("extremely long tag name does not cause excessive memory use")
   {
@@ -1102,7 +1100,7 @@ TEST_CASE("R5: unbounded tag_name_ is capped", "[html_scanner][r5]")
   }
 }
 
-TEST_CASE("R5: unbounded attr_name_ is capped", "[html_scanner][r5]")
+TEST_CASE("HtmlScanner: attribute name buffer is capped at max length", "[html_scanner]")
 {
   SECTION("extremely long attribute name")
   {
@@ -1119,7 +1117,7 @@ TEST_CASE("R5: unbounded attr_name_ is capped", "[html_scanner][r5]")
   }
 }
 
-TEST_CASE("R5: script_comment_pos_ is bounded", "[html_scanner][r5]")
+TEST_CASE("HtmlScanner: script comment position counter is bounded", "[html_scanner]")
 {
   SECTION("thousands of dashes in escaped script mode")
   {
@@ -1154,7 +1152,7 @@ TEST_CASE("R5: script_comment_pos_ is bounded", "[html_scanner][r5]")
 // R6 Regression Tests
 // ============================================================================
 
-TEST_CASE("R6: backslash authority confusion bypass", "[scanner][security][r6]")
+TEST_CASE("HtmlScanner: backslash authority confusion bypass is rejected", "[scanner][security]")
 {
   // SECURITY: Browser treats \ as / in authority of special schemes (WHATWG §4.2).
   // extract_origin must treat \ as authority delimiter to prevent whitelist bypass.
@@ -1162,7 +1160,7 @@ TEST_CASE("R6: backslash authority confusion bypass", "[scanner][security][r6]")
   //   Browser sees: host=evil.com, path=/@whitelisted.com/evil.js
   //   Plugin must NOT extract authority as evil.com\@whitelisted.com
 
-  SECTION("backslash in full URL stops authority extraction — prevents whitelist bypass")
+  SECTION("backslash in full URL stops authority extraction  -- prevents whitelist bypass")
   {
     // Setup: whitelisted.com is in whitelist, evil.com is NOT
     const char *argv[] = {"from", "to", "--mode", "auto-learn", "--crossorigin-whitelist", "whitelisted.com"};
@@ -1208,12 +1206,12 @@ TEST_CASE("R6: backslash authority confusion bypass", "[scanner][security][r6]")
     scanner.feed(html.c_str(), static_cast<int64_t>(html.size()));
 
     auto links = scanner.get_links();
-    // \\cdn.example.com is now caught by is_safe_url and rejected — no hint emitted
+    // \\cdn.example.com is now caught by is_safe_url and rejected  -- no hint emitted
     CHECK(links.empty());
   }
 }
 
-TEST_CASE("R6: body with attributes closes head", "[scanner][r6]")
+TEST_CASE("HtmlScanner: body tag with attributes closes head", "[scanner]")
 {
   SECTION("<body class='main'> with single-quoted attr")
   {
@@ -1261,7 +1259,7 @@ TEST_CASE("R6: body with attributes closes head", "[scanner][r6]")
   }
 }
 
-TEST_CASE("R6: empty script body", "[scanner][r6]")
+TEST_CASE("HtmlScanner: empty script body does not emit links", "[scanner]")
 {
   std::string html = "<html><head>"
                      "<script></script>"
@@ -1272,7 +1270,7 @@ TEST_CASE("R6: empty script body", "[scanner][r6]")
   CHECK(links[0].find("/after-script.css") != std::string::npos);
 }
 
-TEST_CASE("R6: </script> inside <style> does not close style", "[scanner][r6]")
+TEST_CASE("HtmlScanner: </script> inside <style> does not close style element", "[scanner]")
 {
   std::string html = "<html><head>"
                      "<style>/* </script> */</style>"
@@ -1283,7 +1281,7 @@ TEST_CASE("R6: </script> inside <style> does not close style", "[scanner][r6]")
   CHECK(links[0].find("/after-style.css") != std::string::npos);
 }
 
-TEST_CASE("R6: </head> with attributes closes head", "[scanner][r6]")
+TEST_CASE("HtmlScanner: </head> with attributes closes head", "[scanner]")
 {
   std::string html = "<html><head>"
                      "<link rel=\"stylesheet\" href=\"/a.css\">"
@@ -1295,7 +1293,7 @@ TEST_CASE("R6: </head> with attributes closes head", "[scanner][r6]")
   CHECK(links[0].find("/a.css") != std::string::npos);
 }
 
-TEST_CASE("R6: </head> inside script body ignored", "[scanner][r6]")
+TEST_CASE("HtmlScanner: </head> inside script body is ignored", "[scanner]")
 {
   std::string html = "<html><head>"
                      "<script>var x = '</head><head>';</script>"
@@ -1306,7 +1304,7 @@ TEST_CASE("R6: </head> inside script body ignored", "[scanner][r6]")
   CHECK(links[0].find("/ok.css") != std::string::npos);
 }
 
-TEST_CASE("R6: multiple <head> tags", "[scanner][r6]")
+TEST_CASE("HtmlScanner: multiple head tags treated as one head", "[scanner]")
 {
   std::string html = "<html><head>"
                      "<link rel=\"stylesheet\" href=\"/a.css\">"
@@ -1317,7 +1315,7 @@ TEST_CASE("R6: multiple <head> tags", "[scanner][r6]")
   REQUIRE(links.size() == 2);
 }
 
-TEST_CASE("R6: scan limit mid-body tag", "[scanner][r6]")
+TEST_CASE("HtmlScanner: scan limit hit mid-body tag stops scanning", "[scanner]")
 {
   // scan_limit hits exactly in the middle of <body>
   std::string html = "<html><head><link rel=\"stylesheet\" href=\"/a.css\"><body class=\"x\">";
@@ -1329,13 +1327,13 @@ TEST_CASE("R6: scan limit mid-body tag", "[scanner][r6]")
   CHECK(scanner.is_done());
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // is_crossorigin + extract_origin: RFC 3986 false positive prevention
 // Bug: href.find("://") matches anywhere in string, so a same-origin proxy URL
 // like /proxy?url=https://cdn.example.com/x.js is treated as cross-origin.
 // Fix: detect scheme only when :// is preceded by valid RFC 3986 scheme chars
 // (ALPHA prefix at position 0), not when it appears inside a query string.
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 TEST_CASE("HtmlScanner: is_crossorigin false positive on query string containing ://", "[html_scanner][crossorigin][rfc3986]")
 {
@@ -1378,43 +1376,42 @@ TEST_CASE("HtmlScanner: is_crossorigin false positive on query string containing
     std::string html = R"(<html><head><link rel="preload" href="?foo=bar://baz/style.css" as="style"></head></html>)";
     auto links       = scan_html(html);
     // This is a relative URL (query-only). Must be same-origin preload, not preconnect.
-    if (!links.empty()) {
-      CHECK(links[0].find("rel=preconnect") == std::string::npos);
-    }
+    REQUIRE(!links.empty());
+    CHECK(links[0].find("rel=preconnect") == std::string::npos);
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// extract_origin(): RFC 3986 §3.1 scheme detection — integration tests
+// -------------------------------------------------------------------------------
+// extract_origin(): RFC 3986 §3.1 scheme detection  -- integration tests
 //
 // Bug: extract_origin() uses url.find("://") naively. For a same-origin proxy URL
 // /proxy?url=https://cdn.example.com/x.js, url.find("://") returns 16 (inside
 // query string), causing extract_origin to return "/proxy?url=https://cdn.example.com"
-// — a completely wrong "origin".
+//  -- a completely wrong "origin".
 //
 // Although extract_origin() is currently protected by is_crossorigin() gate
 // (which already uses RFC 3986 detection), extract_origin() itself must be
 // consistent for defensive correctness and future-proofing.
 //
-// Fix: Use RFC 3986 §3.1 scheme detection in extract_origin() — only detect
+// Fix: Use RFC 3986 §3.1 scheme detection in extract_origin()  -- only detect
 // scheme:// when it starts from position 0 with ALPHA prefix, not when ://
 // appears anywhere in the string.
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
-TEST_CASE("HtmlScanner: extract_origin integration — proxy URL must emit same-origin preload",
+TEST_CASE("HtmlScanner: extract_origin integration  -- proxy URL must emit same-origin preload",
           "[html_scanner][extract_origin][rfc3986]")
 {
   // We test extract_origin indirectly via the end-to-end scanner behaviour.
   // A proxy URL /proxy?url=https://cdn.example.com/app.js must produce:
   //   <link> => rel=preload; as=script (same-origin preload of the full proxy URL)
-  //   NOT: <https://cdn.example.com>; rel=preconnect (wrong — cross-origin of inner URL)
-  //   NOT: </proxy?url=https://cdn.example.com>; rel=preconnect (wrong — broken origin)
+  //   NOT: <https://cdn.example.com>; rel=preconnect (wrong  -- cross-origin of inner URL)
+  //   NOT: </proxy?url=https://cdn.example.com>; rel=preconnect (wrong  -- broken origin)
   //
   // If extract_origin were called for this URL (hypothetical future regression):
   //   - Buggy: url.find("://") = 16, extracts "/proxy?url=https://cdn.example.com"
   //   - Fixed: detects no scheme at pos 0, returns url as-is
 
-  SECTION("proxy URL with :// in query string — preload uses full URL, not broken origin")
+  SECTION("proxy URL with :// in query string  -- preload uses full URL, not broken origin")
   {
     // This confirms extract_origin is NOT called (is_crossorigin returns false).
     // If it WERE called, the buggy version would produce a broken result.
@@ -1430,7 +1427,7 @@ TEST_CASE("HtmlScanner: extract_origin integration — proxy URL must emit same-
     CHECK(links[0].find("/proxy?url=https://cdn.example.com>") == std::string::npos);
   }
 
-  SECTION("stylesheet proxy URL with :// in query — same-origin preload, not preconnect")
+  SECTION("stylesheet proxy URL with :// in query  -- same-origin preload, not preconnect")
   {
     std::string html = R"(<html><head><link rel="stylesheet" href="/assets?src=https://fonts.googleapis.com/css2"></head></html>)";
     auto links       = scan_html(html);
@@ -1440,7 +1437,7 @@ TEST_CASE("HtmlScanner: extract_origin integration — proxy URL must emit same-
     CHECK(links[0].find("fonts.googleapis.com>") == std::string::npos);
   }
 
-  SECTION("script proxy URL — correct same-origin preload")
+  SECTION("script proxy URL  -- correct same-origin preload")
   {
     std::string html =
       R"(<html><head><script src="/loader?url=https://unpkg.com/react@18/umd/react.production.min.js"></script></head></html>)";
@@ -1451,7 +1448,7 @@ TEST_CASE("HtmlScanner: extract_origin integration — proxy URL must emit same-
     CHECK(links[0].find("unpkg.com>") == std::string::npos);
   }
 
-  SECTION("genuine cross-origin URL — extract_origin produces correct scheme+host (regression guard)")
+  SECTION("genuine cross-origin URL  -- extract_origin produces correct scheme+host (regression guard)")
   {
     // After fix: https://cdn.example.com/app.js must still yield https://cdn.example.com as origin
     // (is_crossorigin=true, no whitelist → preconnect to origin only)
@@ -1464,7 +1461,7 @@ TEST_CASE("HtmlScanner: extract_origin integration — proxy URL must emit same-
     CHECK(links[0].find("/app.js") == std::string::npos);
   }
 
-  SECTION("URL with :// only in path segment — same-origin preload")
+  SECTION("URL with :// only in path segment  -- same-origin preload")
   {
     // Unusual but valid: /api/v2://rpc/endpoint
     // The :// is not at position 0 after ALPHA, so this is same-origin
@@ -1477,12 +1474,12 @@ TEST_CASE("HtmlScanner: extract_origin integration — proxy URL must emit same-
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // Direct unit tests for extract_origin() RFC 3986 compliance
 //
 // These tests call HtmlScanner::extract_origin() DIRECTLY (now public).
 // They will be RED before the fix because the current implementation uses
-// url.find("://") which matches anywhere — not just at the scheme position.
+// url.find("://") which matches anywhere  -- not just at the scheme position.
 //
 // BUG TRACE: extract_origin("/proxy?url=https://cdn.example.com/app.js")
 //   Step 1: url.find("://") = 16 (finds :// inside query string at "https://")
@@ -1493,7 +1490,7 @@ TEST_CASE("HtmlScanner: extract_origin integration — proxy URL must emit same-
 //
 // These tests call HtmlScanner::extract_origin() DIRECTLY.
 
-TEST_CASE("extract_origin() direct test — RFC 3986 scheme detection", "[html_scanner][rfc3986][extract_origin][direct]")
+TEST_CASE("extract_origin() direct test  -- RFC 3986 scheme detection", "[html_scanner][rfc3986][extract_origin][direct]")
 {
   SECTION("BUG: proxy URL with :// in query string must return URL as-is")
   {
@@ -1520,35 +1517,35 @@ TEST_CASE("extract_origin() direct test — RFC 3986 scheme detection", "[html_s
     CHECK(result != "/assets?src=https://fonts.googleapis.com");
   }
 
-  SECTION("CORRECT: genuine https absolute URL — strip path to origin")
+  SECTION("CORRECT: genuine https absolute URL  -- strip path to origin")
   {
     std::string url    = "https://cdn.example.com/app.js";
     std::string result = HtmlScanner::extract_origin(url);
     CHECK(result == "https://cdn.example.com");
   }
 
-  SECTION("CORRECT: genuine https URL with query — stop at ?")
+  SECTION("CORRECT: genuine https URL with query  -- stop at ?")
   {
     std::string url    = "https://cdn.example.com/style.css?v=abc123";
     std::string result = HtmlScanner::extract_origin(url);
     CHECK(result == "https://cdn.example.com");
   }
 
-  SECTION("CORRECT: http URL — strips path to origin")
+  SECTION("CORRECT: http URL  -- strips path to origin")
   {
     std::string url    = "http://static.example.com/bundle.js";
     std::string result = HtmlScanner::extract_origin(url);
     CHECK(result == "http://static.example.com");
   }
 
-  SECTION("CORRECT: protocol-relative URL — returns https://host")
+  SECTION("CORRECT: protocol-relative URL  -- returns https://host")
   {
     std::string url    = "//cdn.example.com/app.js";
     std::string result = HtmlScanner::extract_origin(url);
     CHECK(result == "https://cdn.example.com");
   }
 
-  SECTION("CORRECT: relative path — returns as-is")
+  SECTION("CORRECT: relative path  -- returns as-is")
   {
     std::string url    = "/assets/app.js";
     std::string result = HtmlScanner::extract_origin(url);
@@ -1556,8 +1553,8 @@ TEST_CASE("extract_origin() direct test — RFC 3986 scheme detection", "[html_s
   }
 }
 
-// ─── is_safe_url() backslash authority bypass ────────────────────────────────
-// Bug: http:\attacker.com passes is_safe_url() — scheme detected as "http" but
+// --- is_safe_url() backslash authority bypass --------------------------------
+// Bug: http:\attacker.com passes is_safe_url()  -- scheme detected as "http" but
 // colon is not followed by "//", so the URL is misidentified as same-origin.
 // Per WHATWG URL spec §4.2, browsers treat http:\ as http:// in special schemes.
 // Fix: after detecting a scheme, verify the separator is "://" not just ":".
@@ -1574,19 +1571,19 @@ TEST_CASE("is_safe_url() rejects http:\\authority without :// separator", "[secu
     CHECK(links.empty());
   }
 
-  SECTION("https:\\evil.com — browser normalizes to https://evil.com")
+  SECTION("https:\\evil.com  -- browser normalizes to https://evil.com")
   {
     std::string html = R"(<html><head><link rel="preload" href="https:\evil.com/track.js" as="script"></head></html>)";
     auto links       = scan_html(html);
     CHECK(links.empty());
   }
 
-  SECTION("http:/evil.com — single slash after colon")
+  SECTION("http:/evil.com  -- single slash after colon")
   {
-    // http:/evil.com: after scheme detection, only one slash — relative path on same origin?
+    // http:/evil.com: after scheme detection, only one slash  -- relative path on same origin?
     // Browser treats as same-origin: http://example.com/evil.com/. Should be allowed.
     // But plugin must NOT emit cross-origin hint without whitelist.
-    // Since this has no authority component it resolves same-origin — allowed as relative.
+    // Since this has no authority component it resolves same-origin  -- allowed as relative.
     std::string html = R"(<html><head><link rel="preload" href="http:/evil.com/path.js" as="script"></head></html>)";
     auto links       = scan_html(html);
     // http: scheme without "//": per WHATWG treated as http://evil.com.
@@ -1594,14 +1591,14 @@ TEST_CASE("is_safe_url() rejects http:\\authority without :// separator", "[secu
     CHECK(links.empty());
   }
 
-  SECTION("http://cdn.example.com — correct URL still accepted")
+  SECTION("http://cdn.example.com  -- correct URL still accepted")
   {
     std::string html = R"(<html><head><link rel="preload" href="http://cdn.example.com/app.js" as="script"></head></html>)";
     auto links       = scan_html(html);
     CHECK(!links.empty());
   }
 
-  SECTION("https://cdn.example.com — correct URL still accepted")
+  SECTION("https://cdn.example.com  -- correct URL still accepted")
   {
     std::string html = R"(<html><head><link rel="preload" href="https://cdn.example.com/app.css" as="style"></head></html>)";
     auto links       = scan_html(html);
@@ -1629,7 +1626,7 @@ TEST_CASE("is_safe_url() rejects http:\\authority without :// separator", "[secu
 
 TEST_CASE("HTML scanner skips link parsing inside RCDATA elements", "[security]")
 {
-  SECTION("<link> inside <title> is NOT a hint — RCDATA content")
+  SECTION("<link> inside <title> is NOT a hint  -- RCDATA content")
   {
     // HTML5 spec section 13.2.6.1: <title> content is RCDATA, not parsed as HTML tags.
     // A <link rel=preload> inside <title> is literal text displayed to the user,
@@ -1643,7 +1640,7 @@ TEST_CASE("HTML scanner skips link parsing inside RCDATA elements", "[security]"
     CHECK(links[0].find("/evil.js") == std::string::npos);
   }
 
-  SECTION("<link> inside <textarea> is NOT a hint — RCDATA content")
+  SECTION("<link> inside <textarea> is NOT a hint  -- RCDATA content")
   {
     std::string html = R"(<html><head></head><body>)"
                        R"(<textarea><link rel="preload" href="/evil.css" as="style"></textarea>)"
@@ -1654,7 +1651,7 @@ TEST_CASE("HTML scanner skips link parsing inside RCDATA elements", "[security]"
     }
   }
 
-  SECTION("<link> inside <xmp> is NOT a hint — obsolete raw text element")
+  SECTION("<link> inside <xmp> is NOT a hint  -- obsolete raw text element")
   {
     // <xmp> is an obsolete raw text element (HTML5 section 13.2.6, section 8.1.2.6).
     // Its content must not be parsed as markup.
@@ -1695,7 +1692,7 @@ TEST_CASE("HTML scanner skips link parsing inside RCDATA elements", "[security]"
   }
 }
 
-// ─── is_crossorigin() boundary: href.size() >= 2 for exact // ──────────────
+// --- is_crossorigin() boundary: href.size() >= 2 for exact // --------------
 
 TEST_CASE("HtmlScanner: exact '//' href is not emitted as a same-origin preload hint", "[html_scanner][security]")
 {
@@ -1712,7 +1709,7 @@ TEST_CASE("HtmlScanner: exact '//' href is not emitted as a same-origin preload 
   CHECK(links.empty());
 }
 
-// ─── Non-regression: whitespace rejection must survive dead-code removal ─────
+// --- Non-regression: whitespace rejection must survive dead-code removal -----
 
 TEST_CASE("HtmlScanner is_safe_url: whitespace rejection is handled by control-char loop", "[html_scanner][security][regression]")
 {

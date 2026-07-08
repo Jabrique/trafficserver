@@ -30,7 +30,7 @@
 
 extern std::atomic<int> g_mutex_destroy_count;
 
-// ─── Basic put/get ──────────────────────────────────────────────────────────
+// --- Basic put/get ----------------------------------------------------------
 
 TEST_CASE("HintsCache: basic put and get", "[hints_cache]")
 {
@@ -103,7 +103,7 @@ TEST_CASE("HintsCache: basic put and get", "[hints_cache]")
     CHECK((*result)[0] == "</new.css>; rel=preload; as=style");
   }
 
-  SECTION("entries never expire — no TTL")
+  SECTION("entries never expire  -- no TTL")
   {
     std::vector<std::string> links = {"</a.js>; rel=preload; as=script"};
     cache.put("/page", links);
@@ -116,7 +116,7 @@ TEST_CASE("HintsCache: basic put and get", "[hints_cache]")
   }
 }
 
-// ─── Legacy get (vector overload) ───────────────────────────────────────────
+// --- Legacy get (vector overload) -------------------------------------------
 
 TEST_CASE("HintsCache: legacy get (vector overload)", "[hints_cache]")
 {
@@ -157,13 +157,13 @@ TEST_CASE("HintsCache: legacy get (vector overload)", "[hints_cache]")
   }
 }
 
-// ─── make_key ───────────────────────────────────────────────────────────────
+// --- make_key ---------------------------------------------------------------
 
 TEST_CASE("HintsCache: make_key", "[hints_cache]")
 {
   SECTION("strips query string") { CHECK(HintsCache::make_key("/page?q=1", 9) == "/page"); }
 
-  SECTION("no query string — returns full path") { CHECK(HintsCache::make_key("/page/sub", 9) == "/page/sub"); }
+  SECTION("no query string  -- returns full path") { CHECK(HintsCache::make_key("/page/sub", 9) == "/page/sub"); }
 
   SECTION("empty path")
   {
@@ -188,7 +188,7 @@ TEST_CASE("HintsCache: make_key", "[hints_cache]")
   SECTION("just a slash") { CHECK(HintsCache::make_key("/", 1) == "/"); }
 }
 
-// ─── size ───────────────────────────────────────────────────────────────────
+// --- size -------------------------------------------------------------------
 
 TEST_CASE("HintsCache: size tracking", "[hints_cache]")
 {
@@ -207,7 +207,7 @@ TEST_CASE("HintsCache: size tracking", "[hints_cache]")
   CHECK(cache.size() == 2); // update, not new entry
 }
 
-// ─── Eviction ───────────────────────────────────────────────────────────────
+// --- Eviction ---------------------------------------------------------------
 
 TEST_CASE("HintsCache: max_entries eviction", "[hints_cache]")
 {
@@ -228,7 +228,7 @@ TEST_CASE("HintsCache: max_entries eviction", "[hints_cache]")
     for (int i = 0; i < 200; i++) {
       cache.put("/page" + std::to_string(i), links);
     }
-    // Cache should enforce max_entries (100) — oldest evicted
+    // Cache should enforce max_entries (100)  -- oldest evicted
     CHECK(cache.size() <= 100);
     CHECK(cache.size() > 0);
   }
@@ -250,7 +250,7 @@ TEST_CASE("HintsCache: max_entries eviction", "[hints_cache]")
   }
 }
 
-// ─── Shared_ptr identity ────────────────────────────────────────────────────
+// --- Shared_ptr identity ----------------------------------------------------
 
 TEST_CASE("HintsCache: shared_ptr semantics", "[hints_cache]")
 {
@@ -287,7 +287,7 @@ TEST_CASE("HintsCache: shared_ptr semantics", "[hints_cache]")
   }
 }
 
-// ─── Destructor ─────────────────────────────────────────────────────────────
+// --- Destructor -------------------------------------------------------------
 
 TEST_CASE("HintsCache: destructor calls TSMutexDestroy", "[hints_cache]")
 {
@@ -300,7 +300,7 @@ TEST_CASE("HintsCache: destructor calls TSMutexDestroy", "[hints_cache]")
   CHECK(after == before + 2);
 }
 
-// ─── Thread safety ──────────────────────────────────────────────────────────
+// --- Thread safety ----------------------------------------------------------
 
 TEST_CASE("HintsCache: concurrent put/get", "[hints_cache][threading]")
 {
@@ -320,7 +320,7 @@ TEST_CASE("HintsCache: concurrent put/get", "[hints_cache][threading]")
       } else {
         // Read
         auto result = cache.get(key, 1);
-        // May be null (not yet written) — just don't crash
+        // May be null (not yet written)  -- just don't crash
         (void)result;
       }
     }
@@ -338,7 +338,7 @@ TEST_CASE("HintsCache: concurrent put/get", "[hints_cache][threading]")
   CHECK(cache.size() <= NUM_KEYS);
 }
 
-// ─── Edge cases ─────────────────────────────────────────────────────────────
+// --- Edge cases -------------------------------------------------------------
 
 TEST_CASE("HintsCache: edge cases", "[hints_cache]")
 {
@@ -365,11 +365,11 @@ TEST_CASE("HintsCache: edge cases", "[hints_cache]")
   }
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
+// -----------------------------------------------------------------------------
 // Audit TDD tests
-// ═════════════════════════════════════════════════════════════════════════════
+// -----------------------------------------------------------------------------
 
-// ─── Audit: drops() counter for when max_entries=0 ──────────────────────────
+// --- Audit: drops() counter for when max_entries=0 --------------------------
 
 TEST_CASE("HintsCache audit: drops() counts entries dropped when max_entries=0", "[hints_cache][audit]")
 {
@@ -385,7 +385,7 @@ TEST_CASE("HintsCache audit: drops() counts entries dropped when max_entries=0",
   CHECK(cache.drops() == 2);
 }
 
-TEST_CASE("HintsCache audit: eviction makes room — no drops", "[hints_cache][audit]")
+TEST_CASE("HintsCache audit: eviction makes room  -- no drops", "[hints_cache][audit]")
 {
   HintsCache cache(2);
   std::vector<std::string> links = {"</a.js>; rel=preload; as=script"};
@@ -395,7 +395,7 @@ TEST_CASE("HintsCache audit: eviction makes room — no drops", "[hints_cache][a
   CHECK(cache.size() == 2);
   CHECK(cache.drops() == 0);
 
-  // Adding a 3rd key evicts oldest — no drop needed
+  // Adding a 3rd key evicts oldest  -- no drop needed
   cache.put("/c", links);
   CHECK(cache.size() == 2);
   CHECK(cache.drops() == 0);
@@ -411,15 +411,15 @@ TEST_CASE("HintsCache audit: updating existing key when full is not a drop", "[h
   cache.put("/c", links);
   CHECK(cache.size() == 3);
 
-  // Update existing key — should succeed without drop
+  // Update existing key  -- should succeed without drop
   cache.put("/a", links);
   CHECK(cache.drops() == 0);
   CHECK(cache.size() == 3);
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
+// -----------------------------------------------------------------------------
 // Audit V2: Missing test scenarios
-// ═════════════════════════════════════════════════════════════════════════════
+// -----------------------------------------------------------------------------
 
 // cache-01: min_hits exact boundary
 TEST_CASE("HintsCache audit v2: min_hits exact boundary", "[hints_cache][audit-v2]")
@@ -487,7 +487,7 @@ TEST_CASE("HintsCache audit v2: eviction does not increment drops", "[hints_cach
   cache.put("/c", links);
   CHECK(cache.drops() == 0);
 
-  // Add 10 more — evicts oldest each time, not a drop
+  // Add 10 more  -- evicts oldest each time, not a drop
   for (int i = 0; i < 10; i++) {
     cache.put("/new" + std::to_string(i), links);
   }
@@ -529,7 +529,7 @@ TEST_CASE("HintsCache audit v2: make_key special characters", "[hints_cache][aud
   }
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
+// -----------------------------------------------------------------------------
 // Cache Persistence Memory Optimization (Equality-Check on Links)
 //
 // Optimization: HintsCache::put() previously always replaced the shared_ptr
@@ -545,9 +545,9 @@ TEST_CASE("HintsCache audit v2: make_key special characters", "[hints_cache][aud
 // After a different-links put(), get() must return a new shared_ptr.
 //
 // put_persist_count() tracks actual persist_to_disk() calls.
-// ═════════════════════════════════════════════════════════════════════════════
+// -----------------------------------------------------------------------------
 
-TEST_CASE("put() equality-check — shared_ptr identity preserved for identical links", "[hints_cache][debounce]")
+TEST_CASE("put() equality-check  -- shared_ptr identity preserved for identical links", "[hints_cache][debounce]")
 {
   SECTION("first put creates entry")
   {
@@ -569,12 +569,12 @@ TEST_CASE("put() equality-check — shared_ptr identity preserved for identical 
     auto ptr1 = cache.get("/page", 1);
     REQUIRE(ptr1 != nullptr);
 
-    // Second put with same links — shared_ptr should remain the same object
+    // Second put with same links  -- shared_ptr should remain the same object
     cache.put("/page", links);
     auto ptr2 = cache.get("/page", 2);
 
     REQUIRE(ptr2 != nullptr);
-    // Both pointers must point to the same underlying LinkList — no re-allocation
+    // Both pointers must point to the same underlying LinkList  -- no re-allocation
     CHECK(ptr1.get() == ptr2.get());
   }
 
@@ -588,22 +588,22 @@ TEST_CASE("put() equality-check — shared_ptr identity preserved for identical 
     auto ptr1 = cache.get("/page", 1);
     REQUIRE(ptr1 != nullptr);
 
-    cache.put("/page", links2); // different links — must create new shared_ptr
+    cache.put("/page", links2); // different links  -- must create new shared_ptr
     auto ptr2 = cache.get("/page", 1);
     REQUIRE(ptr2 != nullptr);
 
-    // Pointers must differ — new allocation
+    // Pointers must differ  -- new allocation
     CHECK(ptr1.get() != ptr2.get());
     // New content must be reflected
     REQUIRE(ptr2->size() == 2);
   }
 
-  SECTION("no persist_path set — put_persist_count stays 0")
+  SECTION("no persist_path set  -- put_persist_count stays 0")
   {
     HintsCache cache;
     std::vector<std::string> links = {"</a.js>; rel=preload; as=script"};
 
-    // No set_persist_path() — persist logic never runs
+    // No set_persist_path()  -- persist logic never runs
     cache.put("/page", links);
     cache.put("/page", links);
 
@@ -633,8 +633,8 @@ TEST_CASE("put() equality-check — shared_ptr identity preserved for identical 
   }
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// ═════════════════════════════════════════════════════════════════════════════
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Cache Persistence Hardening
 //
 // 1. KEY LENGTH CAP: put() with key > MAX_KEY_LEN (4096) must be silently dropped.
@@ -646,9 +646,9 @@ TEST_CASE("put() equality-check — shared_ptr identity preserved for identical 
 //
 // 3. PERSIST CONCURRENCY: persist_to_disk() must be protected by persist_mutex_
 //    to prevent two concurrent put() calls from both serializing the cache.
-// ═════════════════════════════════════════════════════════════════════════════
+// -----------------------------------------------------------------------------
 
-// ─── Key length cap ───────────────────────────────────────────────────────────
+// --- Key length cap -----------------------------------------------------------
 
 TEST_CASE("HintsCache: put() rejects key longer than MAX_KEY_LEN (4096)", "[hints_cache][key_cap]")
 {
@@ -667,7 +667,7 @@ TEST_CASE("HintsCache: put() rejects key longer than MAX_KEY_LEN (4096)", "[hint
   {
     std::string key(4097, '/');
     cache.put(key, links);
-    // Key over limit: silently drop — cache stays empty
+    // Key over limit: silently drop  -- cache stays empty
     CHECK(cache.size() == 0);
     CHECK(cache.drops() == 1);
   }
@@ -691,9 +691,9 @@ TEST_CASE("HintsCache: put() rejects key longer than MAX_KEY_LEN (4096)", "[hint
   }
 }
 
-// ─── load_from_disk atomic swap ───────────────────────────────────────────────
+// --- load_from_disk atomic swap -----------------------------------------------
 
-TEST_CASE("HintsCache: load_from_disk uses atomic swap — existing cache preserved on failure", "[hints_cache][atomic_load]")
+TEST_CASE("HintsCache: load_from_disk uses atomic swap  -- existing cache preserved on failure", "[hints_cache][atomic_load]")
 {
   SECTION("load_from_disk on corrupt file does not clear existing cache")
   {
@@ -709,7 +709,7 @@ TEST_CASE("HintsCache: load_from_disk uses atomic swap — existing cache preser
     REQUIRE(cache.size() == 1);
     REQUIRE(cache.get("/existing-page", 1) != nullptr);
 
-    // Now "load" a corrupt file — this must NOT wipe the existing cache
+    // Now "load" a corrupt file  -- this must NOT wipe the existing cache
     cache.set_persist_path("/dev/null"); // /dev/null reads as empty = bad magic
     bool ok = cache.load_from_disk();
     CHECK_FALSE(ok);
@@ -730,12 +730,12 @@ TEST_CASE("HintsCache: load_from_disk uses atomic swap — existing cache preser
     CHECK((*result)[0] == "</existing.js>; rel=preload; as=script");
   }
 
-  SECTION("load_from_disk fails mid-parse — cache stays populated (valid header, truncated)")
+  SECTION("load_from_disk fails mid-parse  -- cache stays populated (valid header, truncated)")
   {
     // Write a file with valid header claiming 5 entries but only has data for 1.
     // After the 1st entry is read successfully, parsing the 2nd fails.
     // The 1st entry must NOT be committed if we use atomic swap.
-    // (Or: all entries must be committed — the test documents which behavior is expected.)
+    // (Or: all entries must be committed  -- the test documents which behavior is expected.)
     //
     // With atomic swap: all-or-nothing → on mid-parse failure, existing cache preserved.
     // Without atomic swap: partial entries committed, and original data wiped.
@@ -771,7 +771,7 @@ TEST_CASE("HintsCache: load_from_disk uses atomic swap — existing cache preser
       fwrite(&ll, sizeof(ll), 1, fp);
       fwrite("</new.js>; rel=preload; as=script", 30, 1, fp); // NOLINT: correct size
 
-      // Do NOT write 2nd entry — truncated
+      // Do NOT write 2nd entry  -- truncated
       fclose(fp);
     }
 
@@ -838,7 +838,7 @@ TEST_CASE("HintsCache: v3 persist format round-trip (no learn_count)", "[hints_c
   }
 }
 
-// ─── Concurrent persist safety ───────────────────────────────────────────────
+// --- Concurrent persist safety -----------------------------------------------
 
 TEST_CASE("HintsCache: concurrent put() calls produce valid persist file", "[hints_cache][persist_concurrent][threading]")
 {
@@ -878,7 +878,7 @@ TEST_CASE("HintsCache: concurrent put() calls produce valid persist file", "[hin
   std::remove(path.c_str());
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
+// -----------------------------------------------------------------------------
 // Additional cache safety tests
 //
 // drop_counter_ must be safe under concurrent drops.
@@ -894,9 +894,9 @@ TEST_CASE("HintsCache: concurrent put() calls produce valid persist file", "[hin
 //     one that was written long ago but never read since.
 //     Fix: add last_accessed to HintEntry, update in get(), use
 //     max(last_updated, last_accessed) in evict_oldest().
-// ═════════════════════════════════════════════════════════════════════════════
+// -----------------------------------------------------------------------------
 
-// ─── drops() concurrent safety test ──────────────────────────────────────────
+// --- drops() concurrent safety test ------------------------------------------
 //
 // Test that concurrent put() calls into a full cache (max_entries=0) produce
 // the exact expected drop count. This will race on drop_counter_ if it is not
@@ -935,7 +935,7 @@ TEST_CASE("drops() returns exact count under concurrent pressure", "[hints_cache
   CHECK(cache.size() == 0);
 }
 
-// ─── evict_oldest() must prefer entries never accessed ──────────────────
+// --- evict_oldest() must prefer entries never accessed ------------------
 //
 // Scenario: cache capacity=2, fill with entries A and B.
 // Access (get) entry A. Then insert C → eviction needed.
@@ -958,13 +958,13 @@ TEST_CASE("evict_oldest() prefers never-accessed entries over recently-accessed 
   cache.put("/entry-B", links);
   REQUIRE(cache.size() == 2);
 
-  // Access A — this should update its last_accessed
+  // Access A  -- this should update its last_accessed
   // We sleep 1 second to ensure time difference is observable
   std::this_thread::sleep_for(std::chrono::seconds(1));
   auto ptr_a = cache.get("/entry-A", 1);
   REQUIRE(ptr_a != nullptr); // confirm A is accessible
 
-  // Now add C — one of A or B must be evicted
+  // Now add C  -- one of A or B must be evicted
   cache.put("/entry-C", links);
   REQUIRE(cache.size() == 2); // still 2 after eviction
 
@@ -979,7 +979,7 @@ TEST_CASE("evict_oldest() prefers never-accessed entries over recently-accessed 
   CHECK(cache.get("/entry-B", 1) == nullptr); // B: never accessed → must be evicted
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // Persist security hardening tests
 //
 // Three related invariants:
@@ -989,7 +989,7 @@ TEST_CASE("evict_oldest() prefers never-accessed entries over recently-accessed 
 //     regular file) causes persist to fail safely rather than overwrite it.
 //  3. After persist_to_disk(), the persist file must have mode 0640 (not 0644
 //     or 0666) so world-read is not granted on potentially sensitive URL paths.
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 TEST_CASE("HintsCache persist: stale .tmp file is removed by load_from_disk", "[hints_cache][persist][security]")
 {
@@ -1013,7 +1013,7 @@ TEST_CASE("HintsCache persist: stale .tmp file is removed by load_from_disk", "[
   cache.set_persist_path(persist_path);
 
   // load_from_disk() must remove the stale .tmp
-  cache.load_from_disk();                     // no valid persist file — returns false, but cleans .tmp
+  cache.load_from_disk();                     // no valid persist file  -- returns false, but cleans .tmp
   CHECK(access(tmp_path.c_str(), F_OK) != 0); // .tmp must be gone
 
   rmdir(dir);
@@ -1043,7 +1043,7 @@ TEST_CASE("HintsCache persist: symlink at .tmp path is not followed (O_EXCL)", "
   cache.put("/test", {R"(</a.js>; rel=preload; as=script)"});
   cache.put("/test", {R"(</a.js>; rel=preload; as=script)"}); // meet min_hits
 
-  // persist_to_disk() must fail or skip — must NOT overwrite victim via symlink
+  // persist_to_disk() must fail or skip  -- must NOT overwrite victim via symlink
   cache.persist_to_disk();
 
   // Verify victim file is unchanged
@@ -1159,7 +1159,7 @@ TEST_CASE("HintsCache persist: subsequent persist after stale .tmp is cleaned by
   rmdir(dir);
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
+// -----------------------------------------------------------------------------
 // request_count separates traffic gate from scanner trigger
 //
 // Before the request_count redesign, get() checked learn_count < min_hits.
@@ -1167,9 +1167,9 @@ TEST_CASE("HintsCache persist: subsequent persist after stale .tmp is cleaned by
 //
 // After: get() increments request_count per call and checks request_count >= min_hits.
 //        peek() returns links without incrementing request_count (for scanner skip
-//        check and SEND_RESPONSE_HDR fallback — avoids double-counting).
+//        check and SEND_RESPONSE_HDR fallback  -- avoids double-counting).
 //        Scanner runs exactly once per URL (only when links == nullptr).
-// ═════════════════════════════════════════════════════════════════════════════
+// -----------------------------------------------------------------------------
 
 TEST_CASE("HintsCache: request_count separates traffic gate from scanner trigger", "[hints_cache][request_count]")
 {
@@ -1258,7 +1258,7 @@ TEST_CASE("HintsCache: request_count separates traffic gate from scanner trigger
     // Re-insert /a
     cache.put("/a", links);
 
-    // After re-insertion, request_count resets to 0 — min_hits=5 fails until 5 gets
+    // After re-insertion, request_count resets to 0  -- min_hits=5 fails until 5 gets
     CHECK(cache.get("/a", 5) == nullptr); // rc=0→1 < 5
   }
 }
@@ -1288,7 +1288,7 @@ TEST_CASE("HintsCache: peek() reads links without incrementing request_count", "
     HintsCache cache;
     cache.put("/page", links);
 
-    // 10 peeks — request_count stays at 0
+    // 10 peeks  -- request_count stays at 0
     for (int i = 0; i < 10; i++) {
       REQUIRE(cache.peek("/page") != nullptr);
     }
@@ -1342,9 +1342,9 @@ TEST_CASE("HintsCache: peek() reads links without incrementing request_count", "
   }
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// Commit 12: get_age() and touch() for TTL + Stale-While-Revalidate
-// ═════════════════════════════════════════════════════════════════════════════
+// -----------------------------------------------------------------------------
+// get_age() and touch() for TTL + Stale-While-Revalidate
+// -----------------------------------------------------------------------------
 
 TEST_CASE("HintsCache: get_age() returns age of entry", "[hints_cache][ttl]")
 {
@@ -1430,19 +1430,19 @@ TEST_CASE("HintsCache: touch() resets age and marks dirty", "[hints_cache][ttl]"
 
     auto after = cache.peek("/page");
     REQUIRE(after != nullptr);
-    CHECK(before.get() == after.get()); // same LinkList object — touch only updates timestamp
+    CHECK(before.get() == after.get()); // same LinkList object  -- touch only updates timestamp
   }
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// Commit 13: remove() for Purge Header Invalidation
-// ═════════════════════════════════════════════════════════════════════════════
+// -----------------------------------------------------------------------------
+// remove() for Purge Header Invalidation
+// -----------------------------------------------------------------------------
 
 TEST_CASE("HintsCache: remove() invalidates entry", "[hints_cache][purge]")
 {
   std::vector<std::string> links = {"</a.js>; rel=preload; as=script"};
 
-  SECTION("remove erases entry — peek returns null after remove")
+  SECTION("remove erases entry  -- peek returns null after remove")
   {
     HintsCache cache;
     cache.put("/page", links);
@@ -1454,7 +1454,7 @@ TEST_CASE("HintsCache: remove() invalidates entry", "[hints_cache][purge]")
     CHECK(cache.size() == 0);
   }
 
-  SECTION("remove erases entry — get returns null after remove")
+  SECTION("remove erases entry  -- get returns null after remove")
   {
     HintsCache cache;
     cache.put("/page", links);
@@ -1533,7 +1533,74 @@ TEST_CASE("HintsCache: remove() invalidates entry", "[hints_cache][purge]")
   }
 }
 
-// ─── A-26: get_count() for min_hit_count guard in 200 Link header path ────────
+// Origin-forward: TTL refresh via touch() when hints are stale but ATS cache is still fresh.
+// Mirrors the auto-learn stale path: touch() resets last_updated without changing the link list.
+// Safety invariant: if origin had changed Link headers it would have changed the body too,
+// expiring the ATS cache and triggering READ_RESPONSE_HDR  -- so an ATS cache hit with stale
+// hints means the stored links are still valid.
+
+TEST_CASE("HintsCache: origin-forward stale path  -- touch resets TTL, links unchanged", "[hints_cache][ttl][origin_forward]")
+{
+  std::vector<std::string> links = {"</style.css>; rel=preload; as=style",
+                                    "</font.woff2>; rel=preload; as=font; crossorigin=anonymous"};
+
+  SECTION("touch resets age to ~0  -- entry survives for another TTL period")
+  {
+    HintsCache cache;
+    cache.put("/page", links);
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+
+    CHECK(cache.get_age("/page") >= 2); // stale by 2+ seconds
+
+    cache.touch("/page"); // origin-forward TTL refresh
+
+    CHECK(cache.get_age("/page") <= 1); // reset
+  }
+
+  SECTION("touch does not change stored links  -- same shared_ptr before and after")
+  {
+    HintsCache cache;
+    cache.put("/page", links);
+
+    auto before = cache.peek("/page");
+    REQUIRE(before != nullptr);
+    CHECK((*before)[0] == "</style.css>; rel=preload; as=style");
+
+    cache.touch("/page");
+
+    auto after = cache.peek("/page");
+    REQUIRE(after != nullptr);
+    CHECK(before.get() == after.get()); // touch() must not reallocate or modify the link list
+    CHECK((*after)[0] == "</style.css>; rel=preload; as=style");
+  }
+
+  SECTION("touch on missing key is no-op  -- cache size unchanged, no crash")
+  {
+    HintsCache cache;
+    cache.put("/other", links);
+    size_t before_size = cache.size();
+
+    REQUIRE_NOTHROW(cache.touch("/nonexistent-origin-forward"));
+
+    CHECK(cache.size() == before_size);
+    CHECK(cache.peek("/other") != nullptr); // other entries untouched
+  }
+
+  SECTION("request_count preserved after touch  -- serving threshold unaffected")
+  {
+    HintsCache cache;
+    cache.put("/page", links);
+    // Warm up request_count to 3
+    cache.get("/page", 1);
+    cache.get("/page", 1);
+    cache.get("/page", 1);
+    CHECK(cache.get_count("/page") == 3);
+
+    cache.touch("/page"); // TTL refresh should not reset request_count
+
+    CHECK(cache.get_count("/page") == 3); // still 3 after touch
+  }
+}
 
 TEST_CASE("HintsCache: get_count returns request count without incrementing", "[hints_cache]")
 {
@@ -1577,7 +1644,7 @@ TEST_CASE("HintsCache: get_count returns request count without incrementing", "[
   }
 }
 
-// ─── Approximation: peek() logic for H1 shortcircuit has_learned ────────────────
+// --- Approximation: peek() logic for H1 shortcircuit has_learned ----------------
 // These tests verify the peek() semantics relied on by the H1 shortcircuit fix:
 // before the H1 goto in TSRemapDoRemap, a peek() call must correctly
 // identify whether an entry exists (has_learned), without side-effects
@@ -1585,7 +1652,7 @@ TEST_CASE("HintsCache: get_count returns request count without incrementing", "[
 
 TEST_CASE("HintsCache: peek() correctly identifies existing entries for H1 shortcircuit path", "[hints_cache][regression]")
 {
-  SECTION("entry exists: peek returns non-null — has_learned should be set true")
+  SECTION("entry exists: peek returns non-null  -- has_learned should be set true")
   {
     HintsCache cache;
     std::vector<std::string> links = {"</app.js>; rel=preload; as=script"};
@@ -1597,7 +1664,7 @@ TEST_CASE("HintsCache: peek() correctly identifies existing entries for H1 short
     CHECK(has_learned);
   }
 
-  SECTION("entry absent: peek returns null — has_learned stays false (scanner must run)")
+  SECTION("entry absent: peek returns null  -- has_learned stays false (scanner must run)")
   {
     HintsCache cache;
     bool has_learned = (cache.peek("/unknown-page") != nullptr);
@@ -1611,13 +1678,13 @@ TEST_CASE("HintsCache: peek() correctly identifies existing entries for H1 short
     cache.put("/page", links);
     cache.peek("/page");
     cache.peek("/page");
-    // request_count must remain 0 — peek must not perturb the min_hit_count gate
+    // request_count must remain 0  -- peek must not perturb the min_hit_count gate
     CHECK(cache.get_count("/page") == 0);
   }
 }
 
 // ===================================================================================
-// FIX-6: Stale eviction in get()
+// Stale eviction in get()
 //
 // When stale_evict_after > 0 and an entry's age (now - last_updated) exceeds it,
 // get() serves the hints normally but then removes the entry from the cache.

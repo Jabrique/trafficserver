@@ -39,6 +39,7 @@
 #include <cerrno>
 
 #include "config.h"
+#include "crypto_utils.h"
 #include "hints_cache.h"
 #include "html_scanner.h"
 #include "link_parser.h"
@@ -135,7 +136,7 @@ struct RequestData {
 struct TransformData {
   HtmlScanner *scanner      = nullptr; // owned
   HintsCache *cache         = nullptr; // NOT owned
-  RequestData *req_data_ref = nullptr; // NOT owned — for combined mode stat guard
+  RequestData *req_data_ref = nullptr; // NOT owned  -- for combined mode stat guard
   std::string cache_key;
   TSIOBuffer output_buffer       = nullptr;
   TSIOBufferReader output_reader = nullptr;
@@ -175,32 +176,9 @@ static const char *bot_signatures[] = {"googlebot",
                                        "libwww-perl/",
                                        nullptr};
 
-// ─── Utility Functions ──────────────────────────────────────────────────────
-
-// Compare two byte sequences in constant time to prevent timing side-channel attacks.
-// Uses a volatile XOR accumulator so the compiler cannot short-circuit the loop.
-//
-// Length handling: instead of an early return on length mismatch (which leaks the
-// secret length via timing), XOR the lengths into diff and compare up to
-// max(a_len, b_len) bytes, padding the shorter sequence with zero bytes.
-// A length mismatch sets diff to non-zero without any branch on secret length.
-static bool
-constant_time_eq(const char *a, size_t a_len, const char *b, size_t b_len)
-{
-  size_t max_len    = (a_len > b_len) ? a_len : b_len;
-  volatile int diff = 0;
-
-  // XOR lengths into diff: if lengths differ, diff is non-zero immediately.
-  // This removes the early-return branch that previously leaked secret length.
-  diff |= (static_cast<int>(a_len) ^ static_cast<int>(b_len));
-
-  for (size_t i = 0; i < max_len; i++) {
-    unsigned char ca = (i < a_len) ? static_cast<unsigned char>(a[i]) : 0;
-    unsigned char cb = (i < b_len) ? static_cast<unsigned char>(b[i]) : 0;
-    diff |= (ca ^ cb);
-  }
-  return diff == 0;
-}
+// --- Utility Functions ------------------------------------------------------
+// constant_time_eq is defined in crypto_utils.h (inline) so it can be
+// tested directly by unit tests against the real implementation.
 
 static bool
 is_bot_user_agent(TSMBuffer bufp, TSMLoc hdr_loc)
@@ -216,7 +194,7 @@ is_bot_user_agent(TSMBuffer bufp, TSMLoc hdr_loc)
 
   if (ua_str && ua_len > 0) {
     // Real browsers have UAs of ~100-200 bytes. UAs > 512 bytes are abnormal
-    // and likely padded to evade detection — treat as bot.
+    // and likely padded to evade detection  -- treat as bot.
     if (ua_len > 512) {
       is_bot = true;
     } else {
@@ -269,7 +247,7 @@ is_navigate_request(TSMBuffer bufp, TSMLoc hdr_loc)
   return is_nav;
 }
 
-// ─── HTTP Response Handling ──────────────────────────────────────────────────
+// --- HTTP Response Handling --------------------------------------------------
 
 static bool
 send_103_response(TSHttpTxn txnp, const std::vector<std::string> &links, int max_links, int header_size_limit)
@@ -351,7 +329,7 @@ add_link_headers_to_response(TSMBuffer bufp, TSMLoc hdr_loc, const std::vector<s
   }
 }
 
-// ─── Transform Handler (auto-learn HTML scanning) ───────────────────────────
+// --- Transform Handler (auto-learn HTML scanning) ---------------------------
 
 static void
 early_hints_transform_do(TSCont contp)
@@ -400,7 +378,7 @@ early_hints_transform_do(TSCont contp)
 
   // Check end-of-stream
   if (!TSVIOBufferGet(input_vio)) {
-    // No more data — finalize
+    // No more data  -- finalize
     if (!data->cache_written && data->scanner && !data->scanner->get_links().empty()) {
       data->cache->put(data->cache_key, data->scanner->get_links());
       data->cache_written = true;
@@ -444,11 +422,11 @@ early_hints_transform_do(TSCont contp)
       avail = toread;
     }
 
-    // Copy data through unchanged (passthrough) — do this FIRST to determine
+    // Copy data through unchanged (passthrough)  -- do this FIRST to determine
     // the actual consumed byte count before feeding the scanner.
     int64_t copied = TSIOBufferCopy(data->output_buffer, input_reader, avail, 0);
     if (copied <= 0 && avail > 0) {
-      // Copy failed — mark errored and finalize output VIO so downstream doesn't stall.
+      // Copy failed  -- mark errored and finalize output VIO so downstream doesn't stall.
       TSDebug(PLUGIN_NAME, "TSIOBufferCopy failed for %s: avail=%lld bytes, scanner may have incomplete data",
               data->cache_key.c_str(), (long long)avail);
       data->errored = true;
@@ -459,7 +437,7 @@ early_hints_transform_do(TSCont contp)
     }
 
     // Feed scanner only the bytes that will actually be consumed.
-    // This prevents double-feed when TSIOBufferCopy returns a partial result —
+    // This prevents double-feed when TSIOBufferCopy returns a partial result  --
     // unconsumed bytes remain in the reader and would be re-fed on next call.
     if (data->scanner && !data->scanner->is_done()) {
       int64_t fed           = 0;
@@ -487,7 +465,7 @@ early_hints_transform_do(TSCont contp)
     TSVIOReenable(data->output_vio);
     TSContCall(TSVIOContGet(input_vio), TS_EVENT_VCONN_WRITE_READY, input_vio);
   } else {
-    // All done — update hints cache
+    // All done  -- update hints cache
     if (!data->cache_written && data->scanner && !data->scanner->get_links().empty()) {
       data->cache->put(data->cache_key, data->scanner->get_links());
       data->cache_written = true;
@@ -512,7 +490,7 @@ early_hints_transform_do(TSCont contp)
 static int
 early_hints_transform(TSCont contp, TSEvent event, void * /* edata ATS_UNUSED */)
 {
-  // FIRST: Check if VConn is closed — cleanup immediately
+  // FIRST: Check if VConn is closed  -- cleanup immediately
   if (TSVConnClosedGet(contp)) {
     TransformData *data = static_cast<TransformData *>(TSContDataGet(contp));
     if (data) {
@@ -565,7 +543,7 @@ early_hints_transform(TSCont contp, TSEvent event, void * /* edata ATS_UNUSED */
   return 0;
 }
 
-// ─── Hook Handler ───────────────────────────────────────────────────────────
+// --- Hook Handler -----------------------------------------------------------
 
 static int
 early_hints_handler(TSCont contp, TSEvent event, void *edata)
@@ -659,7 +637,7 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
     // Auto-learn mode: set up HTML scanning transform
     if (config->mode() & EarlyHintsConfig::MODE_AUTO_LEARN) {
       // Scanner skip: if hints have been learned for this URL (entry exists in cache
-      // regardless of request_count), skip scanning — the HTML content won't change.
+      // regardless of request_count), skip scanning  -- the HTML content won't change.
       // has_learned is set in TSRemapDoRemap via peek() to avoid double-counting request_count.
       bool already_learned = req_data->has_learned;
 
@@ -732,7 +710,7 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
 
       if (already_learned) {
         if (req_data->needs_relearn) {
-          // TTL expired but HTML body is frozen in ATS cache — cannot re-scan.
+          // TTL expired but HTML body is frozen in ATS cache  -- cannot re-scan.
           // Just refresh the TTL so the entry remains valid for another hints_ttl period.
           cache->touch(req_data->cache_key);
           req_data->needs_relearn = false;
@@ -757,7 +735,7 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
           }
         }
       } else {
-        // Not learned yet — we lost memory state but ATS has the cached response!
+        // Not learned yet  -- we lost memory state but ATS has the cached response!
         // Re-learn it from ATS Cache without contacting the Origin server.
         // Check Content-Type and Content-Encoding to decide whether to attach the scanner.
         if (is_html_response(cache_bufp, cache_hdr_loc)) {
@@ -784,9 +762,25 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
       }
     }
 
-    // Commit 14: Origin-Forward self-healing from ATS cached response headers.
+    // Origin-forward: TTL refresh from ATS cached response (symmetric with auto-learn touch()).
+    // When the hints entry exists (has_learned=true) but TTL has expired (needs_relearn=true)
+    // and the ATS cache is still fresh, refresh the hints TTL via touch().
+    //
+    // Safety argument: if the origin had changed its Link headers, it would also have
+    // changed the HTML body (resource URLs, hashes, etc.), which would cause the ATS cache
+    // to expire and trigger READ_RESPONSE_HDR with fresh origin headers. An ATS cache hit
+    // with a stale hints entry means the origin content has NOT changed, so the stored
+    // links are still valid. touch() extends the TTL without modifying the link list.
+    if ((config->mode() & EarlyHintsConfig::MODE_ORIGIN_FORWARD) && req_data->has_learned && req_data->needs_relearn &&
+        !req_data->cached_links) {
+      cache->touch(req_data->cache_key);
+      req_data->needs_relearn = false;
+      TSDebug(PLUGIN_NAME, "READ_CACHE_HDR: TTL refresh (touch) for origin-forward %s", req_data->cache_key.c_str());
+    }
+
+    // Origin-forward self-healing from ATS cached response headers.
     // When origin-forward mode is active and the hints entry was evicted from RAM
-    // (or never written — e.g. after a plugin restart), repopulate it from the
+    // (or never written, e.g. after a plugin restart), repopulate it from the
     // Link headers stored in the ATS cached response. Same split/normalize/validate/
     // dedup pipeline as READ_RESPONSE_HDR origin-forward path.
     // Only runs when cached_links==nullptr (TSRemapDoRemap found no serveable entry)
@@ -856,11 +850,11 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
     }
 
     // Only add Link headers to 200 OK responses. Partial (206), no-content (204),
-    // redirects, and errors don't correspond to a loadable document — adding
+    // redirects, and errors don't correspond to a loadable document  -- adding
     // preload hints to them would cause spurious fetches in the browser.
     TSHttpStatus resp_status = TSHttpHdrStatusGet(resp_bufp, resp_hdr_loc);
     if (resp_status == TS_HTTP_STATUS_OK) {
-      // Build merged links from all active modes — same approach as TSRemapDoRemap.
+      // Build merged links from all active modes  -- same approach as TSRemapDoRemap.
       // For auto-learn/origin-forward, try cached links from remap first;
       // if not available, fallback to fresh cache lookup (transform may have just learned).
       const std::vector<std::string> *cached_ptr = nullptr;
@@ -872,9 +866,12 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
         } else if (!req_data->cache_key.empty()) {
           // Fallback: cached_links is null (first-learn path: remap miss; or already-learned path:
           // remap get() was below threshold or client was H1 which skips get() at remap).
-          // Use peek() — non-incrementing — to check if links exist, then verify count >=
+          // Use peek()  -- non-incrementing  -- to check if links exist, then verify count >=
           // min_hit_count via get_count() before serving. This avoids consuming an extra
           // request_count increment solely to populate the 200 Link header.
+          // Design intent: H1 clients must NOT inflate request_count (they cannot receive 103).
+          // Only H2 clients increment request_count at remap time, so get_count() reflects
+          // H2-only traffic for 200 OK Link injection decisions.
           TSDebug(PLUGIN_NAME, "SEND_RESPONSE_HDR: fallback peek for %s (transform may have just learned)",
                   req_data->cache_key.c_str());
           req_data->cached_links = cache->peek(req_data->cache_key);
@@ -944,7 +941,7 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
   }
 
   case TS_EVENT_HTTP_TXN_CLOSE: {
-    // Cleanup per-request state — call destructor for std::string members
+    // Cleanup per-request state  -- call destructor for std::string members
     req_data->~RequestData();
     TSfree(req_data);
     TSUserArgSet(txnp, arg_idx, nullptr);
@@ -959,7 +956,7 @@ early_hints_handler(TSCont contp, TSEvent event, void *edata)
   return 0;
 }
 
-// ─── Remap Plugin Entry Points ──────────────────────────────────────────────
+// --- Remap Plugin Entry Points ----------------------------------------------
 
 static int
 get_or_create_stat(const char *name)
@@ -1050,7 +1047,7 @@ TSRemapNewInstance(int argc, char *argv[], void **ih, char *errbuf, int errbuf_s
       }
     }
     if (!dir.empty()) {
-      // 0750: owner rwx, group rx, no world access — persist dir contains URL path data.
+      // 0750: owner rwx, group rx, no world access  -- persist dir contains URL path data.
       // On EEXIST, verify via stat() that the path is actually a directory.
       // A file at that path (planted by attacker or leftover crash) must block persistence.
       bool dir_ready = false;
@@ -1061,11 +1058,11 @@ TSRemapNewInstance(int argc, char *argv[], void **ih, char *errbuf, int errbuf_s
         if (stat(dir.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
           dir_ready = true;
         } else {
-          TSError("[%s] persist dir path '%s' exists but is not a directory — persistence disabled", PLUGIN_NAME, dir.c_str());
+          TSError("[%s] persist dir path '%s' exists but is not a directory  -- persistence disabled", PLUGIN_NAME, dir.c_str());
         }
       }
       if (!dir_ready) {
-        TSError("[%s] failed to create persist dir '%s' — persistence disabled", PLUGIN_NAME, dir.c_str());
+        TSError("[%s] failed to create persist dir '%s'  -- persistence disabled", PLUGIN_NAME, dir.c_str());
       } else {
         // Generate unique filename from remap from-URL (argv[0])
         const char *from_url = (argc > 0 && argv[0]) ? argv[0] : "default";
@@ -1324,10 +1321,10 @@ TSRemapDoRemap(void *ih, TSHttpTxn rh, TSRemapRequestInfo * /* rri ATS_UNUSED */
         // peek() distinguishes the two cases without incrementing request_count again.
         req_data->has_learned = (cache->peek(cache_key) != nullptr);
         if (req_data->has_learned) {
-          TSDebug(PLUGIN_NAME, "cache entry exists for %s but below min_hit_count=%d — no 103 yet", cache_key.c_str(),
+          TSDebug(PLUGIN_NAME, "cache entry exists for %s but below min_hit_count=%d  -- no 103 yet", cache_key.c_str(),
                   config->min_hit_count());
         } else {
-          TSDebug(PLUGIN_NAME, "cache miss for %s — scanner will run on response", cache_key.c_str());
+          TSDebug(PLUGIN_NAME, "cache miss for %s  -- scanner will run on response", cache_key.c_str());
         }
       }
     }
@@ -1373,5 +1370,5 @@ register_hooks:
 void
 TSRemapDone()
 {
-  // No global cleanup needed — per-instance cleanup in TSRemapDeleteInstance
+  // No global cleanup needed  -- per-instance cleanup in TSRemapDeleteInstance
 }

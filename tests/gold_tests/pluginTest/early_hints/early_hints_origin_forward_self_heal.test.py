@@ -1,5 +1,5 @@
 '''
-Test 103 Early Hints plugin — origin-forward self-healing from ATS cache
+Test 103 Early Hints plugin  -- origin-forward self-healing from ATS cache
 '''
 #  Licensed to the Apache Software Foundation (ASF) under one
 #  or more contributor license agreements.  See the NOTICE file
@@ -64,7 +64,7 @@ microserver.addResponse(
     })
 
 # ----
-# Setup ATS (cache ENABLED — needed so READ_CACHE_HDR fires on subsequent requests)
+# Setup ATS (cache ENABLED  -- needed so READ_CACHE_HDR fires on subsequent requests)
 # ----
 ts = Test.MakeATSProcess("ts", select_ports=True, enable_tls=True, enable_cache=True)
 
@@ -72,7 +72,7 @@ ts.addDefaultSSLFiles()
 ts.Disk.ssl_multicert_config.AddLine('dest_ip=* ssl_cert_name=server.pem ssl_key_name=server.key')
 
 ts.Disk.remap_config.AddLines([
-    # Single catch-all rule for the entire origin — /page.html and /decoy.html
+    # Single catch-all rule for the entire origin  -- /page.html and /decoy.html
     # both go through ONE plugin instance so they share the same HintsCache.
     # max-cache-entries=1: hints RAM holds only 1 entry. Requesting /decoy.html
     # evicts /page.html (LRU). The next /page.html ATS cache hit triggers
@@ -97,9 +97,9 @@ ts.Disk.records_config.update({
 })
 
 # ----
-# TR1: H2 GET /page.html — origin fetch, Link header extracted → hints entry created (rc=0)
+# TR1: H2 GET /page.html  -- origin fetch, Link header extracted → hints entry created (rc=0)
 # ----
-tr1 = Test.AddTestRun("Self-heal: TR1 H2 GET /page.html — origin, link learned (no 103: rc=0)")
+tr1 = Test.AddTestRun("Self-heal: TR1 H2 GET /page.html  -- origin, link learned (no 103: rc=0)")
 tr1.Processes.Default.Command = (
     "curl -s -D - -o /dev/null"
     " --http2"
@@ -117,9 +117,9 @@ tr1.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr1.StillRunningAfter = microserver
 
 # ----
-# TR2: H2 GET /page.html — ATS cache hit, 103 served (rc=0→1 >= 1)
+# TR2: H2 GET /page.html  -- ATS cache hit, 103 served (rc=0→1 >= 1)
 # ----
-tr2 = Test.AddTestRun("Self-heal: TR2 H2 GET /page.html — ATS cache hit, 103 sent")
+tr2 = Test.AddTestRun("Self-heal: TR2 H2 GET /page.html  -- ATS cache hit, 103 sent")
 tr2.Processes.Default.Command = (
     "sleep 1 && curl -s -D - -o /dev/null"
     " --http2"
@@ -134,10 +134,10 @@ tr2.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr2.StillRunningAfter = microserver
 
 # ----
-# TR3: H2 GET /decoy.html — origin fetch, hints for /decoy.html learned.
+# TR3: H2 GET /decoy.html  -- origin fetch, hints for /decoy.html learned.
 # max-cache-entries=1 → /page.html entry is LRU-evicted from hints RAM.
 # ----
-tr3 = Test.AddTestRun("Self-heal: TR3 H2 GET /decoy.html — LRU evicts /page.html hints entry")
+tr3 = Test.AddTestRun("Self-heal: TR3 H2 GET /decoy.html  -- LRU evicts /page.html hints entry")
 tr3.Processes.Default.Command = (
     "sleep 1 && curl -s -D - -o /dev/null"
     " --http2"
@@ -153,12 +153,12 @@ tr3.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr3.StillRunningAfter = microserver
 
 # ----
-# TR4: H2 GET /page.html — hints evicted from RAM, but ATS has the response cached.
+# TR4: H2 GET /page.html  -- hints evicted from RAM, but ATS has the response cached.
 # TSRemapDoRemap: get() returns null → cached_links=nullptr → no 103 this request.
 # READ_CACHE_HDR self-heals: re-extracts Link header from ATS cached response → put().
 # ----
 tr4 = Test.AddTestRun(
-    "Self-heal: TR4 H2 GET /page.html — hints evicted, ATS cache hit → READ_CACHE_HDR self-heals (no 103)")
+    "Self-heal: TR4 H2 GET /page.html  -- hints evicted, ATS cache hit → READ_CACHE_HDR self-heals (no 103)")
 tr4.Processes.Default.Command = (
     "sleep 1 && curl -s -D - -o /dev/null"
     " --http2"
@@ -174,9 +174,9 @@ tr4.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr4.StillRunningAfter = microserver
 
 # ----
-# TR5: H2 GET /page.html — after self-healing, 103 served again
+# TR5: H2 GET /page.html  -- after self-healing, 103 served again
 # ----
-tr5 = Test.AddTestRun("Self-heal: TR5 H2 GET /page.html — after self-heal → 103 served again")
+tr5 = Test.AddTestRun("Self-heal: TR5 H2 GET /page.html  -- after self-heal → 103 served again")
 tr5.Processes.Default.Command = (
     "sleep 1 && curl -s -D - -o /dev/null"
     " --http2"

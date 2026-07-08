@@ -28,7 +28,7 @@
 #include <atomic>
 #include <ctime>
 
-// RAII guard for TSMutex — ensures unlock on all exit paths including exceptions
+// RAII guard for TSMutex  -- ensures unlock on all exit paths including exceptions
 class TSMutexGuard
 {
 public:
@@ -115,7 +115,7 @@ public:
    * Marks the entry dirty so the next persist flush writes the fresh timestamp.
    * No-op if the key does not exist.
    * Used by READ_CACHE_HDR when hints are stale but the HTML body is frozen in
-   * the ATS cache — re-scanning is not possible, so just refresh the TTL.
+   * the ATS cache  -- re-scanning is not possible, so just refresh the TTL.
    */
   void touch(const std::string &key);
 
@@ -152,7 +152,7 @@ public:
 
   /**
    * Normalize URL path to cache key.
-   * Strips query string — intentional: <head> resources are typically
+   * Strips query string  -- intentional: <head> resources are typically
    * identical across query string variants for the same path.
    */
   static std::string make_key(const char *path, int path_len);
@@ -196,7 +196,7 @@ public:
 
 private:
   mutable TSMutex mutex_;
-  mutable TSMutex persist_mutex_; // Serialize persist_to_disk() — prevents concurrent disk writes
+  mutable TSMutex persist_mutex_; // Serialize persist_to_disk()  -- prevents concurrent disk writes
   std::unordered_map<std::string, HintEntry> entries_;
   mutable std::list<std::string> lru_list_; // LRU list of keys (front = MRU, back = LRU)
   int64_t drop_counter_ = 0;

@@ -1,5 +1,5 @@
 '''
-Test 103 Early Hints plugin — crossorigin whitelist, protocol-relative URLs, origin Link validation
+Test 103 Early Hints plugin  -- crossorigin whitelist, protocol-relative URLs, origin Link validation
 '''
 #  Licensed to the Apache Software Foundation (ASF) under one
 #  or more contributor license agreements.  See the NOTICE file
@@ -149,7 +149,7 @@ tr1.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
 tr1.StillRunningAfter = microserver
 
 # ----
-# TR2: Whitelist — H2 sent with correct link types from cache
+# TR2: Whitelist  -- H2 sent with correct link types from cache
 # ----
 tr2 = Test.AddTestRun("Whitelist H2: 103 sent with correct trust boundaries")
 tr2.Processes.Default.Command = (
@@ -229,7 +229,7 @@ tr4.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr4.StillRunningAfter = microserver
 
 # ----
-# TR5: Origin invalid Link — H2 103 sent with only valid Link from cache
+# TR5: Origin invalid Link  -- H2 103 sent with only valid Link from cache
 # ----
 tr5 = Test.AddTestRun("Origin invalid Link: H2 103 with only valid Link")
 tr5.Processes.Default.Command = (

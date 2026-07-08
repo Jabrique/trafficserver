@@ -77,7 +77,7 @@ private:
   std::atomic<time_t> window_start_;
 };
 
-// Plugin instance data stored in TSCont — owns config and cache.
+// Plugin instance data stored in TSCont  -- owns config and cache.
 struct PluginInstance {
   EarlyHintsConfig *config  = nullptr;
   HintsCache *cache         = nullptr;
@@ -90,7 +90,7 @@ struct PluginInstance {
     delete limiter;
   }
 
-  // Noncopyable — prevent accidental double-free
+  // Noncopyable  -- prevent accidental double-free
   PluginInstance()                       = default;
   PluginInstance(const PluginInstance &) = delete;
   PluginInstance &operator=(const PluginInstance &) = delete;

@@ -1,5 +1,5 @@
 '''
-Test 103 Early Hints plugin — auto-learn mode
+Test 103 Early Hints plugin  -- auto-learn mode
 '''
 #  Licensed to the Apache Software Foundation (ASF) under one
 #  or more contributor license agreements.  See the NOTICE file
@@ -154,7 +154,7 @@ tr2.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
 tr2.StillRunningAfter = microserver
 
 # ----
-# Test Case 2: Non-HTML response — no hints learned
+# Test Case 2: Non-HTML response  -- no hints learned
 # ----
 tr3 = Test.AddTestRun("Non-HTML response no scanning")
 tr3.Processes.Default.Command = (

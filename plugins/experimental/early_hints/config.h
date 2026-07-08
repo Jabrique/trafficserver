@@ -31,7 +31,7 @@ static constexpr int LINK_HEADER_OVERHEAD = 8;
 
 // Validates a Link header value: structural checks (< > brackets), control chars,
 // URL scheme allowlist (http/https/relative only), and valid rel= type.
-// Single source of truth — used by both config.cc (manual --link) and early_hints.cc
+// Single source of truth  -- used by both config.cc (manual --link) and early_hints.cc
 // (origin-forward forwarding).
 bool is_valid_link_value(const std::string &link);
 
@@ -206,7 +206,7 @@ private:
   bool skip_bots_        = true;
   bool navigate_only_    = true;
   std::string debug_header_;
-  int scan_limit_        = 32768; // 32KB — covers large <head> sections; scanner also stops at <body>
+  int scan_limit_        = 32768; // 32KB  -- covers large <head> sections; scanner also stops at <body>
   int min_hit_count_     = 2;
   int max_cache_entries_ = 10000;
   std::vector<std::string> manual_links_;

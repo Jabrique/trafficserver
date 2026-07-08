@@ -50,7 +50,7 @@ Test.ContinueOnFail = True
 # ------------------------------------------------------------------------------
 ms = Test.MakeOriginServer("ms")
 
-# Page 1: modulepreload without as= — C-01 fix
+# Page 1: modulepreload without as=  -- C-01 fix
 # Without fix: has_valid_as_for_preload drops it on disk reload.
 # With fix: learned and served as 103 hint.
 ms.addResponse(
@@ -77,7 +77,7 @@ ms.addResponse(
             "</head><body>C-01 test</body></html>\r\n"
     })
 
-# Page 2: modulepreload with fetchpriority=high — B-05 fix
+# Page 2: modulepreload with fetchpriority=high  -- B-05 fix
 # Without fix: is_preload_hint is false for modulepreload, fetchpriority dropped.
 # With fix: fetchpriority=high preserved in Link hint.
 ms.addResponse(
@@ -104,7 +104,7 @@ ms.addResponse(
             "</head><body>B-05 test</body></html>\r\n"
     })
 
-# Page 3: script type=module — A-24 fix
+# Page 3: script type=module  -- A-24 fix
 # Without fix: <script type="module" src=...> emits rel=preload; as=script.
 # With fix: emits rel=modulepreload.
 ms.addResponse(
@@ -132,7 +132,7 @@ ms.addResponse(
     })
 
 # ------------------------------------------------------------------------------
-# ATS setup — auto-learn mode, min-hit-count=1, H2
+# ATS setup  -- auto-learn mode, min-hit-count=1, H2
 # ------------------------------------------------------------------------------
 ts = Test.MakeATSProcess("ts", select_ports=True, enable_tls=True, enable_cache=False)
 
@@ -170,21 +170,21 @@ tr_c01_1.Processes.Default.ReturnCode = 0
 tr_c01_1.Processes.Default.StartBefore(ms, ready=When.PortOpen(ms.Variables.Port))
 tr_c01_1.Processes.Default.StartBefore(Test.Processes.ts)
 tr_c01_1.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
-    "200 OK", "C-01: first request must succeed")
+    "200 OK", "first request must succeed")
 tr_c01_1.StillRunningAfter = ms
 
-tr_c01_2 = Test.AddTestRun("C-01 request 2: modulepreload without as= appears in Link header")
+tr_c01_2 = Test.AddTestRun("C-01 request 2: modulepreload without as= appears in Link hint (H2)")
 tr_c01_2.Processes.Default.Command = (
     "sleep 1 && curl -s -D - -o /dev/null"
-    " --http1.1"
+    " --http2"
     " --insecure"
     " 'https://127.0.0.1:{0}/c01-no-as.html'".format(ts.Variables.ssl_port))
 tr_c01_2.Processes.Default.ReturnCode = 0
 tr_c01_2.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "rel=modulepreload",
-    "C-01: modulepreload without as= must be cached and appear in Link header")
+    "modulepreload without as= must be cached and appear in 103/Link hint")
 tr_c01_2.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "/mod.mjs", "C-01: /mod.mjs must be in the hint")
+    "/mod.mjs", "/mod.mjs must be in the hint")
 tr_c01_2.StillRunningAfter = ms
 
 # ==============================================================================
@@ -199,28 +199,28 @@ tr_b05_1.Processes.Default.Command = (
     " 'https://127.0.0.1:{0}/b05-fetchpriority.html'".format(ts.Variables.ssl_port))
 tr_b05_1.Processes.Default.ReturnCode = 0
 tr_b05_1.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
-    "200 OK", "B-05: first request must succeed")
+    "200 OK", "first request must succeed")
 tr_b05_1.StillRunningAfter = ms
 
-tr_b05_2 = Test.AddTestRun("B-05 request 2: fetchpriority=high preserved in Link hint")
+tr_b05_2 = Test.AddTestRun("B-05 request 2: fetchpriority=high preserved in 103/Link hint (H2)")
 tr_b05_2.Processes.Default.Command = (
     "sleep 1 && curl -s -D - -o /dev/null"
-    " --http1.1"
+    " --http2"
     " --insecure"
     " 'https://127.0.0.1:{0}/b05-fetchpriority.html'".format(ts.Variables.ssl_port))
 tr_b05_2.Processes.Default.ReturnCode = 0
 tr_b05_2.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "fetchpriority=high",
-    "B-05: fetchpriority=high must be preserved in the modulepreload hint")
+    "fetchpriority=high must be preserved in the modulepreload hint")
 tr_b05_2.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "rel=modulepreload", "B-05: rel=modulepreload must be in the hint")
+    "rel=modulepreload", "rel=modulepreload must be in the hint")
 tr_b05_2.StillRunningAfter = ms
 
 # ==============================================================================
-# A-24: <script type="module" src=...> emits rel=modulepreload (not rel=preload; as=script)
+# <script type="module" src=...> emits rel=modulepreload (not rel=preload; as=script)
 # ==============================================================================
 
-tr_a24_1 = Test.AddTestRun("A-24 request 1: learn script type=module")
+tr_a24_1 = Test.AddTestRun("request 1: learn script type=module")
 tr_a24_1.Processes.Default.Command = (
     "sleep 1 && curl -s -D - -o /dev/null"
     " --http1.1"
@@ -228,23 +228,23 @@ tr_a24_1.Processes.Default.Command = (
     " 'https://127.0.0.1:{0}/a24-module-script.html'".format(ts.Variables.ssl_port))
 tr_a24_1.Processes.Default.ReturnCode = 0
 tr_a24_1.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
-    "200 OK", "A-24: first request must succeed")
+    "200 OK", "first request must succeed")
 tr_a24_1.StillRunningAfter = ms
 
-tr_a24_2 = Test.AddTestRun("A-24 request 2: script type=module emits rel=modulepreload")
+tr_a24_2 = Test.AddTestRun("request 2: script type=module emits rel=modulepreload (H2)")
 tr_a24_2.Processes.Default.Command = (
     "sleep 1 && curl -s -D - -o /dev/null"
-    " --http1.1"
+    " --http2"
     " --insecure"
     " 'https://127.0.0.1:{0}/a24-module-script.html'".format(ts.Variables.ssl_port))
 tr_a24_2.Processes.Default.ReturnCode = 0
 tr_a24_2.Processes.Default.Streams.stdout.Content = Testers.ContainsExpression(
     "rel=modulepreload",
-    "A-24: <script type=module> must emit rel=modulepreload hint")
+    "<script type=module> must emit rel=modulepreload hint")
 tr_a24_2.Processes.Default.Streams.stdout.Content += Testers.ContainsExpression(
-    "/app.mjs", "A-24: /app.mjs must be in the hint")
+    "/app.mjs", "/app.mjs must be in the hint")
 # Must NOT emit rel=preload; as=script for a module script
 tr_a24_2.Processes.Default.Streams.stdout.Content += Testers.ExcludesExpression(
     "as=script",
-    "A-24: module script must NOT emit as=script -- wrong hint type")
+    "module script must NOT emit as=script -- wrong hint type")
 tr_a24_2.StillRunningAfter = ms

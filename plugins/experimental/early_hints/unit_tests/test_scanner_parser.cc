@@ -110,7 +110,7 @@ TEST_CASE("HtmlScanner skips tags inside script body", "[html_scanner][script]")
   }
 }
 
-// ─── Dangerous URL scheme rejection (is_safe_url) ────────────────────────────
+// --- Dangerous URL scheme rejection (is_safe_url) ----------------------------
 
 TEST_CASE("HtmlScanner: script close tag with whitespace/slash", "[html_scanner][script][edge]")
 {
@@ -151,7 +151,7 @@ TEST_CASE("HtmlScanner: script close tag with whitespace/slash", "[html_scanner]
 
   SECTION("</scriptx> does NOT close script")
   {
-    // </scriptx> is a different tag — scanner must stay in script mode
+    // </scriptx> is a different tag  -- scanner must stay in script mode
     std::string html = R"(<html><head><script>var x = '</scriptx>';</script><link rel="stylesheet" href="/x.css"></head></html>)";
     auto links       = scan_html(html);
     REQUIRE(links.size() == 1);
@@ -200,11 +200,11 @@ TEST_CASE("HtmlScanner: script close tag with whitespace/slash", "[html_scanner]
   }
 }
 
-// ─── Edge cases: HTML comment abrupt-close (HTML spec §13.2.5.43-46) ────────
+// --- Edge cases: HTML comment abrupt-close (HTML spec §13.2.5.43-46) --------
 
 TEST_CASE("HtmlScanner: comment abrupt-close edge cases", "[html_scanner][comment][edge]")
 {
-  SECTION("<!-->  is an empty comment — does not swallow subsequent tags")
+  SECTION("<!-->  is an empty comment  -- does not swallow subsequent tags")
   {
     std::string html = R"(<html><head><!--><link rel="stylesheet" href="/after.css"></head></html>)";
     auto links       = scan_html(html);
@@ -359,7 +359,7 @@ TEST_CASE("HtmlScanner: comment abrupt-close edge cases", "[html_scanner][commen
   SECTION("<!-> is a bogus comment (single dash after <!)")
   {
     // Per HTML spec §13.2.5.42: "<!" followed by single "-" (not "<!--")
-    // is a bogus comment — content until ">" is skipped.
+    // is a bogus comment  -- content until ">" is skipped.
     std::string html = R"(<html><head><!-bogus><link rel="stylesheet" href="/after.css"></head></html>)";
     auto links       = scan_html(html);
     REQUIRE(links.size() == 1);
@@ -378,7 +378,7 @@ TEST_CASE("HtmlScanner: comment abrupt-close edge cases", "[html_scanner][commen
   }
 }
 
-// ─── Edge cases: CDATA and script-data-escaped (adversarial HTML) ────────────
+// --- Edge cases: CDATA and script-data-escaped (adversarial HTML) ------------
 
 TEST_CASE("Chunk splitting: tag name boundary", "[html_scanner][chunking]")
 {
@@ -521,7 +521,7 @@ TEST_CASE("Chunk splitting: script escaped <!-- boundary", "[html_scanner][chunk
 {
   // Per HTML spec §13.2.6.4 ("script data escaped end tag name" state),
   // </script> IS a valid end tag in escaped mode and MUST close the script element.
-  // After B-06 fix: the first </script> closes the script, exposing /evil.css.
+  // After fix: the first </script> closes the script, exposing /evil.css.
   // Then --> and the second </script> are stray in IN_HEAD and ignored.
   std::string html = "<html><head><script><!--</script>"
                      "<link rel=\"preload\" href=\"/evil.css\" as=\"style\">"
@@ -619,7 +619,7 @@ TEST_CASE("Chunk splitting: scan limit hit mid-token", "[html_scanner][chunking]
     // Place the limit so it expires inside the <link tag name
     std::string html = "<html><head><link rel=\"preload\" href=\"/x.js\" as=\"script\"></head></html>";
     size_t link_pos  = html.find("<link");
-    // Set limit to link_pos + 2 so scanner stops at "<li" — never finishes the tag
+    // Set limit to link_pos + 2 so scanner stops at "<li"  -- never finishes the tag
     auto links = scan_html(html, static_cast<int>(link_pos + 2));
     CHECK(links.empty());
   }
@@ -628,7 +628,7 @@ TEST_CASE("Chunk splitting: scan limit hit mid-token", "[html_scanner][chunking]
   {
     std::string html = "<html><head><link rel=\"preload\" href=\"/x.js\" as=\"script\"></head></html>";
     size_t href_pos  = html.find("/x.js");
-    // Limit expires inside the href value — tag never closes, no link emitted
+    // Limit expires inside the href value  -- tag never closes, no link emitted
     auto links = scan_html(html, static_cast<int>(href_pos + 2));
     CHECK(links.empty());
   }
@@ -751,15 +751,15 @@ TEST_CASE("Chunk splitting: every byte boundary produces identical results", "[h
   }
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
+// -----------------------------------------------------------------------------
 // GAP AUDIT: Additional coverage tests
-// ═════════════════════════════════════════════════════════════════════════════
+// -----------------------------------------------------------------------------
 
-// ─── INIT state edge cases ──────────────────────────────────────────────────
+// --- INIT state edge cases --------------------------------------------------
 
 TEST_CASE("HtmlScanner IN_HEAD: <!> immediately closed", "[html_scanner][bogus]")
 {
-  // <!> is "<!x>" where x='>' — should be consumed as bogus (per spec, <!> is actually
+  // <!> is "<!x>" where x='>'  -- should be consumed as bogus (per spec, <!> is actually
   // handled by the inline check at line 470-472: c != '-' and c == '>' → clear match_buf_)
   std::string html = R"(<html><head><!><link rel="stylesheet" href="/a.css"></head></html>)";
   auto links       = scan_html(html);
@@ -778,7 +778,7 @@ TEST_CASE("HtmlScanner IN_HEAD: <!DOCTYPE html> inside head as bogus comment", "
 TEST_CASE("IN_SCRIPT: opening <script> inside script body is ignored", "[html_scanner][script][audit]")
 {
   // Per HTML spec, raw text elements do not nest. A <script> open tag inside
-  // script body is just text — only </script> closes the block.
+  // script body is just text  -- only </script> closes the block.
   std::string html = R"(<html><head><script>
     var x = '<script>alert(1)</script>';
   </script><link rel="stylesheet" href="/legit.css"></head></html>)";
@@ -821,7 +821,7 @@ TEST_CASE("IN_SCRIPT: </script with space then > closes script", "[html_scanner]
   CHECK(links[0].find("/sp.css") != std::string::npos);
 }
 
-// dup-01: removed duplicate "</script with newline then >" — already tested above (line ~128)
+// dup-01: removed duplicate "</script with newline then >"  -- already tested above (line ~128)
 
 TEST_CASE("IN_SCRIPT: </script with form-feed then > closes script", "[html_scanner][script][audit]")
 {
@@ -833,7 +833,7 @@ TEST_CASE("IN_SCRIPT: </script with form-feed then > closes script", "[html_scan
 
 TEST_CASE("IN_SCRIPT: </script with trailing attrs then > closes script", "[html_scanner][script][audit]")
 {
-  // </script type="text/javascript"> — trailing content after whitespace, waiting for >
+  // </script type="text/javascript">  -- trailing content after whitespace, waiting for >
   std::string html = R"(<html><head><script>x=1;</script type="text/javascript">)"
                      R"(<link rel="stylesheet" href="/attr.css"></head></html>)";
   auto links = scan_html(html);
@@ -870,7 +870,7 @@ TEST_CASE("IN_SCRIPT: failed close tag match then real close tag", "[html_scanne
 
 TEST_CASE("IN_SCRIPT: < in middle of close tag match restarts", "[html_scanner][script][audit]")
 {
-  // "</scr<ipt>" — the '<' at position 5 restarts matching from '<'.
+  // "</scr<ipt>"  -- the '<' at position 5 restarts matching from '<'.
   // The real close is later.
   std::string html = R"(<html><head><script>x="</scr<ipt>";</script>)"
                      R"(<link rel="stylesheet" href="/restart.css"></head></html>)";
@@ -879,7 +879,7 @@ TEST_CASE("IN_SCRIPT: < in middle of close tag match restarts", "[html_scanner][
   CHECK(links[0].find("/restart.css") != std::string::npos);
 }
 
-// ─── QA audit: IN_SCRIPT escaped mode gap tests ─────────────────────────────
+// --- QA audit: IN_SCRIPT escaped mode gap tests -----------------------------
 
 TEST_CASE("IN_SCRIPT: --> in non-escaped mode has no effect", "[html_scanner][script][audit]")
 {
@@ -895,13 +895,13 @@ TEST_CASE("IN_SCRIPT: --!> in escaped mode does NOT exit escaped", "[html_scanne
 {
   // Per HTML spec §13.2.6.6: in escaped dash-dash state, '!' goes back to escaped.
   // So --!> does NOT exit escaped mode.
-  // However, per §13.2.6.4: </script> in escaped mode IS a valid end tag (B-06 fix).
+  // Per HTML spec §13.2.6.4: </script> in escaped mode IS a valid end tag.
   // After <!--, the first --!> should NOT exit escaped. But </script> after it closes.
   std::string html = R"(<html><head><script><!--)"
                      R"(--!></script><link rel="preload" href="/evil.css" as="style">)"
                      R"(--></script><link rel="stylesheet" href="/real.css"></head></html>)";
   auto links = scan_html(html);
-  // --!> does NOT exit escaped → </script> in escaped mode closes (B-06 fix).
+  // --!> does NOT exit escaped → </script> in escaped mode closes.
   // → /evil.css is exposed after the first </script>.
   // --> and second </script> are stray in IN_HEAD.
   // → /real.css is also exposed.
@@ -958,11 +958,11 @@ TEST_CASE("IN_SCRIPT: <!- (incomplete comment open) does not enter escaped", "[h
   CHECK(links[0].find("/partial-comment.css") != std::string::npos);
 }
 
-// ─── QA audit: DONE state gap tests ─────────────────────────────────────────
+// --- QA audit: DONE state gap tests -----------------------------------------
 
 TEST_CASE("QA: comment state 0 × null byte stays in body", "[html_scanner][comment][qa]")
 {
-  // NUL inside comment body must not break the parser — stays in state 0.
+  // NUL inside comment body must not break the parser  -- stays in state 0.
   // The link after --> must still be found.
   std::string html = "<html><head><!-- x";
   html += '\0';
@@ -985,7 +985,7 @@ TEST_CASE("QA: comment state 0 × '>' stays in body", "[html_scanner][comment][q
 
 TEST_CASE("QA: comment state 0 × '!' stays in body", "[html_scanner][comment][qa]")
 {
-  // '!' in state 0 does nothing — stays in body.
+  // '!' in state 0 does nothing  -- stays in body.
   std::string html = R"(<html><head><!-- hello!world --><link rel="stylesheet" href="/ok.css"></head></html>)";
   auto links       = scan_html(html);
   REQUIRE(links.size() == 1);
@@ -1000,12 +1000,12 @@ TEST_CASE("QA: comment state 0 × '@' (other) stays in body", "[html_scanner][co
   CHECK(links[0].find("/ok.css") != std::string::npos);
 }
 
-// ─── State 1 (end-dash: seen one '-') ───────────────────────────────────────
+// --- State 1 (end-dash: seen one '-') ---------------------------------------
 
 TEST_CASE("QA: comment state 1 × '>' does NOT close (-> in body)", "[html_scanner][comment][qa]")
 {
   // A single dash then '>' must NOT close.  Only '-->' closes.
-  // "<!-- abc -> <link bad> -->"  — the "->" must not end the comment.
+  // "<!-- abc -> <link bad> -->"   -- the "->" must not end the comment.
   std::string html =
     R"(<html><head><!-- abc -><link rel="stylesheet" href="/bad.css">--><link rel="stylesheet" href="/good.css"></head></html>)";
   auto links = scan_html(html);
@@ -1042,7 +1042,7 @@ TEST_CASE("QA: comment state 1 × '@' (other) resets to body", "[html_scanner][c
   CHECK(links[0].find("/ok.css") != std::string::npos);
 }
 
-// ─── State 2 (end: seen '--') ───────────────────────────────────────────────
+// --- State 2 (end: seen '--') -----------------------------------------------
 
 TEST_CASE("QA: comment state 2 × alpha resets to body (--a)", "[html_scanner][comment][qa]")
 {
@@ -1077,7 +1077,7 @@ TEST_CASE("QA: comment state 2 × '@' (other) resets to body", "[html_scanner][c
   CHECK(links[0].find("/bad.css") == std::string::npos);
 }
 
-// ─── State 3 (end-bang: seen '--!') ─────────────────────────────────────────
+// --- State 3 (end-bang: seen '--!') -----------------------------------------
 
 TEST_CASE("QA: comment state 3 × alpha resets to body (--!a)", "[html_scanner][comment][qa]")
 {
@@ -1111,7 +1111,7 @@ TEST_CASE("QA: comment state 3 × null resets to body", "[html_scanner][comment]
   CHECK(links[0].find("/bad.css") == std::string::npos);
 }
 
-// ─── State 4 (end-bang-dash: seen '--!-') ───────────────────────────────────
+// --- State 4 (end-bang-dash: seen '--!-') -----------------------------------
 
 TEST_CASE("QA: comment state 4 × '!' resets to body (--!-!)", "[html_scanner][comment][qa]")
 {
@@ -1155,7 +1155,7 @@ TEST_CASE("QA: comment state 4 × null resets to body", "[html_scanner][comment]
   CHECK(links[0].find("/bad.css") == std::string::npos);
 }
 
-// ─── State 5 (comment-start) ───────────────────────────────────────────────
+// --- State 5 (comment-start) -----------------------------------------------
 
 TEST_CASE("QA: comment state 5 × null enters body", "[html_scanner][comment][qa]")
 {
@@ -1177,7 +1177,7 @@ TEST_CASE("QA: comment state 5 × '@' (other) enters body", "[html_scanner][comm
   CHECK(links[0].find("/ok.css") != std::string::npos);
 }
 
-// ─── State 6 (comment-start-dash) ──────────────────────────────────────────
+// --- State 6 (comment-start-dash) ------------------------------------------
 
 TEST_CASE("QA: comment state 6 × '-' enters end state (<!---->)", "[html_scanner][comment][qa]")
 {
@@ -1222,7 +1222,7 @@ TEST_CASE("QA: comment state 6 × null enters body", "[html_scanner][comment][qa
   CHECK(links[0].find("/bad.css") == std::string::npos);
 }
 
-// ─── IN_BOGUS_COMMENT state ────────────────────────────────────────────────
+// --- IN_BOGUS_COMMENT state ------------------------------------------------
 
 TEST_CASE("QA: bogus comment × null stays in bogus", "[html_scanner][bogus][qa]")
 {
@@ -1252,7 +1252,7 @@ TEST_CASE("QA: bogus comment × '!' stays in bogus", "[html_scanner][bogus][qa]"
   CHECK(links[0].find("/ok.css") != std::string::npos);
 }
 
-// ─── No infinite loops: deeply nested dash sequences ────────────────────────
+// --- No infinite loops: deeply nested dash sequences ------------------------
 
 TEST_CASE("QA: no infinite loop with long dash sequences", "[html_scanner][comment][qa]")
 {
@@ -1292,7 +1292,7 @@ TEST_CASE("QA: no infinite loop with long dash sequences", "[html_scanner][comme
   }
 }
 
-// ─── Single-byte equivalence for new edge cases ─────────────────────────────
+// --- Single-byte equivalence for new edge cases -----------------------------
 
 TEST_CASE("QA: single-byte feed equivalence for comment edge cases", "[html_scanner][comment][qa][chunking]")
 {
@@ -1326,5 +1326,5 @@ TEST_CASE("QA: single-byte feed equivalence for comment edge cases", "[html_scan
 }
 
 // ============================================================================
-// R5 Bug Regression Tests — TDD RED phase
+// R5 Bug Regression Tests  -- TDD RED phase
 // ============================================================================
