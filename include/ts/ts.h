@@ -2734,6 +2734,26 @@ tsapi TSReturnCode TSHttpTxnClientStreamIdGet(TSHttpTxn txnp, uint64_t *stream_i
  */
 tsapi TSReturnCode TSHttpTxnClientStreamPriorityGet(TSHttpTxn txnp, TSHttpPriority *priority);
 
+/**
+ * Send an HTTP 103 Early Hints informational response to the client.
+ *
+ * Constructs and sends an HTTP/2 HEADERS frame with status 103 and the
+ * provided Link header values. Only works on HTTP/2 connections; returns
+ * TS_ERROR for HTTP/1.x since 103 is not supported by HTTP/1.1 clients.
+ *
+ * Must be called during the remap phase (TSRemapDoRemap) or from a
+ * READ_REQUEST_HDR hook, before the origin response has been sent.
+ *
+ * @param[in] txnp        The transaction to send the 103 on.
+ * @param[in] link_values Array of null-terminated Link header value strings
+ *                        (e.g. "</style.css>; rel=preload; as=style").
+ * @param[in] num_links   Number of entries in link_values array.
+ *
+ * @return TS_SUCCESS if the 103 was sent, TS_ERROR otherwise (not H2,
+ *         invalid args, connection closed).
+ */
+tsapi TSReturnCode TSHttpTxnSendEarlyHints(TSHttpTxn txnp, const char **link_values, int num_links);
+
 /*
  * Returns TS_SUCCESS if hostname is this machine, as used for parent and remap self-detection.
  * Returns TS_ERROR if hostname is not this machine.

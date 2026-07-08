@@ -100,6 +100,7 @@ include experimental/system_stats/Makefile.inc
 include experimental/traffic_dump/Makefile.inc
 include experimental/tls_bridge/Makefile.inc
 include experimental/url_sig/Makefile.inc
+include experimental/early_hints/Makefile.inc
 
 if BUILD_JA3_PLUGIN
 include experimental/ja3_fingerprint/Makefile.inc
